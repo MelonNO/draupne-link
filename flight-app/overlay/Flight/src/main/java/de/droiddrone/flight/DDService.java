@@ -154,6 +154,7 @@ public class DDService extends Service {
         mavlink.setUdp(udp);
         PowerMode.start(this);
         Thread t1 = new Thread(() -> {
+            udp.rememberPilot(getApplicationContext()); // who flew it before the app started anew (KeptPilot), before anything is heard
             if (!udp.initialize()){
                 log("UDP initialize error.");
                 stopSelf();
@@ -344,6 +345,7 @@ public class DDService extends Service {
 
     /** Standby on: no video, the GPS every 30 s, the FC once a second. Off: the rates back (the PC restarts video). */
     void powerStandby(boolean on) {
+        if (on) udp.pilotToStandby(); // no pilot kept for a restart in standby (KeptPilot)
         if (on) udp.stopVideo();
         msp.setSlowPoll(on);
         PhoneLocation.setInterval(on ? PhoneLocation.STANDBY_INTERVAL_MS : PhoneLocation.NORMAL_INTERVAL_MS);

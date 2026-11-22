@@ -141,6 +141,14 @@ public final class VirtualDrone {
     private volatile SessionGate gate;
     private volatile InetAddress lastPcIp;
     private volatile int lastPcPort;
+    /**
+     * Who flew it, in the phone's own storage (KeptPilot, as the phone app's PilotStore): kept once a session while one
+     * is up in normal mode, forgotten at the PC's Disconnect and at STANDBY. It outlives {@link #restartApp}, as the
+     * phone's storage outlives its app.
+     */
+    private volatile String keptPilot;
+    /** This session's pilot is kept already (or is not to be again: it said Disconnect). */
+    private volatile boolean pilotKept;
     private volatile boolean restarting;
 
     // the sticks (the receive thread)
@@ -324,7 +332,8 @@ public final class VirtualDrone {
 
     /**
      * The phone app restarts (the panel's PHONE RESTART): everything of the app goes - its session, the idle sticks, the
-     * observers, the power mode, where the PC was - and comes back RESTART_MS later on the same port. The flight
+     * observers, the power mode, where the PC was; only the pilot kept in the phone's storage stays (KeptPilot) - and
+     * comes back RESTART_MS later on the same port. The flight
      * controller runs on and loses its sticks meanwhile: a drone in the air goes to failsafe, as it would.
      */
     public void restartApp() {
@@ -342,6 +351,16 @@ public final class VirtualDrone {
                 lastPcIp = null;
                 lastPcPort = 0;
                 gate = new SessionGate(key); // the app's own: what session it held is gone with it
+                // ... but not who flew it: the phone's storage kept that (KeptPilot) - its PC gets the session back at
+                // once, another PC only by the takeover rule, the pilot's silence counted from the app's start
+                de.droiddrone.common.KeptPilot kept = de.droiddrone.common.KeptPilot.decode(keptPilot);
+                if (kept != null) {
+                    lastPcIp = InetAddress.getByAddress(kept.address);
+                    lastPcPort = kept.port;
+                    lastPilotPacketMs = System.currentTimeMillis();
+                    gate.remembered(kept.sessionId, lastPilotPacketMs);
+                    log.accept("pilot kept from before the restart: " + lastPcIp.getHostAddress() + ":" + lastPcPort);
+                }
                 idleSticks = null;
                 synchronized (rcLock) { // F-066: and what it knew of the PC's sticks - the idle guard, when the last frame came
                     idleGuard = new de.droiddrone.common.RcPath.IdleGuard();
@@ -547,6 +566,7 @@ public final class VirtualDrone {
     /** pc.53, every new session: what only a PC that knows it asks for is off until this session's PC asks (the phone's Udp). */
     private void sessionAsksAnew() {
         sessions++;
+        pilotKept = false; // its pilot is kept anew (keepPilotTick)
         frameTimes = false;
         rsUnderstood = false;
         rsPlain = rsKey = 0;
@@ -672,6 +692,24 @@ public final class VirtualDrone {
     /** How many of the PC's stick frames it has taken since it was made (tests: the sticks are at the phone again). */
     int rcFramesTaken() {
         return rcFramesTaken;
+    }
+
+    /** Who it keeps as its pilot for a start of its app anew (KeptPilot's line), or null (tests). */
+    String keptPilot() {
+        return keptPilot;
+    }
+
+    /**
+     * As the phone's Udp.keepPilotTick, every 0.1 s: a pilot's session up in normal mode, not kept yet - kept now, its
+     * address, port and session id.
+     */
+    private void keepPilotTick() {
+        if (pilotKept || !isConnected() || mode != NORMAL) return;
+        UdpSender sender = udpSender;
+        InetAddress ip = sender == null ? null : sender.getIp();
+        if (ip == null) return;
+        pilotKept = true;
+        keptPilot = de.droiddrone.common.KeptPilot.encode(ip.getAddress(), sender.getPort(), gate.liveSessionId());
     }
 
     private boolean takeSeq16(int seq, long now) {
@@ -805,6 +843,8 @@ public final class VirtualDrone {
                 case UdpCommon.GetVideoConfig -> video.resendConfig();
                 case UdpCommon.Disconnect -> {
                     log.accept("the PC disconnected");
+                    pilotKept = true; // not kept again in this session
+                    keptPilot = null; // a clean DISCONNECT: no pilot for a restart of the app
                     videoWanted = false;
                     pcAudio.forget();
                     if (!observing) video.stop();
@@ -1401,6 +1441,8 @@ public final class VirtualDrone {
                 case STANDBY -> {
                     if (mode != NORMAL) wake(from);
                     mode = STANDBY;
+                    keptPilot = null; // as the phone: no pilot kept for a restart in standby,
+                    pilotKept = false; // kept again should the session fly on after it
                     video.stop();
                     log.accept("standby (" + from + ")");
                     burst();
@@ -1621,6 +1663,7 @@ public final class VirtualDrone {
                     nextObserve = now + 100;
                     observeTick(now);
                     motionTick(now);
+                    keepPilotTick();
                 }
                 if (now >= nextAudioGate) {
                     nextAudioGate = now + 50;

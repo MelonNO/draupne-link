@@ -269,6 +269,24 @@ public final class SessionGate {
     }
 
     /**
+     * The pilot an app started anew found kept in the phone's storage ({@link KeptPilot}): its session went with the old
+     * app, and this one's rules go on from it - the id it had ({@link #NO_ID}: none) is the live session's, as far as
+     * {@link #pilotMoved} (unchanged) is concerned, and the pilot counts as heard now, at the app's start: the silence
+     * another PC's takeover waits for is counted from here at the latest (the app heard nothing before it). The caller
+     * gives {@link #noSession} that pilot as known, so its own PC (address and port) starts a session at once, as ever.
+     */
+    public void remembered(long sessionId, long now) {
+        lastPilotMs = now;
+        sessionStartedMs = now;
+        liveIdIs(sessionId);
+    }
+
+    /** The live session's id, to be kept ({@link KeptPilot}); {@link #NO_ID} when it has none. */
+    public long liveSessionId() {
+        return liveIdKnown() ? liveId : NO_ID;
+    }
+
+    /**
      * {@link #noSession(byte[], int, boolean, boolean, boolean, BooleanSupplier, long)}, its verdict unchanged; the
      * session it starts has this id ({@link #NO_ID}: none).
      */

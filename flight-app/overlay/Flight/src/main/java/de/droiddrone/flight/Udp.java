@@ -1011,6 +1011,7 @@ public class Udp {
      * profile's bits 0-2 stay as they were, as ever. The Ping held was the last session's (another PC's clock, perhaps).
      */
     private void sessionAsksAnew() {
+        pilotKept = false; // its pilot is kept anew (keepPilotTick, on the telemetry thread)
         frameTimes = false;
         rsUnderstood = false; // pc.53: the RS parity too - the video sender gives the encoder its whole step back
         rsPlain = rsKey = 0;
@@ -1070,6 +1071,7 @@ public class Udp {
                         // monotonic clock, as onObserve's - a clock set forward expired every observer at once)
                         observeTick(mono);
                         pcSilentTick(mono); // pc.50: the video's dead-man, after the observers are known
+                        keepPilotTick(); // who flies it, for an app started anew (KeptPilot)
                         // pc.50: not while overwatch watches - it ticks the detection itself, and in a check window (or
                         // listening all along) two threads set the same switches by turns
                         if (!Overwatch.isWatching()) MotionWatch.tick(FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, cameraManager.getCamera());
@@ -1456,6 +1458,64 @@ public class Udp {
     /** The PC this phone last flew with: where the sleep check's hello goes, socket re-opened or not. */
     private volatile InetAddress lastPcIp;
     private volatile int lastPcPort;
+
+    // ---- who flew it, for the app started anew (KeptPilot, PilotStore)
+
+    /** The app's context for PilotStore (null until rememberPilot). */
+    private volatile android.content.Context pilotContext;
+    /** This session's pilot is kept already (or is not to be again: the PC said Disconnect). */
+    private volatile boolean pilotKept;
+
+    /**
+     * At the service's start, before the socket is open: the pilot an earlier run of the app kept (PilotStore). Its PC
+     * (address and port) gets a session at once, as the pilot of the session before always did; another PC only by the
+     * takeover rule, the pilot's silence counted from now (SessionGate.remembered) - before, an app started anew knew no
+     * pilot, and the first keyed Connect from anywhere started a session, armed or not.
+     */
+    void rememberPilot(android.content.Context c) {
+        pilotContext = c.getApplicationContext();
+        de.droiddrone.common.KeptPilot kept;
+        try {
+            kept = PilotStore.read(pilotContext);
+        } catch (RuntimeException e) {
+            log("Kept pilot unreadable: " + e);
+            return;
+        }
+        if (kept == null) return;
+        try {
+            lastPcIp = InetAddress.getByAddress(kept.address);
+        } catch (UnknownHostException e) {
+            return;
+        }
+        lastPcPort = kept.port;
+        gate.remembered(kept.sessionId, android.os.SystemClock.elapsedRealtime());
+        log("Pilot kept from the app's last run: " + lastPcIp.getHostAddress() + " - its PC connects at once, another only by the takeover rule");
+    }
+
+    /**
+     * The telemetry thread, every 0.1 s: a pilot's session up in normal power mode and not kept yet - kept now (its
+     * address, port and session id, written on PilotStore's thread). Once a session: a volatile read while kept.
+     */
+    private void keepPilotTick() {
+        if (pilotKept || !isConnected() || PowerMode.mode() != PowerMode.NORMAL) return;
+        UdpSender sender = udpSender;
+        InetAddress ip = sender == null ? null : sender.getIp();
+        if (ip == null) return;
+        pilotKept = true;
+        PilotStore.keep(pilotContext, de.droiddrone.common.KeptPilot.encode(ip.getAddress(), sender.getPort(), gate.liveSessionId()));
+    }
+
+    /** The PC's clean Disconnect: no pilot kept for a start of the app anew; not kept again in this session. */
+    private void forgetPilot(String why) {
+        pilotKept = true;
+        if (PilotStore.keep(pilotContext, null)) log("No pilot kept for a restart of the app: " + why); // the PC says it three times
+    }
+
+    /** STANDBY (the service, on the power worker): forgotten - and kept again should this session fly on after it. */
+    void pilotToStandby() {
+        PilotStore.keep(pilotContext, null);
+        pilotKept = false;
+    }
 
     /**
      * The sleeping phone's "still here" (pc.22): [0x6F][battery % u8][charging u8][nextCheckMin u8][mV u16] to the
@@ -2087,6 +2147,7 @@ public class Udp {
             case UdpCommon.Disconnect:
             {
                 beeperRule.disconnectSaid(); // pc.54: ended on purpose - the drone stays silent (not a lost link)
+                forgetPilot("the PC disconnected");
                 // stop stream when controller disconnected - on the videoStarter thread (the camera and muxer take
                 // their time to close, and this thread delivers the PC's packets)
                 videoInitialFrame = null;
