@@ -5,6 +5,7 @@ import de.droiddrone.bench.Hardware;
 import de.droiddrone.bench.PhoneAdb;
 import de.droiddrone.bench.PhoneRig;
 import de.droiddrone.common.ArmRanges;
+import de.droiddrone.common.BeeperBack;
 import de.droiddrone.common.BeeperQuiet;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.MspFrames;
@@ -389,7 +390,8 @@ public final class FcKeeper implements AutoCloseable {
                 FcCommon.MSP_ATTITUDE,                                 // getAttitude: every tick
                 ArmRanges.MSP_MODE_RANGES, BeeperQuiet.MSP_BEEPER_CONFIG, // getModeRanges, getBeeperConfig: once a second
                 FcCommon.MSP_BATTERY_STATE, FcCommon.MSP_RAW_GPS, FcCommon.MSP_COMP_GPS, FcCommon.MSP_VTX_CONFIG, FcCommon.MSP_ANALOG, // once a second
-                FcCommon.MSP_OSD_CONFIG, FcCommon.MSP_OSD_CANVAS, FcCommon.MSP_BATTERY_CONFIG}) { // getOsdConfig, getOsdCanvas, getBatteryConfig: when the PC asks
+                FcCommon.MSP_OSD_CONFIG, FcCommon.MSP_OSD_CANVAS, FcCommon.MSP_BATTERY_CONFIG, // getOsdConfig, getOsdCanvas, getBatteryConfig: when the PC asks
+                BeeperBack.MSP_UID}) {                                 // getBoardId (F-069): with the slow requests until the board has said which board it is
             m.put(code, none);
         }
         m.put((int) FcCommon.MSP_BOXIDS, new int[]{0, 1});             // getBoxIds(page)

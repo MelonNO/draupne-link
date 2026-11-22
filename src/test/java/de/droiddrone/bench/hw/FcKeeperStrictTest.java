@@ -1,6 +1,7 @@
 package de.droiddrone.bench.hw;
 
 import de.droiddrone.common.ArmRanges;
+import de.droiddrone.common.BeeperBack;
 import de.droiddrone.common.BeeperQuiet;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.MspFrames;
@@ -54,7 +55,8 @@ class FcKeeperStrictTest {
         String source = Files.readString(root().resolve("flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Msp.java"), StandardCharsets.UTF_8);
         Matcher m = Pattern.compile("getMspRequest(?:WithPayload)?\\(\\s*(?:\\(short\\)\\s*)?(\\w+)\\.(\\w+)").matcher(source);
         Set<Integer> sent = new TreeSet<>();
-        Map<String, Class<?>> where = Map.of("FcCommon", FcCommon.class, "BeeperQuiet", BeeperQuiet.class, "ArmRanges", ArmRanges.class);
+        Map<String, Class<?>> where = Map.of("FcCommon", FcCommon.class, "BeeperQuiet", BeeperQuiet.class, "ArmRanges", ArmRanges.class,
+                "BeeperBack", BeeperBack.class);
         int calls = 0;
         while (m.find()) {
             Class<?> home = where.get(m.group(1));
