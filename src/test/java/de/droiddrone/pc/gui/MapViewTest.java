@@ -414,6 +414,7 @@ class MapViewTest {
     void aMapThatWaitsBecauseADroneMayFlySaysSo(@TempDir Path dir) throws Exception {
         boolean[] held = {true};
         MapView map = new MapView(TileCache.heldWhile(dir, () -> held[0]));
+        map.heldUntil = () -> null; // a link says armed now: no end to say (I-008; this PC's own flag not asked)
         BufferedImage img = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
         Runnable paint = () -> {
             map.setSize(400, 300);
@@ -430,5 +431,51 @@ class MapViewTest {
             Thread.sleep(50);
         } while (MapView.HELD_TEXT.equals(map.chipText) && System.currentTimeMillis() < end);
         assertNotEquals(MapView.HELD_TEXT, map.chipText, "the hold over: no longer said");
+    }
+
+    /**
+     * I-008 (the bench's lost-armed-map-held, 1.0.71): after a drone was lost armed the map window said MAP WAITS - A
+     * DRONE MAY BE FLYING, and IT'S DOWN - RESUME was in the main window only. The chip says until when, and a click on
+     * it asks the LINK card's question (here: the window's callback). The hold itself is the cache's, untouched: the
+     * map still waits after the click until the hold says otherwise.
+     */
+    @Test
+    void theHeldChipSaysUntilWhenAndAClickAsksItsDown(@TempDir Path dir) throws Exception {
+        boolean[] held = {true};
+        MapView map = new MapView(TileCache.heldWhile(dir, () -> held[0]));
+        map.heldUntil = () -> "22:40";
+        int[] asked = {0};
+        map.setOnHeldChip(() -> asked[0]++);
+        BufferedImage img = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
+        Runnable paint = () -> {
+            map.setSize(400, 300);
+            java.awt.Graphics2D g = img.createGraphics();
+            map.printAll(g);
+            g.dispose();
+        };
+        javax.swing.SwingUtilities.invokeAndWait(paint);
+        assertEquals("MAP PAUSED UNTIL 22:40 - A DRONE MAY BE FLYING", map.chipText);
+        java.awt.Rectangle chip = map.heldChip;
+        assertNotNull(chip, "the chip is where a click finds it");
+        javax.swing.SwingUtilities.invokeAndWait(() -> click(map, chip.x + chip.width / 2, chip.y + chip.height / 2));
+        assertEquals(1, asked[0], "a click on it: IT'S DOWN - RESUME asked");
+        javax.swing.SwingUtilities.invokeAndWait(() -> click(map, 20, 250));
+        assertEquals(1, asked[0], "a click elsewhere on the map: not");
+        javax.swing.SwingUtilities.invokeAndWait(paint);
+        assertTrue(map.chipText.startsWith("MAP PAUSED"), "the click itself ends no hold: " + map.chipText);
+        held[0] = false;
+        long end = System.currentTimeMillis() + 5000;
+        do {
+            javax.swing.SwingUtilities.invokeAndWait(paint);
+            Thread.sleep(50);
+        } while (map.heldChip != null && System.currentTimeMillis() < end);
+        assertNull(map.heldChip, "the hold over: no chip to click");
+        assertEquals(MapView.HELD_TEXT, MapView.heldText(null), "armed now (no end yet): as before");
+    }
+
+    private static void click(MapView map, int x, int y) {
+        map.dispatchEvent(new java.awt.event.MouseEvent(map, java.awt.event.MouseEvent.MOUSE_PRESSED, 0, java.awt.event.InputEvent.BUTTON1_DOWN_MASK, x, y, 1, false, java.awt.event.MouseEvent.BUTTON1));
+        map.dispatchEvent(new java.awt.event.MouseEvent(map, java.awt.event.MouseEvent.MOUSE_RELEASED, 0, 0, x, y, 1, false, java.awt.event.MouseEvent.BUTTON1));
+        map.dispatchEvent(new java.awt.event.MouseEvent(map, java.awt.event.MouseEvent.MOUSE_CLICKED, 0, 0, x, y, 1, false, java.awt.event.MouseEvent.BUTTON1));
     }
 }

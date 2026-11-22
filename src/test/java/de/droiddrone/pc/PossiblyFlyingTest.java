@@ -11,6 +11,23 @@ class PossiblyFlyingTest {
     private final PossiblyFlying.Word[] word = {PossiblyFlying.Word.NOTHING};
     private final Object link = new Object();
 
+    /** I-008: the map's chip says until when the hold lasts - as the reason says it; no end while a link says armed now. */
+    @Test
+    void theHoldsEndIsSaidByTheClockAsTheReasonSaysIt() {
+        assertNull(flag.until(), "nothing holds");
+        flag.attach(link, "MobileZulu", () -> word[0]);
+        word[0] = new PossiblyFlying.Word(true, now[0]);
+        assertNull(flag.until(), "armed now: no end yet");
+        flag.detach(link); // lost armed
+        now[0] += 21_000;
+        String until = flag.until();
+        assertNotNull(until);
+        assertTrue(until.matches("\\d\\d:\\d\\d"), until);
+        assertTrue(flag.reason().endsWith("(until " + until + ")"), "the same time as the reason's: " + flag.reason());
+        flag.resume();
+        assertNull(flag.until(), "IT'S DOWN - RESUME: no hold, no end to say");
+    }
+
     @Test
     void armedNowHoldsDisarmedDoesNot() {
         assertFalse(flag.holds(), "no link");

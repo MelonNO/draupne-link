@@ -368,6 +368,12 @@ class MapView extends JComponent {
                     return;
                 }
                 crossPressed = false;
+                // I-008: the held chip is a button of its own - no tool point, no pan under it
+                heldPressed = SwingUtilities.isLeftMouseButton(e) && onHeldChip != null && heldChip != null && heldChip.contains(e.getPoint());
+                if (heldPressed) {
+                    dragged = false;
+                    return;
+                }
                 if (SwingUtilities.isRightMouseButton(e)) {
                     if (pickNext != null) { // the pin's place: called off
                         endPick(null);
@@ -424,7 +430,7 @@ class MapView extends JComponent {
 
             @Override
             public void mouseReleased(MouseEvent e) {
-                if (crossPressed) return;
+                if (crossPressed || heldPressed) return;
                 dragStart = null;
                 if (selectStart == null) return;
                 Rectangle box = selection();
@@ -443,6 +449,12 @@ class MapView extends JComponent {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
+                if (heldPressed) { // I-008: IT'S DOWN - RESUME, asked as the LINK card asks it
+                    heldPressed = false;
+                    Runnable r = onHeldChip;
+                    if (r != null && heldChip != null && heldChip.contains(e.getPoint())) r.run();
+                    return;
+                }
                 if (crossPressed) { // the cross was pressed: that result goes, nothing else happens
                     crossPressed = false;
                     if (horizonCross != null && horizonCross.contains(e.getPoint())) clearHorizon();
@@ -509,6 +521,13 @@ class MapView extends JComponent {
                 }
                 if (moving != null) followMoving(e.getX(), e.getY());
                 if (tool != Tool.NONE) repaint(); // the rubber band to the cursor
+                // I-008: the held chip takes a click - a hand over it (only where no tool, pick or move has the cursor)
+                boolean free = tool == Tool.NONE && moving == null && pickNext == null && !selectNext;
+                boolean overChip = free && onHeldChip != null && heldChip != null && heldChip.contains(e.getPoint());
+                if (overChip != overHeldChip) {
+                    overHeldChip = overChip;
+                    if (free) setCursor(overChip ? java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR) : java.awt.Cursor.getDefaultCursor());
+                }
             }
 
             @Override
@@ -1683,7 +1702,7 @@ class MapView extends JComponent {
             paintAttribution(g, src, w, h, !forPicture);
             // No server before LOADING: while fetches fail slowly (Wi-Fi up, no internet behind it) one is always on its
             // way, and the map said LOADING MAP for as long as that lasted - the pilot's "stuck loading" to the letter
-            if (!forPicture && tilesMissing && cache.isHeld()) paintChip(g, w, HELD_TEXT, false);
+            if (!forPicture && tilesMissing && cache.isHeld()) heldChip = paintHeldChip(g, w);
             else if (!forPicture && tilesMissing && (cache.isOffline() || cache.inTrouble())) paintChip(g, w, NOT_REACHED_TEXT, false);
             else if (!forPicture && tilesMissing && cache.loading()) paintLoading(g, w);
             if (!forPicture) paintZoomButtons(g, w);
@@ -1746,6 +1765,7 @@ class MapView extends JComponent {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         tilesMissing = false;
         loadingChip = null;
+        heldChip = null;
         chipText = null;
         int n = 1 << proj.zi();
         int tx0 = (int) Math.floor((proj.wcx() - proj.w() / 2.0 / proj.scale()) / Mercator.TILE), tx1 = (int) Math.floor((proj.wcx() + proj.w() / 2.0 / proj.scale()) / Mercator.TILE);
@@ -2359,6 +2379,33 @@ class MapView extends JComponent {
      * has IT'S DOWN - RESUME.
      */
     static final String HELD_TEXT = "MAP WAITS - A DRONE MAY BE FLYING";
+
+    /**
+     * I-008: the held chip says until when ("MAP PAUSED UNTIL 22:40 - A DRONE MAY BE FLYING"), and a click on it asks
+     * IT'S DOWN - RESUME, the LINK card's question (the map window had only the chip; the button was in the main
+     * window). While a link says armed now the hold has no end yet: HELD_TEXT as before. Only words and a question:
+     * when the map waits is the hold's own rule (TileCache, PossiblyFlying), untouched.
+     */
+    static String heldText(String until) {
+        return until == null ? HELD_TEXT : "MAP PAUSED UNTIL " + until + " - A DRONE MAY BE FLYING";
+    }
+
+    /** When the hold ends ("22:40"), or null: this PC's flag (tests: their own). */
+    java.util.function.Supplier<String> heldUntil = de.droiddrone.pc.PossiblyFlying::untilNow;
+    /** What a click on the held chip does (the map window: IT'S DOWN - RESUME); null: nothing. */
+    private Runnable onHeldChip;
+    /** Where the held chip was last painted; null when not. */
+    Rectangle heldChip;
+    private boolean heldPressed, overHeldChip;
+
+    void setOnHeldChip(Runnable r) {
+        onHeldChip = r;
+    }
+
+    private Rectangle paintHeldChip(Graphics2D g, int w) {
+        paintChip(g, w, heldText(heldUntil.get()), false);
+        return loadingChip;
+    }
 
     private void paintChip(Graphics2D g0, int w, String text, boolean turning) {
         Graphics2D g = (Graphics2D) g0.create();

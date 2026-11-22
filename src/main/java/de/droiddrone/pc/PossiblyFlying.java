@@ -83,6 +83,23 @@ public final class PossiblyFlying {
         return PC.reason();
     }
 
+    /** I-008: when this PC's hold ends, by the wall clock ("22:40"); null when it doesn't hold, or a link says armed now. */
+    public static String untilNow() {
+        return PC.until();
+    }
+
+    /** As {@link #untilNow()}, of this flag. Reads only, as {@link #reason()} does. */
+    public String until() {
+        Hold h = why();
+        return h == null ? null : untilText(h, clock.getAsLong(), System.currentTimeMillis());
+    }
+
+    /** The hold's end as {@link #describe} says it; null while a link says armed now (it has no end yet). */
+    static String untilText(Hold h, long nowMono, long nowWall) {
+        if (h.live() && nowMono - h.heardAt() < 2000) return null;
+        return CLOCK.format(Instant.ofEpochMilli(nowWall + (h.until() - nowMono)).atZone(ZoneId.systemDefault()));
+    }
+
     /** A drone link whose drone isn't known: its word is kept under the link itself. */
     public void attach(Object link, Supplier<Word> word) {
         attach(link, null, word);

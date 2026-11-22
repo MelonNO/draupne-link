@@ -186,6 +186,8 @@ final class MapWindow extends JFrame {
         });
         map.setOnHorizonMast(this::horizonMast);
         map.setOnSearchArea(this::searchArea);
+        // I-008: the held chip, clicked, asks IT'S DOWN - RESUME - the LINK card's own question and rule, from here
+        if (owner instanceof MainWindow heldOwner) map.setOnHeldChip(() -> heldOwner.itsDownResume(this));
         // 4G COVERAGE (1.0.44): its choices from the settings file; worked out each time the view rests
         de.droiddrone.pc.PcConfig config = owner instanceof MainWindow m ? m.config() : null;
         coverageKey = config == null ? "" : config.getString(COVERAGE_KEY);
