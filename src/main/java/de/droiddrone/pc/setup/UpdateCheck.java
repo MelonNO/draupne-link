@@ -24,10 +24,15 @@ public final class UpdateCheck {
     public static final String LATEST_API = "https://api.github.com/repos/MelonNO/draupne-link/releases/latest";
     /** Installers are only ever downloaded from this project's own releases. */
     static final String DOWNLOADS = "https://github.com/MelonNO/draupne-link/releases/download/";
+    /** The project's releases page: what UPDATE opens in the browser when a release's own page is not to be had. */
+    public static final String RELEASES = "https://github.com/MelonNO/draupne-link/releases";
+    /** A release's own page: https, under the project's releases, a tag's plain characters after it. */
+    private static final Pattern RELEASE_PAGE = Pattern.compile(Pattern.quote(RELEASES + "/") + "[A-Za-z0-9._+/-]{1,200}");
     private static final Pattern NUMBER = Pattern.compile("\\d+");
 
     /**
-     * version without the leading "v", e.g. "1.0.6"; pageUrl is the release page. The installer's download address,
+     * version without the leading "v", e.g. "1.0.6"; pageUrl is the release page ({@link #releasePage}: one of this
+     * project's own, or the project's releases page). The installer's download address,
      * size and SHA-256 (as GitHub lists them) are null / -1 when the release has no installer to update with.
      */
     public record Release(String version, String pageUrl, String installerUrl, long installerSize, String installerSha256) {
@@ -65,7 +70,18 @@ public final class UpdateCheck {
                 sha = digest != null && digest.matches("sha256:[0-9a-fA-F]{64}") ? digest.substring(7).toLowerCase() : null;
             }
         }
-        return new Release(tag.startsWith("v") ? tag.substring(1) : tag, o.get("html_url").getAsString(), url, size, sha);
+        return new Release(tag.startsWith("v") ? tag.substring(1) : tag, releasePage(text(o, "html_url")), url, size, sha);
+    }
+
+    /**
+     * The page UPDATE may open in the browser: GitHub's address for the release when it is an https page under this
+     * project's own releases (".../releases/tag/v1.0.72"), written with a tag's plain characters and no step up or
+     * aside in it; with any other address, or none, the project's releases page.
+     */
+    static String releasePage(String fromGitHub) {
+        boolean own = fromGitHub != null && RELEASE_PAGE.matcher(fromGitHub).matches()
+                && !fromGitHub.contains("..") && !fromGitHub.substring(RELEASES.length()).contains("//");
+        return own ? fromGitHub : RELEASES;
     }
 
     private static String text(JsonObject o, String key) {

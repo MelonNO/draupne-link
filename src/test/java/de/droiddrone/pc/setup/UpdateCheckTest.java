@@ -54,6 +54,38 @@ class UpdateCheckTest {
         assertFalse(noDigest.canInstall());
     }
 
+    /**
+     * The page UPDATE opens in the browser is GitHub's address for the release only when that is an https page under
+     * this project's own releases; with any other address, or none, it is the project's releases page.
+     */
+    @Test
+    void theReleasePageIsOneOfThisProjectsOwnOrTheReleasesPage() {
+        String releases = "https://github.com/MelonNO/draupne-link/releases";
+        for (String own : new String[]{releases + "/tag/v1.0.72", releases + "/tag/flight-2.3.0-pc.56", releases + "/tag/v1.0.72-beta+2"}) {
+            assertEquals(own, page(own), "GitHub's own address for a release is taken as it is");
+        }
+        for (String other : new String[]{
+                "http://github.com/MelonNO/draupne-link/releases/tag/v9", // not https
+                "file:///C:/Windows/System32/calc.exe", "javascript:alert(1)", "ms-settings:display", "\\\\server\\share\\setup.exe",
+                "https://example.org/MelonNO/draupne-link/releases/tag/v9",
+                "https://github.com.example.org/MelonNO/draupne-link/releases/tag/v9",
+                "https://github.com@example.org/MelonNO/draupne-link/releases/tag/v9",
+                "https://github.com/someone/else/releases/tag/v9",
+                "https://github.com/MelonNO/draupne-link-other/releases/tag/v9",
+                "https://github.com/MelonNO/draupne-link/releasesX/tag/v9",
+                releases + "/../../../someone/else", releases + "/tag/%2e%2e/%2e%2e/%2e%2e/someone/else", releases + "/tag//example.org",
+                releases + "/tag/v9?to=example.org", releases + "/tag/v9#there", releases + "/tag/v 9", releases + "/tag/v9\nfile:///x",
+                " " + releases + "/tag/v9", releases + "/", releases + "/" + "v".repeat(300), "", "x"}) {
+            assertEquals(releases, page(other), "the project's releases page instead of " + other);
+        }
+        assertEquals(releases, UpdateCheck.parse("{\"tag_name\":\"v9\"}").pageUrl(), "no address in the answer");
+        assertEquals(releases, UpdateCheck.parse("{\"tag_name\":\"v9\",\"html_url\":null}").pageUrl());
+    }
+
+    private static String page(String fromGitHub) {
+        return UpdateCheck.parse("{\"tag_name\":\"v9\",\"html_url\":" + new com.google.gson.JsonPrimitive(fromGitHub) + "}").pageUrl();
+    }
+
     @Test
     void helperScriptQuotesPathsSafely() {
         String s = SelfUpdate.script(java.nio.file.Path.of("C:\\Temp\\it's here\\Setup.exe"), 1234,
