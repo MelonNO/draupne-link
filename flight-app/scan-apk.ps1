@@ -1,12 +1,15 @@
 <#
   Is this APK the test rig's build of DRAUPNE Flight (bench-overlay/)? That build must never be released.
 
-    scan-apk.ps1 -Apk <file>           the APK must have NOTHING of the rig; an error says what it has
-    scan-apk.ps1 -Apk <file> -Bench    the APK must be the rig's build in full; an error says what is missing
+    scan-apk.ps1 -Apk <file>              the APK must have NOTHING of the rig nor of the update test; an error says what it has
+    scan-apk.ps1 -Apk <file> -Bench       the APK must be the rig's build in full; an error says what is missing
+    scan-apk.ps1 -Apk <file> -UpdateTest  the APK must be one of the bench's update test's builds (build.ps1 -UpdateTest:
+                                          the released app that also takes an update from the bench's own server) and
+                                          have nothing of the rig
 
   Read from the file itself, with no tool: the marker DRAUPNE-BENCH-FC in any of its parts (code, manifest,
   resources), and in its manifest ".bench" (the package name), "-bench" (the version), the test-only flag and the
-  rig's control receiver.
+  rig's control receiver; and the update test's marker DRAUPNE-UPDATE-TEST in any of its parts.
   With an Android SDK also asked of aapt (package, version, label, test-only) and of apksigner (who signed it: the
   rig's key says BENCH in its name). Given -Sdk these two must answer; without it they are used when ANDROID_HOME
   has them, and a tool that is missing or fails is only remarked - the file's own bytes decide.
@@ -17,6 +20,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Apk,
     [switch]$Bench,
+    [switch]$UpdateTest,
     [string]$Sdk,
     [string]$Jdk,
     # -Bench: the SHA-256 of the certificate that must have signed it (the rig's key)
@@ -24,8 +28,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+if ($Bench -and $UpdateTest) { throw 'scan-apk.ps1: -Bench or -UpdateTest, not both' }
 
 $marker = 'DRAUPNE-BENCH-FC'
+# the bench's update test's builds (bench-overlay/update-test: UpdateTestSource in the code, the manifest's meta-data)
+$updateTestMarker = 'DRAUPNE-UPDATE-TEST'
 $inManifest = '.bench', '-bench', 'testOnly', 'BenchControlReceiver'
 $file = (Resolve-Path $Apk).Path
 $name = Split-Path $file -Leaf
@@ -40,6 +47,7 @@ function Test-Has([string]$text, [string]$word) {
 }
 
 $markerIn = @()
+$updateTestIn = @()
 $manifestHas = @()
 $parts = 0
 $manifestSeen = $false
@@ -54,6 +62,7 @@ try {
         $text = $bytesAsText.GetString($memory.ToArray())
         $memory.Dispose()
         if (Test-Has $text $marker) { $markerIn += $entry.FullName }
+        if (Test-Has $text $updateTestMarker) { $updateTestIn += $entry.FullName }
         if ($entry.FullName -eq 'AndroidManifest.xml') {
             $manifestSeen = $true
             foreach ($word in $inManifest) { if (Test-Has $text $word) { $manifestHas += $word } }
@@ -127,10 +136,24 @@ if ($Bench) {
     if ($null -ne $label -and $label -notlike '*BENCH*') { $wrong += "its name on the phone is '$label', without BENCH" }
     if ($null -ne $signerName -and $signerName -notlike '*BENCH*') { $wrong += "it is signed by '$signerName', not by the rig's key" }
     if ($Signer -and $signerSha -ne $Signer.ToLower()) { $wrong += "it is signed by $signerSha, not by the rig's key $($Signer.ToLower())" }
+    if ($updateTestIn) { $wrong += "it has the update test's marker $updateTestMarker in $($updateTestIn -join ', ')" }
     if ($wrong) { throw "${name} is NOT the test rig's build in full: $($wrong -join '; ')" }
     $what = "the test rig's build - NEVER RELEASE IT (marker in $($markerIn -join ', '))"
+} elseif ($UpdateTest) {
+    # the released app's package, version, flags and key, with the update test's code and manifest - and nothing of the rig
+    if (-not ($updateTestIn | Where-Object { $_ -like '*.dex' })) { $wrong += "the marker $updateTestMarker is not in its code" }
+    if ($updateTestIn -notcontains 'AndroidManifest.xml') { $wrong += "the marker $updateTestMarker is not in its manifest" }
+    if ($markerIn) { $wrong += "the rig's marker $marker is in $($markerIn -join ', ')" }
+    foreach ($word in $manifestHas) { $wrong += "its manifest has $word" }
+    if ($null -ne $package -and $package -match '\.bench') { $wrong += "its package is $package" }
+    if ($null -ne $version -and $version -match '-bench') { $wrong += "its version is $version" }
+    if ($testOnly) { $wrong += 'it is test-only (the app''s own updater could not install it)' }
+    if ($null -ne $signerName -and $signerName -match 'BENCH') { $wrong += "it is signed by the rig's key ($signerName)" }
+    if ($wrong) { throw "${name} is NOT one of the update test's builds: $($wrong -join '; ')" }
+    $what = "an update test's build - NEVER RELEASE IT (marker $updateTestMarker in $($updateTestIn -join ', '))"
 } else {
     if ($markerIn) { $wrong += "the marker $marker is in $($markerIn -join ', ')" }
+    if ($updateTestIn) { $wrong += "the update test's marker $updateTestMarker is in $($updateTestIn -join ', ')" }
     foreach ($word in $manifestHas) { $wrong += "its manifest has $word" }
     if ($null -ne $package -and $package -match '\.bench') { $wrong += "its package is $package" }
     if ($null -ne $version -and $version -match '-bench') { $wrong += "its version is $version" }

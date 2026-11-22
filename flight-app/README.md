@@ -61,4 +61,17 @@ release workflow publishes, and stops on anything of the rig (the marker `DRAUPN
 version, the test-only flag, the key). Nothing of `bench-overlay/` may be copied into `overlay/`
 (`ReleaseHasNoBenchCodeTest`).
 
+## The update test's builds (never released)
+
+```powershell
+powershell -File .\flight-app\build.ps1 -UpdateTest   # -> build\flight-update-test\DRAUPNE-Flight-<version>-update-test.apk
+```
+
+The bench's update test (`PhoneUpdateScenario`) serves its newer phone app from the PC over plain http, which the
+released app refuses (it takes an update only from the project's release downloads). These builds are the released
+app with [`bench-overlay/update-test/`](bench-overlay/update-test) laid over a source copy of their own: they also take
+an update from the bench's server (`10.0.2.2` from the emulator, `127.0.0.1` from a real phone through `adb reverse`).
+They carry the marker `DRAUPNE-UPDATE-TEST`, which a normal build's scan and the release workflow's refuse. See
+[`bench-overlay/README.md`](bench-overlay/README.md).
+
 License: GPL-3.0, like upstream.

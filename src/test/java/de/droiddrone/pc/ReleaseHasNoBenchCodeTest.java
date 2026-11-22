@@ -28,9 +28,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ReleaseHasNoBenchCodeTest {
     /** In the rig's code and manifest; an APK is scanned for it. */
     private static final String MARKER = "DRAUPNE-BENCH-FC";
-    /** What only the rig's build has: none of it may be written anywhere under flight-app/overlay. */
+    /**
+     * What only the rig's build has, and the update test's builds (bench-overlay/update-test, build.ps1 -UpdateTest: a
+     * remote update taken from the bench's own server too): none of it may be written anywhere under flight-app/overlay.
+     */
     private static final List<String> RIG_ONLY = List.of(MARKER, "bench-overlay", "bench.gradle", "BenchControlReceiver",
-            "debug.draupne.fc", "android:testOnly", "assembleBench", "flight-bench");
+            "debug.draupne.fc", "android:testOnly", "assembleBench", "flight-bench",
+            "DRAUPNE-UPDATE-TEST", "UpdateTestSource", "update_test_network", "flight-update-test");
     private static final String STUB = "Flight/src/release/java/de/droiddrone/flight/BenchFc.java";
 
     private static Path root() {
@@ -57,7 +61,7 @@ class ReleaseHasNoBenchCodeTest {
             for (Path f : files.sorted().toList()) {
                 String name = slashes(overlay.relativize(f));
                 if (name.contains("bench-overlay") || name.endsWith("bench.gradle") || ("/" + name + "/").contains("/src/bench/")
-                        || name.contains("BenchControlReceiver")) {
+                        || name.contains("BenchControlReceiver") || name.contains("UpdateTestSource") || name.contains("update_test_network")) {
                     found.add(name + "  <- a file of the rig's build");
                 }
                 if (!Files.isRegularFile(f)) continue;

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The update test's builds only (flight-app/bench-overlay/README.md, "The update test's builds"). NEVER RELEASED:
+     `flight-app\build.ps1 -UpdateTest` lays it over a source copy of its own, where it is merged over the app's
+     manifest for the build type "release". The app is otherwise the released one: not test-only, so that its own
+     updater can install the newer test build over it. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- networkSecurityConfig: plain (unencrypted) traffic to the bench's own web server on the PC - its loopback as
+         the emulator reaches it (10.0.2.2) and as a real phone does through adb reverse (127.0.0.1) - and nowhere else. -->
+    <application android:networkSecurityConfig="@xml/update_test_network">
+
+        <!-- The marker a scan of an APK looks for (flight-app/scan-apk.ps1); UpdateTestSource carries it in the code -->
+        <meta-data
+            android:name="DRAUPNE-UPDATE-TEST"
+            android:value="update test build - never released" />
+    </application>
+
+</manifest>

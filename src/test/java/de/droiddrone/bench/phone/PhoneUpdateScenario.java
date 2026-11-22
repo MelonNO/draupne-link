@@ -29,22 +29,25 @@ import java.util.List;
  * app, checks it and installs it - with no "Update this app?" from Android on a phone nobody can reach (the
  * permission F-054 added) - opens again by itself, and the PC has its link back and says the new version.
  * <p>
- * Two test builds of the phone app (scratchpad build-update-test.ps1, copied to build/update-test):
- * receiver.apk, the pc.54 code as it is with plain http allowed to 10.0.2.2 (Android 14 refuses plain http, and a
- * test build has no place on GitHub); sender.apk, the same labelled 2.3.0-pc.55-test. The PC is told of the sender by
- * the bench's switch for it (ApkShare, {@code draupne.bench.phoneApp}); the file is served on this PC's loopback,
- * which the emulator reaches as 10.0.2.2.
+ * Two test builds of the phone app, each made by {@code flight-app\build.ps1 -UpdateTest} (the maintainer's
+ * build-update-test.ps1 makes the pair and copies it to build/update-test): receiver.apk, the tree's code as it is -
+ * the released app's package, version and key - with the one thing more this scenario needs: plain http to the
+ * bench's own web server, and a remote update taken from there (bench-overlay/update-test, UpdateTestSource). A
+ * released app takes a remote update only from the project's release downloads and refuses this scenario's address
+ * (UpdateTestSourceTest holds both). sender.apk, the same one version up, labelled ...-test. The PC is told of the
+ * sender by the bench's switch for it (ApkShare, {@code draupne.bench.phoneApp}); the file is served on this PC's
+ * loopback, which the emulator reaches as 10.0.2.2.
  * <p>
- * On a real phone (the task benchHwPhone) the file would be fetched through adb's cable instead: {@code adb reverse}
- * leads the phone's own 127.0.0.1 to this PC's server (through adb, on this PC's loopback: the fence needs no way
- * through for it). It runs there only when two builds made for it lie in build/update-test-hw (receiver.apk,
- * sender.apk, versions.txt) - both of the package the run flies, signed alike, plain http allowed to 127.0.0.1, the
- * sender one version up - and is skipped without them: the emulator's two builds allow 10.0.2.2 only. NOT WITH THE
- * BENCH BUILD: that one is test-only (flight-app/bench-overlay), and Android lets nobody but {@code adb install -t}
- * install a test-only app - not the app's own updater either. So on a real phone this is a scenario for the released
- * app's package alone, and so for a run with the word "the released app may be changed". Nothing is installed a
- * version down there ("install -d" is never sent): the phone keeps the sender's version at the end, and the receiver
- * must be at least as new as what is on the phone.
+ * On a real phone (the task benchHwPhone) the file is fetched through adb's cable instead: {@code adb reverse} leads
+ * the phone's own 127.0.0.1 to this PC's server (through adb, on this PC's loopback: the fence needs no way through for
+ * it). The same two builds serve - they take 127.0.0.1 as they take 10.0.2.2 - from build/update-test-hw
+ * (build-update-test.ps1 -Hw puts them there too; receiver.apk, sender.apk, versions.txt), and it is skipped without
+ * them. NOT WITH THE BENCH BUILD: that one is test-only (flight-app/bench-overlay), and Android lets nobody but
+ * {@code adb install -t} install a test-only app - not the app's own updater either. So on a real phone this is a
+ * scenario for the released app's package alone (phone.package), and for a run with the word "the released app may
+ * be changed"; skipped otherwise. Nothing is installed a version down there ("install -d" is never sent): the phone
+ * keeps the sender at the end - a test build that also takes an update from this PC over plain http, not for a
+ * phone that flies - and the receiver must be at least as new as what is on the phone.
  */
 @Tag("emulator")
 @Tag("hwphone")
@@ -72,6 +75,12 @@ class PhoneUpdateScenario {
         PhoneRig.Target target = PhoneRig.Target.ofRun();
         Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
         final String APP = target.app();
+        if (target.kind() == PhoneRig.Kind.DEVICE) {
+            // the update installs over the app the run flies: the released one, by the run's own word (the class comment)
+            Assumptions.assumeFalse(target.benchBuild(), "the bench build is test-only: no app's own updater can install it - a run of the released app (phone.package="
+                    + PhoneRig.APP + ") only");
+            Assumptions.assumeTrue(target.releasedAppMayBeChanged(), "the update installs over the released app: a run with -PreleasedAppMayBeChanged=true only");
+        }
         // the build folder, not %LOCALAPPDATA%: inside the bench's sandbox that is another folder. (A real phone's two
         // builds are other ones: see the class comment)
         Path dir = Path.of(System.getProperty("bench.build", "build")).resolve(target.kind() == PhoneRig.Kind.DEVICE ? "update-test-hw" : "update-test");
@@ -214,12 +223,13 @@ class PhoneUpdateScenario {
                         // a real phone is never taken down a version: it keeps what the update left
                         try {
                             rig.film.remark("The phone keeps " + phone.version() + " of " + APP + " (a real phone is never installed a version down): "
-                                    + "the app it had before is put back by hand when wanted - uninstalled, then installed anew.");
+                                    + "the update test's sender, which also takes an update from this PC over plain http - not for a phone that flies. "
+                                    + "The released app is put back by hand before it does - uninstalled, then installed anew.");
                         } catch (RuntimeException | Error e) {
                             rig.film.remark("The phone's version at the end could not be read: " + e.getMessage());
                         }
                     } else {
-                        // as found for the next scenarios: the normal pc.54 build (a lower version code: "-d")
+                        // as found for the next scenarios: the normal build in build/flight (a lower version code: "-d")
                         try {
                             String said = phone.installAnyVersion(PhoneRig.builtApk());
                             if (!said.contains("Success")) throw new IllegalStateException(said);

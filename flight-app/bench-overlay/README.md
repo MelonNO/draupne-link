@@ -97,6 +97,28 @@ linkBytesOut=... lastInAgoMs=... connects=... connectsFailed=... heldBack=... li
 writes=... writeErrors=... slowWrites=... maxWriteMs=... nextTryInMs=... lastError="..." serialStatus=7 service=running
 pc=connected pid=...` (`serialStatus` 7 is "port open", 1 "no flight controller").
 
+## The update test's builds (`update-test/`)
+
+The bench's update test (`PhoneUpdateScenario`, UPDATE PHONE APP pressed on the PC) needs two builds that the bench
+build cannot be: Android's installer takes no test-only app from the app's own updater. So these two are the
+released app - its package, its version, the release key, not test-only - with one thing more: a remote update is
+also taken from the bench's own web server on the PC, over plain http (`http://10.0.2.2:<port>/<name>.apk` from the
+emulator, `http://127.0.0.1:<port>/<name>.apk` from a real phone through `adb reverse`). A released app takes one only
+from the project's release downloads (`UpdateSource`).
+
+```powershell
+powershell -File .\flight-app\build.ps1 -UpdateTest   # -> build\flight-update-test\DRAUPNE-Flight-<version>-update-test.apk
+```
+
+- `build.ps1 -UpdateTest` lays `update-test/` over a source copy of its own (`build\flight-update-test-src`) and adds
+  one line to that copy's `UpdateSource.fromReleases`: ask `UpdateTestSource` first. `overlay` is not changed.
+- The marker `DRAUPNE-UPDATE-TEST` is in its code and its manifest. A normal build's scan and the release workflow's
+  refuse an APK that has it; `-UpdateTest`'s scan wants it, and nothing of the rig's.
+- `UpdateTestSourceTest` (PC tests) compiles the patched rule from these sources and holds it to the bench's two
+  addresses; `ReleaseHasNoBenchCodeTest` fails when a word of it is in `overlay`.
+- The pair (the receiver, and the sender one version up) is made by the maintainer's `build-update-test.ps1`. A real
+  phone that ran the scenario keeps the sender: put the released app back before it flies.
+
 ## Files
 
 | File | What |
@@ -106,3 +128,5 @@ pc=connected pid=...` (`serialStatus` 7 is "port open", 1 "no flight controller"
 | `Flight/src/bench/java/.../BenchFc.java` | The TCP connection, the property, the statistics |
 | `Flight/src/bench/java/.../BenchControlReceiver.java` | The four adb actions |
 | `Flight/src/bench/res/` | The name on the phone; plain traffic declared for `127.0.0.1` only |
+| `update-test/Common/.../UpdateTestSource.java` | The update test's builds only: the bench's server as an update's source |
+| `update-test/Flight/src/release/` | Their manifest (the marker, plain traffic) and `update_test_network.xml` (`10.0.2.2`, `127.0.0.1`) |
