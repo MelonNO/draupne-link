@@ -23,6 +23,7 @@ import java.util.List;
  * gradlew escProbe -Pesc=spin      NOISE, only when asked for: after the read, each motor in turn for 0.8 s at a
  *                                  low value. For when the silent check can't say whether the ESCs work again.
  * gradlew escProbe -Pesc=stop      STOP to every motor, and what they do now.
+ * gradlew escProbe -Pesc=spinonly  each motor turning for a moment with no visit to the ESCs before it.
  * </pre>
  * The port is the first flight controller found, or {@code -Pport=COM9}. One visit to the ESCs a run, whatever is
  * done there: every visit ends in their start-up tones.
@@ -36,8 +37,8 @@ public final class EscProbe {
     public static void main(String[] args) throws Exception {
         String mode = args.length > 0 && !args[0].isEmpty() ? args[0] : "read";
         String wanted = args.length > 1 ? args[1] : "";
-        if (!List.of("check", "beeper", "read", "row", "silence", "spin", "stop").contains(mode)) {
-            System.out.println("Unknown: " + mode + " (check, beeper, read, row, silence, spin, stop)");
+        if (!List.of("check", "beeper", "read", "row", "silence", "spin", "spinonly", "stop").contains(mode)) {
+            System.out.println("Unknown: " + mode + " (check, beeper, read, row, silence, spin, spinonly, stop)");
             return;
         }
         List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
@@ -50,6 +51,7 @@ public final class EscProbe {
         System.out.println("Sound to expect: " + switch (mode) {
             case "check", "stop", "beeper" -> "none.";
             case "spin" -> "the ESCs' start-up tones, then each motor turning for " + SPIN_MS / 1000.0 + " s.";
+            case "spinonly" -> "each motor turning for " + SPIN_MS / 1000.0 + " s (no visit to the ESCs, no start-up tones).";
             default -> "the ESCs' start-up tones, once, at the end. No motor turns.";
         });
         if (mode.equals("row")) { // what Drone setup's Read ESCs button runs, and the line its row then shows
@@ -79,6 +81,10 @@ public final class EscProbe {
             if (mode.equals("check") || mode.equals("stop")) return;
             if (!battery) {
                 System.out.println("No battery: an ESC without power doesn't answer. Nothing more done.");
+                return;
+            }
+            if (mode.equals("spinonly")) { // the spin alone: no ESC visit before it, so a visit cannot be what changed an ESC
+                spin(fc);
                 return;
             }
             long t0 = System.currentTimeMillis();
