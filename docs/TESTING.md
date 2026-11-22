@@ -113,7 +113,8 @@ fetched, so the sticks and the picture have the link to themselves.
 ## Real hardware
 
 `.\bench.ps1 hw` and `.\bench.ps1 phone` (`gradlew benchHw`, `benchHwPhone`; tags `hw`, `hwphone`) are the runs that
-reach real things: one phone on one drone, battery in, **propellers off**. Built 2026-11-21, not yet run on a phone.
+reach real things: one phone on one drone, battery in, **propellers off**. Built 2026-11-21. `phone` has run on the
+real phone since 2026-11-22 ([BENCH-RUNS.md](BENCH-RUNS.md)); `hw` and the keeper have not met the real board yet.
 
 - **The hardware file.** `%LOCALAPPDATA%\DraupneBench\hardware.properties`, this PC's own, outside the repo and never
   committed: the phone's address and link port, its adb serial, the board's port, the pack's cells and the volts per
@@ -145,6 +146,33 @@ reach real things: one phone on one drone, battery in, **propellers off**. Built
   (`gradlew fcKeeperEnd`), then `gradlew boardSafe` with the port free again. Both set Betaflight's arming lock and
   STOP every motor; see "The keeper" below.
 
+### The board's settings, kept and put back (`gradlew boardSnapshot`, `boardRestore`)
+
+By hand, around anything that writes to the one real board (nothing writes to it before a snapshot and a restore
+are proven). Under `src/test/java/de/droiddrone/bench/hw`; nothing of the app changed for them.
+
+```
+gradlew boardSnapshot [-Pport=COM9] [-Pescs=true]   the MSP facts, then one CLI visit for diff all and dump all, each
+                                                    asked twice and taken only when both answers are the same; filed
+                                                    with SHA-256 under %LOCALAPPDATA%\DraupneBench\board\<id>\<time>.
+                                                    Reads only; Betaflight restarts once (the CLI). -Pescs=true: the ESCs'
+                                                    firmware and settings too (their start-up tones once, no motor turns)
+gradlew boardRestore -Psnapshot=<folder> [-Pport=COM9]
+                                                    the board filed as it is, then "defaults nosave" and every line of the
+                                                    snapshot's dump all; save only when dump all, asked again in the same
+                                                    visit, is the snapshot's line for line - else exit, nothing saved.
+                                                    Refuses an armed board, another board or firmware, an edited snapshot;
+                                                    a board that is the same already is not written to
+gradlew boardRestore -Psnapshot=<folder> -Pcompare=only
+                                                    read, compare, report - never a write (-Preplay=always writes even
+                                                    when nothing differs)
+```
+
+What a board's settings are is `dump all` and the MSP facts: `diff all` is not stable across restarts on a real
+board (Betaflight's own defaults move; BENCH-FINDINGS, "The bench's own notes"), so a `diff all` that differs while
+those are equal is one line of the report and no failure. The copy left in Betaflight backups for a paste by hand is
+the replay's lines, not the diff. ESC settings are compared, never written.
+
 ### The keeper (`gradlew fcKeeper`)
 
 Built 2026-11-22 against a made-up board (`gradlew test --tests *FcKeeper* --tests *MspTap* --tests *HwGuard*
@@ -155,7 +183,8 @@ has the board's port while it runs, and the place where the rig's safety is kept
 dies. `bench.ps1 hw` starts it before the suite (when the hardware file has `keeper.port`) and ends it after.
 
 ```
-gradlew fcKeeper [-Pfolder=...]    the keeper, until it is told to end (its files: %LOCALAPPDATA%\DraupneBench\keeper)
+gradlew fcKeeper [-Pfolder=...] [-Pbudget=<armed seconds an hour>]
+                                   the keeper, until it is told to end (its files: %LOCALAPPDATA%\DraupneBench\keeper)
 gradlew fcKeeperState              its state in one line
 gradlew fcKeeperEnd                make safe and end; fails unless the board was left locked, disarmed, at rest
 gradlew boardSafe [-Pport=COM9]    the same lock and STOP with no keeper running (after one was killed outright)
@@ -259,7 +288,8 @@ that board is restarted: name the port when another one is plugged in (`bench.ps
 The emulator's phone scenarios against the one real phone - USB debugging on, no root, the model that flies - through
 the same `PhoneRig`, which is told which phone by a `PhoneRig.Target`: the emulator's in every run but a hardware
 run, this bench's phone in `benchHwPhone`. Built 2026-11-21 against a recorder that stands where adb is (`gradlew test
---tests *PhoneRig*`); not yet run on a phone. The emulator runs (`emulator`, the night) send what they always sent.
+--tests *PhoneRig*`). First run on the real phone 2026-11-22: it stopped at the phone's PIN lock, and the rig was made
+to run behind it (below); the second run passed. The emulator runs (`emulator`, the night) send what they always sent.
 
 ```
 .\bench.ps1 phone                                    every phone scenario once, then gradlew phoneReset

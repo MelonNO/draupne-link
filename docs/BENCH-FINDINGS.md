@@ -7,11 +7,13 @@ one's test has moved into the suite it belongs to. Security findings are not her
 `security/`.
 
 Found on `beta` at 2c0c151 + the bench's own changes, 2026-11-19 and 20, with made-up drones (the PC's virtual
-fleet) and the phone app 2.3.0-pc.54-beta in the Android emulator. Nothing here was seen on a real drone.
+fleet) and the phone app 2.3.0-pc.54-beta in the Android emulator. From F-059 on: the test week on `beta` (from
+1.0.71, 2026-11-21 evening). Nothing here was seen on a real drone.
 
 ## Open
 
-None. F-057 and the link reader's last two were fixed before the release (below, 2026-11-21).
+None in the code. The test week's findings so far (F-059 - F-075) are fixed on `beta` (below), none of them tried
+on hardware yet.
 
 ## To judge (meant that way, as far as the code says)
 
@@ -116,6 +118,245 @@ matter of layout or wording:
   state should beep (to be found) or not is the pilot's rule.
 - Without Tailscale, a PC whose own address changes during a session can end up a spectator of its own old
   session, for good until a reconnect by hand.
+
+## Found and fixed in the test week (2026-11-21 / 22, on `beta`)
+
+The test week's first night. Found by a reader of the PC's code (Drone setup, the motor test, the armed guards), a
+reader of the phone app's code (its stick, flight controller and update paths), a reader of the bench's pictures of
+the 1.0.71 runs, and test runs. Each is fixed on `beta` (CHANGELOG, 1.0.72) with a test that failed before the fix.
+**None of it has been tried on hardware:** Drone setup's fixes ran against made-up boards, the phone app's in its
+shared Common code on the PC and in the made-up phone. Still to run: the window suite (`.\bench.ps1 ui`) on these
+changes - the scenarios that met new words or a new question were changed with them (MapTools, Fly, Guides,
+Flights, Kill), the night ran the released 1.0.71.
+
+**F-059 - `SessionIdEndToEndTest.aReconnectIsOneSessionOnBothSides` was red now and then: the test, not the app.**
+Red once on GitHub's runner (three sessions on the phone where it asks for two) and in 11 of 40 runs here, found by
+those runs. F-001's rule at work: the PC keeps its try's id while the phone is unheard and begins a new try the
+moment it hears the phone again. When the test cleared the wire, a Connect of the old try that left in the 50 ms
+before could get through as well - a session for it and one for the new try, the two the rule allows. Which a run
+saw hung on where the test's sleep ended in the PC's Connect pace. **Mended in the test:** the wire's cut (`Cut`)
+now opens on the first Connect of a new try - one session on both sides, exactly. A second test,
+`aReconnectOnAConnectOfTheOldTryIsTwoSessionsOnThePhoneAndOneOnThePc`, opens on a Connect of the old try and holds
+its answer back a second: two sessions on the phone and one start on the PC, the most the rule lets a reconnect
+cost. The app untouched; 40 of 40 runs green (20 beside a perfTest). F-072 was found in the same test's runs.
+
+**F-060 - The motor test could turn another board's motors.** Drone setup read one board, and the motor test
+opened the first Betaflight board that answered: with two flight controllers on USB the props came off one and the
+other's motors turned - or its motor order, props direction or ESC direction was saved. And Motors and props said
+"Checked." for a window closed with no motor turned. Found by a reader of the PC's code. **Mended:** CHECK NOW hands
+the window the USB port and board id of the last read, the ones CONFIRM is for (`SetupConfirm.boardId`). Another
+board found there is asked what it is and sent nothing more, not even STOP ("COM7: not the board Drone setup read.
+Nothing sent. Plug that one in, or Back and Read again."; "Drone setup's board is not on COM7. Plug it in, or Back
+and Read again."), and the window goes on by itself once the right one is there; a window still open for another
+board is closed. Opened with nothing read, it takes a board alone on USB, never one of two ("2 flight controllers on
+USB. Unplug all but one."). "Checked." only when a motor was commanded to turn ("No motor turned. Check now."; an
+earlier check stands). Tests: `MotorTestBoardTest`, `DroneSetupMotorsCheckTest` - 7 of 11 red before. Not tried on
+hardware.
+
+**F-061 - A test motor kept turning while the window hung.** Every stop of the motor test (the 20 s auto-stop, a
+click's 3 s, SPACE, STOP ALL, leaving the window) was a Swing event, and Betaflight keeps the last value it was
+sent. Found by a reader of the PC's code. **Mended:** the motor thread asks `MotorLimits` on every round and itself
+ends a click's motor after 3 s, every motor after 20 s of running, and every motor when the Swing thread has not
+answered for 1 s (the window says it is there ten times a second: ten beats missed, five times sooner than
+`AppLog`'s 5 s freeze watch). What it stopped stays stopped until the window has taken it; after a window that did
+not answer the box is unticked too, so a click that waited in the hung window starts nothing ("Window froze: motors
+stopped. Tick the box to go on."). A board lost: what was asked of it is forgotten, and a board that is back is not
+sent the old values. Tests: `MotorTestLimitsTest` - 4 red before (three motors still turning after 10 s, one
+started again on a board cut off and back); `MotorTestRig` builds the window off screen on a made-up USB. Not tried
+on hardware. Left as it is: no line for a pulled cable - the warning over the sliders already says "If USB comes out
+while a motor spins, unplug the battery."
+
+**F-062 - "Armed: not known yet" was DISARMED to the PC's guards.** For a link's first seconds there is no status,
+then statuses read before Betaflight's mode names have come, which say "not armed" whatever the drone does - and
+again after a loss of 60 s, when the names are forgotten. With the app started again while its drone was in the
+air, STANDBY MODE, closing the window and OUT OF ACTION ended the link without the question, DEEP SLEEP and
+OVERWATCH stopped the sticks, an overwatch card's CONNECT cut the link, and a new link's first status ended a lost
+drone's "possibly flying" hold. Found by a reader of the PC's code. **Mended:** not known counts as armed.
+`FcTelemetry.Status` says whether it was read with the names (`armedKnown`); `ArmedCheck` is the guards' one rule
+(ARMED, MAY_FLY, NOT_KNOWN, CLEAR) and the question's words ("Not known yet if the drone is armed."); `PossiblyFlying`
+takes such a status as not known. Nobody is held: every guard asks and the answer goes; a phone with no flight
+controller (FC LOST) and a connection with no link up yet ask nothing; not known ends 10 min after the flight
+controller was last heard. With it: LOST DRONE asks while a link is up before its first status, FLEET refuses a mode
+on a phone's own fresh "not known", the OSD and the controller card say nothing of armed until it is read, and the
+link log's armed column is blank meanwhile. Tests: `ArmedCheckTest`, `ArmedNotKnownRoundTest`,
+`ArmedNotKnownEndToEndTest` (a virtual drone in the air, the link closed and opened anew, the names' answer lost on
+the wire; a phone with no flight controller) - 13 of 15 red with the old rules; `OverwatchFleetEndToEndTest`'s
+quarantined test now waits for the flight controller's DISARMED. Not tried on hardware. The sticks' rules
+(`RcSession`) are untouched.
+
+**F-063 - CALIBRATE with no flight controller calibrated the next board plugged in.** The level calibration waited
+without limit and was done on the next board that came - perhaps held in a hand, and saved as "flat"; a press made
+with board A there was done on board B. Found by a reader of the PC's code. **Mended:** the wish names the live
+view's open connection. With none open nothing is kept and the row says at once "No flight controller: not
+calibrated. USB to this PC, then Calibrate." ("Close the other check first, then Calibrate." while the motor test or
+another check has the port); a board lost between the press and the calibration, or in it, ends it with "Flight
+controller lost: not calibrated. Calibrate again." - the row no longer stays on "Calibrating". Tests:
+`DroneSetupLevelTest` - 3 of 4 red before; `MotorsPageRig` builds the step off screen. Not tried on hardware.
+
+**F-064 - A motor's spin direction was saved on a pick in the list.** No props-off tick, no question - and an ESC's
+direction can't be read back. A direction picked as the cable came out was saved in the next board plugged in.
+Found by a reader of the PC's code. **Mended:** saved only with "Propellers removed" ticked and after one question
+that names the motor and the direction ("Set motor 2 to reversed? Saved in its ESC."); without the box the list goes
+back to As is ("Tick the box first."), on No "Motor 2 direction not changed.". A direction, the motor order or props
+in / out is made only on the board it was asked of: the queue is emptied when the board is lost and when another
+opens ("Flight controller lost: nothing saved."). Tests: `MotorTestDirectionTest` - 4 red before. Not tried on
+hardware.
+
+**F-066 - An app started anew while the link was out let the ARM switch left on arm the drone on the ground
+(phone app).** Armed, the link lost, Betaflight's failsafe disarmed the drone and kept its "switch must be seen
+off". The app's process started again in the outage (an error and its own reopening, Android ending it), and what
+its idle guard knew - the PC's last frame came at an armed flight controller - was gone with it. It read DISARMED,
+fed its own idle sticks (ARM off, pc.54), Betaflight took that for the switch seen off, and the pilot's frames, ARM
+still on and throttle low, armed it when the link came back; the PC's own stop comes 0.6 s later. Found by a reader
+of the phone app's code. **Mended:** the idle sticks can't wait for the pilot there (a drone resting after an app
+start would beep for its lost receiver), so the phone keeps what it ends: `RcPath.IdleGuard` - fed before any stick
+frame of a PC's, the pilot's own ARM off is owed, and a stick frame that could arm by the flight controller's own ARM
+ranges is not written until one has come that cannot. Such a frame is still the pilot's last word: the idle sticks
+stop with it. Never held while the flight controller reads ARMED; nothing owed where a stick frame came first (an app
+started anew in the air). One volatile read a frame while nothing is owed; `Udp.handleRcFrame` asks it before the
+write (`Msp.frameMayArm`). The made-up phone (`VirtualDrone`) has the same guard now, and for tests the phone's own
+idle sticks (off unless turned on). Tests: `RcPathTest` (five; four fail without the rule),
+`VirtualDroneEndToEndTest.anAppStartedAnewInAnOutageDoesNotLetTheSwitchLeftOnArmTheDrone` (without the rule the
+drone arms by itself), `anAppStartedAnewInTheAirPassesThePilotsSticksAtOnce`,
+`FlightModelTest.armOffFromAnyoneEndsTheSwitchLockoutAfterAFailsafe`. Not tried on hardware.
+
+**F-067 - One old stick frame could arm a drone that rests (phone app).** With a 16-bit sequence a frame was taken
+only if newer than the last one - until a second had passed without a frame taken: then anything was (pc.31, "the
+PC may have started counting again"), and no age is looked at while `rc.maxLagMs` is 0, its default. A session up,
+the drone disarmed, the pilot's frames stopped (standby, the radio at rest): one frame come late or twice, from
+before the landing - ARM on, throttle low - was written, and Betaflight armed where it stood until its failsafe took
+it 1.9 s later. Nothing in DRAUPNE Link counts anew inside a session (`ControlLink.rcSeq` is one counter a link, and a
+new link's Connect makes the phone forget the sequence); the second was there for upstream's relay, which no phone
+app since pc.28 can be set to. Found by a reader of the phone app's code. **Mended** (`RcPath.Seq16`, the phone's
+rule and the made-up phone's): a frame that is not newer than the last one taken is old for 120 s after that one -
+30 000 frames at the PC's fastest, short of the 32 768 where older and newer can't be told apart; after that,
+anything. Frames that are not newer but come as a stream - each newer than the one before, none more than 300 ms
+after it, for a second - are a PC counting from elsewhere and are taken from there; a late frame, a doubled one, a
+bunch a queue let go and a trickle with gaps are not a stream. A newer frame costs what it cost. Tests: `RcPathTest` -
+the old test's last line turned round, seven new; seven fail on the rule as it was. Not tried on hardware. As they
+were: `rc.maxLagMs` and its default, 8-bit frames' 300 ms, a frame without a sequence.
+
+**F-068 - An app that had just started read "disarmed" before it had read the flight controller (phone app).**
+`FcArmedState` said DISARMED whenever no flight controller was initialised and the app had not seen it armed within
+the minute: for the second or two an app started anew needs for the board's first answers (in the air perhaps), and
+for good when the board was there and never answered (its USB permission not given again). Every guard that waits
+for a DISARMED went on: a queued FLEET_MODE was taken and its countdown dropped the stick frames for up to 3 s, the
+remote update began. Found by a reader of the phone app's code. **Mended** (`FcUnread`, in Common): a board on the
+port that has not answered is not read - UNKNOWN, counted as armed, for as long as it does not answer; no board on
+USB at all for 3 s without a break is DISARMED as before (UNKNOWN when it was armed within the minute); a port not
+looked for is DISARMED only where a sleep closed it right after a DISARMED read, else UNKNOWN. Asked by the guards,
+never for a stick frame; `Msp.portStatus` hands the port's state on. The made-up phone's flight controller is not
+read for 1.5 s after `restartApp`. Tests: `FcUnreadTest` (six; four fail on the old rule),
+`FleetModeEndToEndTest.aPhoneAppThatHasJustStartedRefusesItUntilItHasReadItsFlightController`. Not tried on hardware.
+
+**F-069 - The drone's beeper could stay off after a sleep (phone app).** At the wake the kept settings were deleted
+first and then written back once - through the one-place slot the channel map's request shares, 20 ms, no second
+try, no read-back - and to whichever flight controller was on the port. One lost write left the lost-receiver buzzer
+and the motors' beacon off until the flight controller lost power. Found by a reader of the phone app's code.
+**Mended** (`BeeperBack`, in Common): written, read back (MSP 184) and written again until the flight controller
+answers with them - one write every 0.4 s at most, five a connection, then the log says they are NOT back and the
+next connection tries again; forgotten only when the read-back equals them. Kept with the board's id (MSP_UID, 160,
+asked with the slow requests until it answers) and never written to another board; a board that is not identified
+is neither switched off nor written to. Going to sleep the off write is read back too (three times 150 ms at most),
+and the log says when the drone may beep through the sleep. OUT OF ACTION's wake for the beeper (F-051) goes through
+the same read-back. Tests: `BeeperBackTest` - 11 of 13 red before. Not tried on hardware. Left as it is: no record
+tells the PC of the beeper, so the phone's log is where it is said. The keeper's strict list (the rig) learned
+MSP_UID with it (`FcKeeperStrictTest`, red on `beta` until then).
+
+**F-070a - New flight controller port settings sent in flight were half applied (phone app).** The port's restart
+waits for the disarm (pc.31), but the stick writer asked Config at every write whether to use the native serial port:
+changed in flight, the sticks went to a port that was not open; a port lost in flight was looked for with the new
+settings. Found by a reader of the phone app's code. **Mended** (`FcPortLatch`, in Common): `Serial` asks it for the
+port's settings, which change in one place - where the port is about to be opened, after `restart()` was asked with
+the flight controller known disarmed. One volatile read where Config was called. Test: `FcPortLatchTest` - 4 of 4 red
+before. Not tried on hardware. As before: Config takes these fields from the network.
+
+**F-070b - A remote update that waited for a tap was never taken back (phone app).** The phone said "tap needed" for
+five minutes (the PC refuses to arm meanwhile), then nothing more, and Android's "update this app?" stayed on the
+screen for good: armed and flying, one tap installed the update and ended the app, and the sticks with it. Found by a
+reader of the phone app's code. **Mended** (`UpdateWithdraw`, in Common): `AppUpdater` keeps the id of the install
+session it makes (in memory, and on the disk for the next start) and abandons exactly that one - the moment the
+flight controller is not known disarmed (asked once a second), when the phone no longer tells the PC that a remote
+one waits, and at the app's next start when an earlier run left one. The PC is told why once Android says the
+session is gone ("FC not known disarmed: update taken back", "no tap on the phone in 5 min: taken back"). A second
+update takes the first one's session back. Test: `UpdateWithdrawTest` - 4 of 5 red before. **Not tried on a phone:**
+what Android's prompt does once its session is abandoned. Left as it is: an install Android has already begun can't
+be taken back, and stays "installing" to the PC.
+
+**F-070c - Failed writes to the flight controller's USB were only logged (phone app).** Only a failed read closed the
+port and looked for the device again, so a port whose reads stood still while every write failed stayed as it was,
+and no stick reached the flight controller again. Found by a reader of the phone app's code. **Mended** (`WriteRun`,
+in Common): the MSP writer counts its failed writes; from the second in a row Android is asked whether the device is
+still on USB (every 100 ms at most) - gone, it is lost at once; still there, after four failures that span 300 ms
+with none out between. Writes that only time out are six or more by then (a stick write gives up after 50 ms), and
+errors that come back at once need the 300 ms too: a burst of failed transfers closes nothing. 300 ms because
+Betaflight holds the last sticks that long, leaving a second and more to open the port before its stage 2.
+A write that goes out costs one store. Test: `WriteRunTest` - 7 of 8 red before. Not tried on hardware. As before:
+MAVLink's own writes.
+
+**F-070d - A phone clock set back N seconds meant no sticks for N seconds (phone app).** The pace of the stick writes
+(a frame within half a frame time of the one before is dropped) was kept on the wall clock, which the network
+corrects in flight too: set back, every frame was too soon until the clock had caught up. MSP only below the PC's
+rate of 255, MAVLink at every rate. Found by a reader of the phone app's code. **Mended** (`RcPace`, in Common): both
+ask it with `SystemClock.elapsedRealtime`, and it holds nothing back when a clock reads less than at the frame
+before; at the PC's rate one field read and no clock read at all. `Mavlink.java` is in the overlay now: a copy of
+upstream's (473608d) with the pace changed and nothing else - its fields are private and the check is inside the
+method, so it could not be mended from outside. **When the `upstream/` pin moves, this file is taken again from
+upstream and changed the same way.** Test: `RcPaceTest` - 3 of 5 red before. Not tried on hardware. The phone app's
+other wall clock readings measure nothing on the way from a stick frame to its write and decide no link loss.
+
+**F-071 - Drone setup's other USB tools took any board too.** With the port on Automatic the orientation check (it
+writes the board alignment and align_mag), the compass calibration and the live view behind CALIBRATE took the first
+port that answered as Betaflight, and FIND GPS and the ESC row (READ ESCS, BEACON OFF) opened the port last read
+whatever board was on it - any port, when none was known. With two flight controllers on USB, or after a swap on the
+cable, one board was read on the page and another levelled, calibrated or written to. Found while F-060 was mended,
+by going through every place Drone setup opens USB. **Mended:** all of them go the motor test's way, through one
+place (`setup/SetupBoard.open`; the motor test's own code moved there): the port and the board id of the last read
+(`BetaflightPage.board`), the same words as F-060's, none chosen between two. A port the pilot chose with nothing
+read on it yet, and a board that does not say its id, are that port alone. A window of the orientation check or the
+compass calibration still open for another board is closed. Tests: `DroneSetupUsbToolsTest` (13) and `SetupBoardTest`
+(7); with the old way put back for one run 11 of the 13 were red. Not tried on hardware. As before: the first step's
+own read (on Automatic the first Betaflight board, written only for the id CONFIRM was pressed for), and what the
+orientation check writes, its tries and its restore.
+
+**F-072 - After a cut, the answer to the try kept through it was taken for a slow way (PC).** `SessionGate.Ids`
+counted an older try's answer from that try's first Connect - 3.6 s back, in the cut; half as long again was the 5 s
+cap, and when the next try's answer was then lost the PC asked again only 5 s later: LINK READY about 4 s later than
+F-001's second means it to. Found in F-059's test runs (a real run's times). **Mended:** a try sends many Connects
+and none says which one was answered. With the phone heard it is the try's first, counted from as before; a Connect
+that went out into the silence - nothing heard from the phone since the try began, nor for 2 s, the time after which
+the PC counts a link lost - may be lost with all before it, so the newest of those is counted from. Which id a
+Connect carries is decided as before (checked against the class of before over 300 000 random runs). The phone app
+compiles the class and never calls it. Tests, red before:
+`SessionGateIdTest.anAnswerAfterACutIsCountedFromTheLastConnectSentIntoTheSilence` (79 ms, was 3631; the next try renewed after its second, was 5 s) and
+`SessionIdEndToEndTest.anAnswerAfterACutIsNotTakenForASlowWay` (that try kept 1.02 s, was 5.05 s; LINK READY 1.25 s
+after the link came back, about 5.3 s before); green before and after:
+`anAnswerOnASlowWayIsCountedFromItsTrysFirstConnectAsBefore`. Not tried on a real link.
+
+**F-073 - The setup guide still said "STEP 1 OF 9", then "STEP 2 OF 8".** F-043's rule (no total while a check that
+decides the skipped steps is out) counted the last check as done before its result was in, so its page still
+counted as shown when the total was made. Found by the reader of the bench's pictures (`guide-first-start`).
+**Mended:** a page's background job counts as done after its result is applied (also when that throws). Test:
+`WizardStepCountTest` - both red before.
+
+**F-074 - A link that was up and lost in flight was worded as a first connection.** The header said CONNECTING in
+yellow, the controller card FC: NO STATUS YET and the log "Waiting for the phone... (DRAUPNE Flight open? On
+Tailscale? Same key?)", while the video said LINK LOST. Found by the reader of the bench's pictures
+(`rescue-link-lost`). **Mended:** F-019's rule holds there too - CONNECTING and the questions until the
+connection's first link; after that LINK LOST in red in the header, "Link lost - reconnecting." once in the log, and
+FC: NO DATA on the card (also when the link is back and the status from before the loss is old). Not for a phone that
+sleeps as asked (WAKING), not when watching. Tests: `LinkLostWordsEndToEndTest` (red against the old wording),
+`LinkReviewRoundTest.aLinkThatWasUpIsLostInTheHeaderAndTheCard`.
+
+**F-075 - Three texts cut or miscounted.** OSD settings' ELEMENT card stopped an element's words after the first
+line; QUEUED: OVERWATCH (AT CHECK-IN) opened cut in half at the LINK card's edge in the smallest window (1093 x 584);
+IMPORT said "1 drawings and symbols, 1 pins imported.". Found by the reader of the bench's pictures (`menus-windows`,
+`sleep-small-window`). **Mended:** the words wrap to the card's width at the height of all their lines
+(`OsdSettingsDialog.helpLabel`); the card's rows scroll the line into sight once it has opened, the view's top at a
+row's top (`LinkCardLayout.reveal`, `Fold.whenOpened`); "1 drawing or symbol, 1 pin imported."
+(`MapWindow.importedText`). Tests: `ScreenSizeTest.theOsdElementsWordsAreWholeInTheirCard`,
+`aLineThatOpensAtTheFootOfTheLinkCardIsScrolledIntoSightWhole` (both red before),
+`theViewsTopGoesToTheNextRowsTopWhileTheLineStaysInSight`, `MapToolsTest.importSaysWhatItBroughtInTheRightNumber`.
 
 ## Fixed (2026-11-19, on `beta`)
 
@@ -839,3 +1080,21 @@ jammed socket), "anything else".
 - 2026-11-21: switching "Install unknown apps" off for an app makes Android end that app. The update scenario did it
   while connected: the link was lost and the PC's question went nowhere. It now switches it off before the app opens.
   For the pilot: switching it off on a drone's phone ends DRAUPNE Flight; switching it on does not.
+- 2026-11-21: **`diff all` is not stable across restarts on a real board.** Two reads of the bench's flight
+  controller (Betaflight 4.4.1) 41 s apart, nothing written between: `dump all` and the MSP facts the same, `diff all`
+  two lines apart (`min_throttle`, `use_unsynced_pwm`) - Betaflight took the ESCs for brushed ones at one start and
+  not at the other, and its defaults with them. A diff replayed after `defaults nosave` at the other kind of start
+  leaves those settings at the wrong defaults. So the rig's `boardRestore` replays and compares `dump all` and the MSP
+  facts; a `diff all` that differs while those are equal is one line of its report. Not looked at yet: whether the
+  app's own `diff all` backup before Drone setup's writes (the one for pasting into Betaflight Configurator) can be
+  fooled the same way.
+- The night of 2026-11-21: **the long flight failed at 126 min on two window freezes of 1.0 and 1.4 s** while other
+  test runs of mine ran beside it at normal priority (the bench's app runs below normal). The stacks are ordinary
+  painting (a GDI blit, font shaping in the OSD's heading tape): a starved window, not a hang, not a finding of the
+  app. Everything else of the flight passed - one flight on disk, its track whole, the recording, memory flat, the
+  REPORT. The rule since: everything beside a long run at low priority (`start /low`), never normal.
+- 2026-11-22: `OsdRecorderTest.aRecordingAlsoWritesACopyWithTheOsdDrawnIn` fails 3 of 3 on a heavily loaded PC, before
+  and after the week's changes ("pictures in the copy: 11"); it passed in the quiet baseline. The OSD copy's thread
+  runs at low priority and starves. `FleetModeEndToEndTest.aSleepingPhoneGetsTheNextModeAheadOfTheAnswerToItsHello`
+  and `StanagFeedTest.theVideoWithItsOsdThenThePageAgainInOneStream` were red under the same load and green alone.
+  A fast test run made beside heavy work is judged so: its reds run again alone.

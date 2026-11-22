@@ -4,13 +4,36 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-21: 1.0.71 + phone pc.55 released from beta and merged to main; not flown yet)
+## Where things stand (2026-11-22: the test week under way on `beta`; latest release 1.0.71 + phone pc.55, not flown)
 
-- **Now:** DRAUPNE Link **1.0.71** with phone app **2.3.0-pc.55** (released 2026-11-21, on the maintainer's word
-  "complete a release and merge to main"). Tested on the test bench only - the real Windows app with made-up drones,
-  the real phone app in an Android emulator, nights of flying, sleeping and bad links: **not flown, not on a real
-  phone.** Last flown: 1.0.69 with pc.52 (2026-11-17 and 18). Before UPDATE PHONE APP each drone's phone needs
-  "Install unknown apps" allowed for DRAUPNE Flight once (F-058).
+- **Now: the test week** (from 2026-11-21 evening, a week on `beta`): readers of the code, the test bench, and a
+  rig for real hardware. Its first night is on `beta` (pushed) as **1.0.72 (unreleased, on beta)** in
+  [CHANGELOG](CHANGELOG.md): fixes F-059 - F-075 ([BENCH-FINDINGS.md](BENCH-FINDINGS.md)), the maintainer's
+  answers Q-001 - Q-004 built, improvements I-002 - I-009, the hardware rig. `build.gradle` still says 1.0.71.
+  **Nothing of the week is released, and `main` is untouched** (1.0.71).
+- **Approved by the maintainer:** F-060, F-061, F-062, F-063, F-064, F-071 and I-002. **The rest waits for the
+  maintainer's verdict:** F-066 - F-070d, F-072 - F-075, Q-001 - Q-004 as built, I-003 - I-009 (F-059 is a test's
+  fix). The verdicts are kept on the week's own page, not in the repo. To `main` only when every item has its
+  answer and the maintainer says so.
+- **Phone app 2.3.0-pc.56-beta** (versionCode 2030056; F-066 - F-070d and Q-004): sideloaded only, never published.
+  `ApkShare` stays pinned to the released **pc.55**: the PC offers pc.55, and UPDATE PHONE APP installs pc.55.
+- **Nothing of the week has been tried on hardware.** Drone setup's fixes ran against made-up boards, the phone
+  app's in the PC's tests and the made-up phone; the bench build of pc.56-beta has passed one scenario on the real
+  phone. Tries planned on the bench's drone, props off: F-066's sequence (armed, the link cut, the failsafe's disarm,
+  ARM left on, the phone app ended and opened again, the link back: it must not arm), F-068 (STANDBY with the USB
+  permission taken back), F-069 (the beeper's read-back, with the keeper dropping its beeper requests), F-070b
+  (Android's prompt after the take-back), the motor test and Drone setup's tools with two boards. Q-001 needs a drone
+  with a compass. The window suite has not run on the week's changes yet.
+- **The hardware rig** ([TESTING.md](TESTING.md), "Real hardware"): the board tools have read the real board (reads
+  only; `diff all` changed between two starts there, so the restore works on `dump all`). The phone rig ran twice on
+  the real phone: the first stopped at its PIN lock, the rig now runs behind it, the second passed. The keeper has
+  met only a made-up board. No armed run yet: it waits for Betaflight as a program (SITL, needs Windows' Linux part)
+  and a board capped with `boardCap`.
+- **The latest release:** DRAUPNE Link **1.0.71** with phone app **2.3.0-pc.55** (released 2026-11-21, on the
+  maintainer's word "complete a release and merge to main"). Tested on the test bench only - the real Windows app
+  with made-up drones, the real phone app in an Android emulator, nights of flying, sleeping and bad links: **not
+  flown, not on a real phone.** Last flown: 1.0.69 with pc.52 (2026-11-17 and 18). Before UPDATE PHONE APP each
+  drone's phone needs "Install unknown apps" allowed for DRAUPNE Flight once (F-058).
 - **1.0.71** = 1.0.70 (never released on its own) + the link round + the field round + the bench and every finding
   of it ([BENCH-FINDINGS.md](BENCH-FINDINGS.md): none open). The maintainer's tries on hardware still to come: F-045
   (FC re-plug), F-047 (screen-lock setup + crash reopen on a drone phone), F-051 (OUT OF ACTION's beeper with a real
@@ -177,6 +200,17 @@ Lessons from releasing:
   PC's mouse and screen may be used **while no real drone is armed** (the bench reads the real app's link log for
   it), and nothing of the pilot's is ever deleted. The bench's tests carry tags of their own and are not run by
   `gradlew test`.
+- **The hardware rig (2026-11-21 / 22, on beta, test-only):** `.\bench.ps1 hw` (the sealed app against one real
+  phone and, through the flight controller keeper, its board), `.\bench.ps1 phone` (the phone scenarios on the real
+  phone over adb, then `gradlew phoneReset`), the keeper (`gradlew fcKeeper`, `fcKeeperState`, `fcKeeperEnd`) and the
+  board tools (`boardSnapshot`, `boardRestore`, `boardSafe`, `boardCap`). This PC's own facts are in
+  `%LOCALAPPDATA%\DraupneBench\hardware.properties`, outside the repo (made-up example:
+  `docs/hardware.example.properties`). Props off always; nothing arms without `board.mayArm=true`. All in
+  [TESTING.md](TESTING.md), "Real hardware"; none of it reaches a release (`flight-app/scan-apk.ps1`,
+  `ReleaseHasNoBenchCodeTest`).
+- **Beside a long bench run everything else runs at low priority** (`start /low`): a night's long flight failed on
+  two window freezes while fast tests ran beside it at normal priority, and a fast test run on a loaded PC has reds
+  of its own (`OsdRecorderTest`; BENCH-FINDINGS, "The bench's own notes").
 - **Small UI checks** outside the bench are still done by painting windows and components off screen into PNGs from
   small throwaway programs (kept in the git-ignored `build/` folder).
 - **Link log:** `%APPDATA%\DraupneLink\logs\link-*.csv`, 10 rows a second while connected. It has ping, RC and
@@ -255,6 +289,47 @@ it, copied by `packageApp`). Code in `de.droiddrone.pc.fleet`, its window `gui.F
   PC flying is made a spectator and told so loudly: a message, the red NOT FLYING - SPECTATOR pill, a blinking line on
   the video (`MainWindow.tellNotFlying`).
 
+## How the newer parts work (the test week, 1.0.72 on beta)
+
+- **Armed or not known, on the PC** (`ArmedCheck`, F-062): the one rule of the guards that end a link or stop the
+  sticks (STANDBY MODE, closing the window, DEEP SLEEP, OVERWATCH, OUT OF ACTION, another drone's CONNECT, LOST
+  DRONE). ARMED, MAY_FLY (armed within the lost-drone window), NOT_KNOWN (no status yet, or one read before
+  Betaflight's mode names: `FcTelemetry.Status.armedKnown`), CLEAR. Anything but CLEAR asks, and the answer goes. A
+  phone with FC LOST, and a connection with no link up yet, are CLEAR. `RcSession`'s stick rules are separate.
+- **Drone setup's board** (`setup/SetupBoard.open`, F-060 / F-071): the one way a Drone setup tool opens USB. Port and
+  id (`SetupConfirm.boardId`, the last read): that port and that board only, another board is asked what it is and
+  sent nothing; a port alone; none: the one Betaflight board on USB, never one of two. A new USB tool goes through it.
+- **The motor test's own limits** (`gui/MotorLimits`, F-061): the motor thread asks on every round - a click's 3 s,
+  20 s of running, 1 s of a silent Swing thread - on a clock that only runs forward. The dialogs take a `Host` in place
+  of the main window, so tests build them off screen (`MotorTestRig`, `MotorsPageRig`, `OrientationCheckRig`).
+- **The phone's word on armed** (`common/FcUnread` in `FcArmedState`, F-068): a board on the port that has not
+  answered, or a port not looked at yet, is UNKNOWN (counted as armed); no board on USB for 3 s is DISARMED; a port a
+  sleep closed after a DISARMED read stays DISARMED. Asked by the guards, never on the stick path.
+- **The phone's stick path** (`common/RcPath`): `IdleGuard` (F-066) - idle sticks fed before any PC frame owe the
+  pilot's own ARM off, and a frame that could arm is held until one that cannot has come (never while the FC reads
+  ARMED); `Seq16` (F-067) - a 16-bit frame not newer than the last one taken stays old for 120 s, a steady stream (no
+  gap over 300 ms, for 1 s) is taken up. `VirtualDrone` uses the same classes.
+- **The phone's screen while armed** (`common/ArmedTouch`, Q-004): the touch lock's rule with its memory, asked by
+  `MainActivity` once a second and at a touch of Stop; nothing of it on the stick path.
+- **The beeper back** (`common/BeeperBack`, F-069): write, read back (MSP 184), again - 0.4 s apart, five a
+  connection - kept with the board's MSP_UID (160, which the phone now asks) and never written to another board.
+- **The FC port's settings** (`common/FcPortLatch`, F-070a): `Serial` reads them from it; they change only where the
+  port is opened after `restart()`, which `Udp` asks with the FC known disarmed.
+- **The update's take-back** (`common/UpdateWithdraw`, F-070b): KEEP, NOT_DISARMED, NO_LONGER_REPORTED.
+  `RemoteUpdate.watch` asks once a second; `AppUpdater` keeps its install session's id in memory and on disk and
+  abandons exactly that one (`withdrawLeftOver` at the app's start).
+- **Failed USB writes** (`common/WriteRun`, F-070c): four failures over 300 ms with none out between, or the device
+  gone from USB, is a lost device, as a failed read is. **The stick pace** (`common/RcPace`, F-070d): the monotonic
+  clock; MSP at the PC's rate of 255 reads no clock.
+- **The overlay's `Mavlink.java` is a whole copy of upstream's** (the pin, 473608d) with the stick pace changed (marked
+  `DRAUPNE Link (F-070d)`) and nothing else. **When the `upstream/` pin moves, take upstream's new `Mavlink.java` and
+  make the same change again**: otherwise the copy hides whatever upstream changed in that file.
+- **The rig's door in the phone app** (`BenchFc`): in the released app `BUILT_IN` is the constant `false` (release
+  sources, also taken by debug builds) and `Serial` asks it before each step that could go to the rig, so those steps
+  are not compiled in. The rig's own `BenchFc` is in `flight-app/bench-overlay`; `scan-apk.ps1` stops any APK with it.
+- **LOST DRONE's question** (`MainWindow.LostDroneAsk`, Q-002, pure) and **CONFIRM's "Also sets" line**
+  (`SetupPlanner.alsoSets`, Q-003: made from the plan's own commands, so it is always true).
+
 ## Betaflight facts this code relies on
 
 - One MSP message per serial task cycle; `serial_update_rate_hz` defaults to 100, too slow for sticks plus telemetry.
@@ -271,18 +346,22 @@ it, copied by `packageApp`). Code in `de.droiddrone.pc.fleet`, its window `gui.F
   arms only with a GPS fix (RESC) unless `gps_rescue_allow_arming_without_fix` is on.
 - The GPS counts as there (MSP_STATUS sensors bit 3) as soon as it talks, fix or not; cleared after 2.5 s of silence.
   FEATURE_GPS is 1 << 7 (MSP_FEATURE_CONFIG); a UART with function 2 is the GPS port (`serial`).
+- `diff all` can differ between two starts with nothing written (4.4.1: the ESCs taken for brushed ones at one start,
+  `min_throttle` and `use_unsynced_pwm` defaults with them); `dump all` and the MSP facts stay the same. The rig's
+  restore uses `dump all`.
 
 ## Map of the code
 
 | Area | Files |
 |---|---|
-| Link, RC, telemetry | `ControlLink`, `Connection`, `RcSession`, `RcMapper`, `Pacer`, `FcTelemetry`, `CellCount`, `LinkLog` |
+| Link, RC, telemetry | `ControlLink`, `Connection`, `RcSession`, `RcMapper`, `Pacer`, `FcTelemetry`, `CellCount`, `LinkLog`, `ArmedCheck` (the guards' armed rule), `PossiblyFlying` |
 | Spectator mode | `Spectate` (packets), `SpectatorHost` (pilot side), `SpectatorClient` (spectator side) |
 | App log | `AppLog` (file, uncaught exceptions, freeze watch) |
 | Controller | `Joystick`, `JoystickService`, `CalibrationWizard`, `AxisCalibration` |
 | Video | `video/` (`VideoPipeline`, `VideoDecoder`, `FrameAssembler`, `BitrateControl`, `LatencyMeter`) |
 | Window, OSD, wizards | `gui/` (`MainWindow`, `VideoView`, `OsdRenderer`, `OsdLayout` / `OsdElement` / `OsdSettingsDialog` (SETTINGS > OSD), `SetupWizard`, `PcSetupWizard`, `PhoneGuideWizard`, `DroneSetup`, `Tactical*`) |
-| Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ModeSwitch` (switches, failsafe, GPS rules), `ApkShare`, `MotorTest`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
+| Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ModeSwitch` (switches, failsafe, GPS rules), `ApkShare`, `MotorTest`, `SetupBoard` (the board Drone setup's tools open), `SetupConfirm`, `SetupPlanner`, `UpdateCheck`, `SelfUpdate`, `PcPrep`); the motor test's limits `gui/MotorLimits` |
 | Virtual fleet | `fleet/` (`FleetMain`, `Fleet`, `VirtualDrone`, `FlightModel`, `LinkImpairment`, `Scene`, `VirtualOverwatch`), `gui/FleetPanel`; DRAUPNE Link's side `VirtualFleet` |
 | Installer | `src/installer/main.wxs`, `check-running.js` |
-| Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README). Overlay files replace upstream's whole: `Udp` (stats, spectator answer), `InternalCamera` (frame-rate range), `UpdateCheck`, ... |
+| Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README). Overlay files replace upstream's whole: `Udp` (stats, spectator answer), `InternalCamera` (frame-rate range), `UpdateCheck`, `Mavlink` (a whole copy: re-take it when the pin moves), ... Rules shared with the PC's tests in `overlay/Common`: `RcPath` (`IdleGuard`, `Seq16`), `FcUnread`, `ArmedTouch`, `BeeperBack`, `FcPortLatch`, `UpdateWithdraw`, `WriteRun`, `RcPace`, `SessionGate` |
+| Test bench and hardware rig (test-only) | `src/test/java/de/droiddrone/bench/**` (`AppRig`, `Fence`, `Hardware`, `HwGuard`, `PhoneRig`, `PhoneGuard`; `bench/hw`: `FcKeeper`, `MspTap`, `BoardSnapshot`, `BoardRestore`, `BoardSafe`, `BoardCap`, `FakeFlightBoard`), `bench.ps1`; the phone app's bench build `flight-app/bench-overlay`, its guard `flight-app/scan-apk.ps1` |
