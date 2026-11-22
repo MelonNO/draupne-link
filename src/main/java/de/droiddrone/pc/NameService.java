@@ -351,11 +351,23 @@ public final class NameService {
         return heardAsleep(ip, w, powerMode, Double.NaN);
     }
 
-    /** As above, with where its camera looks (its sleep notice; NaN none). */
+    /**
+     * As above, with where its camera looks (its sleep notice; NaN none). A name the map has at another address is left
+     * there ({@link #checkInFiles}): only the phone's answer to a scan from the new address moves it, or the pilot's own
+     * word - the name removed in the NAME MAP, and the next check-in files it anew.
+     */
     public boolean heardAsleep(String ip, de.droiddrone.common.FleetProtocol.Where w, int powerMode, double headingDeg) {
         if (w == null || Names.kindOf(w.name) != Names.Kind.PHONE) return false;
         boolean virtual = VirtualFleet.isVirtual(ip);
         Names.Entry old = names.get(w.name);
+        if (!checkInFiles(old, ip)) {
+            if (elsewhereSaid.size() > 64) elsewhereSaid.clear(); // a bounded book: said again at worst
+            if (elsewhereSaid.add(w.name + " " + ip)) {
+                log.accept("Names: " + w.name + " checks in from " + ip + " but is at " + old.ip() + " - left there until it answers a scan from "
+                        + ip + " (or is removed in the NAME MAP).");
+            }
+            return false;
+        }
         Names.Position p = w.hasPosition()
                 ? new Names.Position(w.source == 1, w.lat, w.lon, w.ageS, Boolean.FALSE, false, "", powerMode) : null;
         Names.Reply reply = new Names.Reply(Names.Kind.PHONE, w.name, old == null ? "" : old.device(), old == null ? "" : old.version(), p);
@@ -369,6 +381,18 @@ public final class NameService {
         heardHellos.put(ip, new long[]{heardAt, powerMode, before == null ? 0 : before[2]});
         return old == null || !ip.equals(old.ip());
     }
+
+    /**
+     * Whether a sleeping phone's check-in from this address files its name (listed, drawn, saved): a name the map has
+     * not, has without an address, or has at this very address. A check-in carries the key only - before, one from
+     * another address moved the name there and saved it, and PILOT UAV and the name's overwatch alerts followed it.
+     */
+    static boolean checkInFiles(Names.Entry known, String ip) {
+        return known == null || known.ip() == null || known.ip().isEmpty() || known.ip().equals(ip);
+    }
+
+    /** "name address" of the check-ins left where the map has them, said once each. */
+    private final Set<String> elsewhereSaid = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** The host name the name map files a virtual drone under. */
     static final String VIRTUAL_HOST = "virtual fleet";

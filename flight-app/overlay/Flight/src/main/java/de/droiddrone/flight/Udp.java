@@ -94,6 +94,7 @@ import de.droiddrone.common.KnownPcs;
 import de.droiddrone.common.LinkSocket;
 import de.droiddrone.common.Log;
 import de.droiddrone.common.MavlinkRaw;
+import de.droiddrone.common.NameAssignGate;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.Observe;
@@ -243,8 +244,9 @@ public class Udp {
     /**
      * DRAUPNE names (pc.28), from DRAUPNE Link 1.0.35: NAME_QUERY [0x73][key UTF] is answered with NAME_REPLY
      * [0x74][key UTF][0 = phone][name UTF][device UTF][version UTF] (the name "" while this phone has none);
-     * NAME_ASSIGN [0x75][key UTF][name UTF] from the master PC gives this phone its name (kept), answered the same.
-     * Another key: dropped without a word.
+     * NAME_ASSIGN [0x75][key UTF][name UTF] from the master PC gives this phone its name (kept), answered the same -
+     * taken only with the FC known disarmed, from the pilot's PC while one is connected, else from a PC that asked this
+     * phone's name lately (NameAssignGate). Another key: dropped without a word.
      *
      * pc.32 (DRAUPNE Link 1.0.41, the PCs' map of every drone on the network): the reply goes on with
      * [block version u8 = 1][source u8: 0 none, 1 the FC's GPS, 2 the phone's][lat i32][lon i32, 1e-7 degrees]
@@ -255,23 +257,36 @@ public class Udp {
 
     private void answerName(DatagramPacket packet, byte[] d, int len) {
         if (!keyMatches(d, len, 1)) return;
-        // pc.50: the PCs that ask who this phone is hear its sleep notice too
-        namedBy.asked(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
-        knownPcs.asked(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
+        final InetAddress from = packet.getAddress();
+        final long now = android.os.SystemClock.elapsedRealtime();
+        if (d[0] == NAME_QUERY) {
+            // pc.50: the PCs that ask who this phone is hear its sleep notice too. Only a question counts: the naming
+            // master asks before it names (NameAssignGate), and an assign never vouches for the next one
+            namedBy.asked(from, now);
+            knownPcs.asked(from, now);
+        }
         try {
             if (d[0] == NAME_ASSIGN) {
                 java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1));
                 in.readUTF(); // the key
                 String name = in.readUTF();
                 if (!name.isEmpty() && !name.equals(MainActivity.phoneName())) {
-                    MainActivity.setPhoneName(name);
-                    log("This phone is " + name + " now (named by the PC at " + packet.getAddress().getHostAddress() + ")");
+                    // the FC known disarmed; from the pilot's PC while one is connected, else from a PC that asked
+                    boolean connected = isConnected();
+                    int v = NameAssignGate.verdict(fcDisarmed.getAsBoolean(), connected, connected && from.equals(udpSender.getIp()), namedBy.askedWithin(from, now));
+                    if (v == NameAssignGate.TAKEN) {
+                        MainActivity.setPhoneName(name);
+                        log("This phone is " + name + " now (named by the PC at " + from.getHostAddress() + ")");
+                    } else if (now - nameRefusedSaidAt >= 10_000) {
+                        nameRefusedSaidAt = now;
+                        log("The name " + name + " from the PC at " + from.getHostAddress() + " " + NameAssignGate.why(v));
+                    }
                 }
             }
             // pc.31: sent from the answer thread - this is the receive thread, and a full send buffer (video) held the
             // sticks. pc.50: built there too - the status block asks Android for the battery, the heat and the mobile
             // signal (calls into system services), every 5 s per PC, with the stick frames waiting behind them
-            final InetAddress to = packet.getAddress();
+            final InetAddress to = from;
             final int toPort = packet.getPort();
             final DatagramSocket s = socket;
             PowerMode.replyWhileAsleep(); // listening in deep sleep: awake until the answer has left
@@ -297,6 +312,9 @@ public class Udp {
             log("answerName error: " + e);
         }
     }
+    /** A refused NAME_ASSIGN was said (the receive thread's; at most every 10 s). */
+    private long nameRefusedSaidAt = -10_000;
+
     /** The FC's GPS fix younger than this is where the drone is; else the phone's own position, younger than PHONE_FIX_MS. */
     private static final long FC_FIX_MS = 10_000, PHONE_FIX_MS = 120_000;
 

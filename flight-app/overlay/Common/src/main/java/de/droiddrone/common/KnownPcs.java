@@ -62,6 +62,12 @@ public final class KnownPcs<K> {
         askedAt.put(pc, now);
     }
 
+    /** Whether this PC asked the phone's name within the time this book keeps it (NameAssignGate). */
+    public boolean askedWithin(K pc, long now) {
+        Long at = pc == null ? null : askedAt.get(pc);
+        return at != null && now - at <= keepMs;
+    }
+
     /**
      * Whom to tell now, in order, each with the port to tell it at. The PCs that asked longer ago than this book keeps
      * them are forgotten here.

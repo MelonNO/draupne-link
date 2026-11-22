@@ -149,6 +149,8 @@ public final class VirtualDrone {
     private volatile String keptPilot;
     /** This session's pilot is kept already (or is not to be again: it said Disconnect). */
     private volatile boolean pilotKept;
+    /** The PCs that asked its name lately (the phone's namedBy): who may name it with no pilot connected. The app's own. */
+    private volatile de.droiddrone.common.KnownPcs<InetAddress> namedBy = de.droiddrone.common.KnownPcs.forNotice();
     private volatile boolean restarting;
 
     // the sticks (the receive thread)
@@ -351,6 +353,7 @@ public final class VirtualDrone {
                 lastPcIp = null;
                 lastPcPort = 0;
                 gate = new SessionGate(key); // the app's own: what session it held is gone with it
+                namedBy = de.droiddrone.common.KnownPcs.forNotice(); // and who asked its name
                 // ... but not who flew it: the phone's storage kept that (KeptPilot) - its PC gets the session back at
                 // once, another PC only by the takeover rule, the pilot's silence counted from the app's start
                 de.droiddrone.common.KeptPilot kept = de.droiddrone.common.KeptPilot.decode(keptPilot);
@@ -993,11 +996,22 @@ public final class VirtualDrone {
     private void answerName(byte[] d, int len, InetAddress from, int fromPort) {
         String k = de.droiddrone.pc.Names.keyOf(d, len);
         if (!key.equals(k)) return;
+        long now = System.currentTimeMillis();
+        if (d[0] == NAME_QUERY) namedBy.asked(from, now); // only a question: the phone's Udp
         if (d[0] == NAME_ASSIGN) {
             String assigned = de.droiddrone.pc.Names.parseAssign(d, len, key);
             if (assigned != null && !assigned.equals(name)) {
-                log.accept("named " + assigned + " by the PC at " + from.getHostAddress());
-                setName(assigned);
+                // as the phone (NameAssignGate): the FC known disarmed; the pilot's PC while one is connected, else a PC that asked
+                boolean connected = isConnected();
+                UdpSender sender = udpSender;
+                int v = de.droiddrone.common.NameAssignGate.verdict(fcDisarmed(), connected,
+                        connected && sender != null && from.equals(sender.getIp()), namedBy.askedWithin(from, now));
+                if (v == de.droiddrone.common.NameAssignGate.TAKEN) {
+                    log.accept("named " + assigned + " by the PC at " + from.getHostAddress());
+                    setName(assigned);
+                } else {
+                    log.accept("the name " + assigned + " from the PC at " + from.getHostAddress() + " " + de.droiddrone.common.NameAssignGate.why(v));
+                }
             }
         }
         try {
@@ -1010,7 +1024,6 @@ public final class VirtualDrone {
             out.writeUTF(DEVICE);
             out.writeUTF(VERSION);
             out.writeByte(1); // where the drone is (pc.32)
-            long now = System.currentTimeMillis();
             boolean fromFc = !fcLost && fc.gpsFix(now);
             out.writeByte(fromFc ? 1 : 2);
             out.writeInt((int) Math.round(fc.latDeg() * 1e7));
