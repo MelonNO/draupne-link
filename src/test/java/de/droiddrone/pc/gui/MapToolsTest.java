@@ -106,6 +106,50 @@ class MapToolsTest {
         assertNull(map.currentMeasurement());
     }
 
+    /**
+     * I-007 (the bench's maptools-draw, maptools-gcs-search, maptools-export-import, 1.0.71): a tool was lit and the
+     * map said nothing of what to do next. While a tool is on, a chip on the map says it - its button's tooltip.
+     */
+    @Test
+    void aToolThatIsOnSaysOnTheMapHowItWorks(@TempDir Path dir) {
+        MapView map = map(dir, new MapGraphics(null));
+        map.setToolHints(java.util.Map.of(MapView.Tool.LINE, "Click points; double-click or Enter ends",
+                MapView.Tool.SEARCH, "Drag a box round the area needing reception: green where a ground antenna sees all of it, red none, "
+                        + "best spot ringed (30 km). The cross on its label removes it"));
+        map.snapshot(400, 300);
+        assertNull(map.toolChipText, "no tool: no chip");
+        map.setTool(MapView.Tool.LINE);
+        map.snapshot(400, 300);
+        assertEquals("Click points; double-click or Enter ends", map.toolChipText);
+        assertTrue(map.toolChip.x >= 0 && map.toolChip.x + map.toolChip.width <= 400, "inside the map: " + map.toolChip);
+        map.setTool(MapView.Tool.SEARCH);
+        map.snapshot(400, 300);
+        assertTrue(map.toolChipText.startsWith("Drag a box round"), map.toolChipText);
+        assertTrue(map.toolChip.width <= 400 && map.toolChip.height > 30, "a long one wraps: " + map.toolChip);
+        map.cancelTool();
+        map.snapshot(400, 300);
+        assertNull(map.toolChipText, "the tool ended: gone");
+        assertNull(MapView.toolHint(java.util.Map.of(), MapView.Tool.RULER), "a tool with no words: no chip");
+        assertEquals("a b", MapView.toolHint(java.util.Map.of(MapView.Tool.RULER, "<html>a<br>b</html>"), MapView.Tool.RULER));
+    }
+
+    /** I-007: CLEAR ALL asks with Cancel as the default, and keeps a dated KML of what it takes away first. */
+    @Test
+    void clearAllKeepsACopyIMPORTBringsBack(@TempDir Path dir) throws Exception {
+        assertEquals("Cancel", MapWindow.CLEAR_OPTIONS[1]);
+        Path exports = dir.resolve("Exports");
+        Path copy = MapWindow.clearBackupFile(exports, java.time.LocalDateTime.of(2026, 11, 22, 15, 30, 7));
+        assertEquals("map-cleared-2026-11-22-153007.kml", copy.getFileName().toString());
+        MapGraphics.Item line = MapGraphics.Item.line("Line 1", List.of(new MapGraphics.LatLon(59.9, 10.7), new MapGraphics.LatLon(59.91, 10.72)), 0xe31b23, 3);
+        de.droiddrone.pc.map.Pins pins = new de.droiddrone.pc.map.Pins(dir.resolve("pins.txt"));
+        pins.add("Alpha", 59.95, 10.75);
+        MapWindow.writeClearBackup(copy, List.of(line), pins.list());
+        assertTrue(java.nio.file.Files.isRegularFile(copy), "written, its folder made");
+        de.droiddrone.pc.map.Kml.Parsed back = de.droiddrone.pc.map.Kml.read(java.nio.file.Files.readString(copy));
+        assertEquals(1, back.items().size(), "the line in it");
+        assertEquals(1, back.pins().size(), "the pin in it");
+    }
+
     @Test
     void aLineEndsWithADoubleClickAnArrowWithEnterAndBothAreHit(@TempDir Path dir) {
         MapGraphics g = new MapGraphics(null);

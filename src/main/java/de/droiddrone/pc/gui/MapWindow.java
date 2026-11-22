@@ -233,14 +233,39 @@ final class MapWindow extends JFrame {
         tools.importButton.addActionListener(e -> importKml());
         tools.clearAll.addActionListener(e -> { // 1.0.37: the pins and the measurement go too (the pilot)
             if (graphics.isEmpty() && pins.list().isEmpty() && !map.hasMeasurement()) return;
-            int answer = Dialogs.confirm(this, "Clear all drawings, symbols, pins and measurements?",
-                    "Clear all", javax.swing.JOptionPane.OK_CANCEL_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
-            if (answer != javax.swing.JOptionPane.OK_OPTION) return;
+            // I-007: Cancel is the default (Enter keeps everything), and a copy is saved before anything goes
+            java.nio.file.Path backup = clearBackupFile(exportsDir(), java.time.LocalDateTime.now());
+            int answer = Dialogs.option(this, "<html>Clear all drawings, symbols, pins and measurements?<br>A copy goes to "
+                            + "Documents\\DRAUPNE Link\\Exports\\" + backup.getFileName() + " first.</html>",
+                    "Clear all", javax.swing.JOptionPane.DEFAULT_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE, null,
+                    CLEAR_OPTIONS, CLEAR_OPTIONS[1]);
+            if (answer != 0) return;
+            List<MapGraphics.Item> all = new ArrayList<>(graphics.list());
+            MapGraphics.Item measured = map.currentMeasurement();
+            if (measured != null) all.add(measured);
+            try {
+                writeClearBackup(backup, all, pins.list());
+            } catch (java.io.IOException | RuntimeException ex) {
+                Dialogs.message(this, "Nothing cleared: no copy saved (" + ex.getMessage() + ").", "Clear all", javax.swing.JOptionPane.WARNING_MESSAGE);
+                return;
+            }
             graphics.clear();
             pins.clear();
             map.clearMeasurement();
             map.repaint();
         });
+        // I-007: while a tool is on, a chip on the map says how it works - the words of its button's tooltip
+        java.util.Map<MapView.Tool, String> hints = new java.util.EnumMap<>(MapView.Tool.class);
+        hints.put(MapView.Tool.RULER, tools.ruler.getToolTipText());
+        hints.put(MapView.Tool.LINE, tools.line.getToolTipText());
+        hints.put(MapView.Tool.AREA, tools.rectangle.getToolTipText());
+        hints.put(MapView.Tool.ARROW, tools.arrow.getToolTipText());
+        hints.put(MapView.Tool.SYMBOL, tools.symbol.getToolTipText());
+        hints.put(MapView.Tool.ERASER, tools.eraser.getToolTipText());
+        hints.put(MapView.Tool.EXPORT_BOX, tools.export.getToolTipText());
+        hints.put(MapView.Tool.HORIZON, tools.horizon.getToolTipText());
+        hints.put(MapView.Tool.SEARCH, tools.gcsSearch.getToolTipText());
+        map.setToolHints(hints);
         map.setOnToolChanged(() -> SwingUtilities.invokeLater(tools::syncTools));
         map.setOnMeasurement(m -> SwingUtilities.invokeLater(() -> showProfile(m)));
         map.setOnExportArea(this::exportArea);
@@ -498,6 +523,26 @@ final class MapWindow extends JFrame {
         elevation.profile(path, 20, 80, data -> SwingUtilities.invokeLater(() -> {
             if (profileCard.isVisible()) profile.set(data[0], data[1]);
         }));
+    }
+
+    /** CLEAR ALL's answers: Cancel the default (I-007). */
+    static final Object[] CLEAR_OPTIONS = {"OK", "Cancel"};
+
+    /** Documents\DRAUPNE Link\Exports, where EXPORT puts its files. */
+    static java.nio.file.Path exportsDir() {
+        return java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports");
+    }
+
+    /** I-007: CLEAR ALL's copy, dated to the second - two clears in a minute keep two copies. */
+    static java.nio.file.Path clearBackupFile(java.nio.file.Path exports, java.time.LocalDateTime now) {
+        return exports.resolve("map-cleared-" + now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")) + ".kml");
+    }
+
+    /** I-007: everything CLEAR ALL takes away, as KML (IMPORT brings it back). */
+    static void writeClearBackup(java.nio.file.Path file, List<MapGraphics.Item> items, List<Pins.Pin> pins) throws java.io.IOException {
+        java.nio.file.Files.createDirectories(file.getParent());
+        String name = file.getFileName().toString().replaceAll("(?i)\\.kml$", "");
+        MapGraphics.writeKml(file, Kml.write(items, pins, "DRAUPNE Link " + name));
     }
 
     /**

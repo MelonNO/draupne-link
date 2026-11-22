@@ -1688,6 +1688,8 @@ class MapView extends JComponent {
             else if (!forPicture && tilesMissing && cache.loading()) paintLoading(g, w);
             if (!forPicture) paintZoomButtons(g, w);
             if (selectStart != null) paintSelection(g);
+            toolChipText = forPicture ? null : toolHint(toolHints, tool);
+            if (toolChipText != null) paintToolChip(g, w, toolChipText);
             g.setColor(Theme.LINE);
             g.drawRect(0, 0, w - 1, h - 1);
         } finally {
@@ -2393,6 +2395,65 @@ class MapView extends JComponent {
 
     /** What the chip last said (tests); null with none. */
     String chipText;
+
+    /**
+     * I-007: what each tool says on the map while it is on - its button's tooltip, handed over by the map window (the
+     * pilot saw the tool lit and nothing on the map about what to do next). None: no chip (the minimap, a replay).
+     */
+    private java.util.Map<Tool, String> toolHints = java.util.Map.of();
+
+    void setToolHints(java.util.Map<Tool, String> hints) {
+        toolHints = hints == null ? java.util.Map.of() : hints;
+        repaint();
+    }
+
+    /** The tool's chip text, or null: no tool on, or none known for it. */
+    static String toolHint(java.util.Map<Tool, String> hints, Tool t) {
+        String s = t == null || t == Tool.NONE ? null : hints.get(t);
+        if (s == null) return null;
+        s = s.replaceAll("<[^>]*>", " ").replaceAll("\\s+", " ").trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    /** What the tool chip last said (tests); null with none. */
+    String toolChipText;
+
+    /** I-007: the tool's words on a chip at the top, under LOADING MAP when that shows; wrapped, at most 560 px wide. */
+    private void paintToolChip(Graphics2D g0, int w, String text) {
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            g.setFont(Theme.font(Font.PLAIN, 12.5f));
+            FontMetrics fm = g.getFontMetrics();
+            int pad = 10, max = Math.max(140, Math.min(560, w - 130)); // clear of the zoom buttons
+            List<String> lines = new java.util.ArrayList<>();
+            StringBuilder line = new StringBuilder();
+            for (String word : text.split(" ")) {
+                if (line.length() > 0 && fm.stringWidth(line + " " + word) > max) {
+                    lines.add(line.toString());
+                    line.setLength(0);
+                }
+                if (line.length() > 0) line.append(' ');
+                line.append(word);
+            }
+            if (line.length() > 0) lines.add(line.toString());
+            int tw = 0;
+            for (String l : lines) tw = Math.max(tw, fm.stringWidth(l));
+            int bw = tw + 2 * pad, bh = lines.size() * fm.getHeight() + 10;
+            int x = (w - bw) / 2, y = loadingChip == null ? 50 : loadingChip.y + loadingChip.height + 6;
+            g.setColor(BOX);
+            g.fillRect(x, y, bw, bh);
+            g.setColor(Theme.LINE);
+            g.drawRect(x, y, bw - 1, bh - 1);
+            g.setColor(Theme.TEXT);
+            for (int i = 0; i < lines.size(); i++) g.drawString(lines.get(i), x + pad, y + 5 + i * fm.getHeight() + fm.getAscent());
+            toolChip = new Rectangle(x, y, bw, bh);
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /** Where the tool chip was last painted (tests). */
+    Rectangle toolChip;
 
     /** Where LOADING MAP was last painted (tests). */
     Rectangle loadingChip;
