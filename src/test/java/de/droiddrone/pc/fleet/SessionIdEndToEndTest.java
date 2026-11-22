@@ -25,6 +25,10 @@ import static org.junit.jupiter.api.Assertions.*;
  * the try arrive late (the reconnect storm: with the clock's rule each made a session more) and when the answers come
  * late (an older try's answer starts nothing). An older phone app and an older PC meet what they met before, to the
  * byte. And the reconnect itself never arms a drone that Betaflight's failsafe disarmed.
+ * <p>
+ * The two reconnect tests end their cut on a Connect of their own choosing ({@link Cut}), not at a moment of the
+ * clock: on a new try's first Connect the reconnect is one session on both sides; on a Connect of the try kept
+ * through the cut it is two on the phone and one on the PC - the most F-001's rule lets a reconnect cost.
  */
 class SessionIdEndToEndTest {
     private final List<String> log = new CopyOnWriteArrayList<>();
@@ -87,9 +91,96 @@ class SessionIdEndToEndTest {
      * to arrive again find it still up on both sides, and no Connect is answered at all.)
      */
     private void cutUntilBothSidesLetGo() throws Exception {
-        wire.rule((toPhone, d, len) -> Wire.Rule.LOST);
+        cut = new Cut();
+        wire.rule(cut);
         waitFor(() -> !drone.isConnected() && link.getState() != ControlLink.State.READY, 9000, "the phone's session timed out", log);
         Thread.sleep(1500); // the PC's own 4 s ran from the same moment: over by now
+    }
+
+    /** Where a cut ends: on which of the PC's Connects the wire opens again. */
+    private enum End {NOT_YET, ON_A_NEW_TRY, ON_THE_TRY_IN_HAND}
+
+    private Cut cut;
+
+    /**
+     * The cut as the wire keeps it: nothing passes either way while it watches the PC's Connects go by - which try
+     * each belongs to (its id) and when that try's first one came. It ends on the Connect the test asks for
+     * ({@link #endOn}): that Connect is the first packet through, and from it on everything passes, both ways.
+     * <p>
+     * Why its end is not left to the test's clock (a third session on the phone on the CI runner, 2026-11-21): F-001's
+     * rule keeps a try's id while the phone is not heard and gives it up the moment the phone is heard again. When a
+     * cut just stops, the phone's picture mostly reaches the PC first - a new try at once, and one session. But a
+     * Connect of the old try that goes out in the few ms before the picture is there gets through as well: a session
+     * for it, and one for the new try the PC begins a tick later, the first answer still on its way - the two sessions
+     * the rule allows, with one start on the PC. Which of the two a run saw hung on where the test's own wait ended in
+     * the PC's Connect pace (a Connect every 150 - 190 ms, the picture 0 - 50 ms after the wire was cleared). Ended on
+     * a Connect of the test's choosing, each of the two is a test of its own and neither is left to the moment.
+     */
+    private final class Cut implements Wire.Rule {
+        private final long cutAt = MonoClock.ms();
+        private volatile End end = End.NOT_YET;
+        private volatile boolean open;
+        /** The try whose Connects are going by (the wire's thread to the phone): its id, and when its first one came. */
+        private long tryId = SessionGate.NO_ID, trySince;
+        /** The try whose Connect ended the cut, how long that try's answer is held on its way back, and until when. */
+        private volatile long endedOn = SessionGate.NO_ID, answerHeldMs, heldUntil;
+        /** The tries that have reached the phone since the cut ended, in order. */
+        final List<Long> reachedThePhone = new CopyOnWriteArrayList<>();
+
+        /**
+         * From now on the cut ends
+         * <ul>
+         * <li>{@link End#ON_A_NEW_TRY}: on the first Connect of the PC's next try - an id that has not gone by yet
+         * (unheard, the PC keeps a try {@link SessionGate.Ids#UNHEARD_KEEP_MS}). That try has its whole time for its
+         * answer - a second, with the phone heard; the answer takes 0.1 s - so the picture the PC hears with it ends
+         * nothing;</li>
+         * <li>{@link End#ON_THE_TRY_IN_HAND}: on a Connect of a try that has been going out for over a second (and
+         * half a second more) - the try that hearing the phone again ends at once.</li>
+         * </ul>
+         * @param answerHeldMs the answer to that try is this long on its way back (0: as the rest)
+         */
+        void endOn(End end, long answerHeldMs) {
+            this.answerHeldMs = answerHeldMs;
+            this.end = end;
+        }
+
+        @Override
+        public long decide(boolean toPhone, byte[] d, int len) {
+            boolean connect = len > 0 && d[0] == UdpCommon.Connect;
+            if (!toPhone) {
+                if (!open) return Wire.Rule.LOST;
+                if (!connect) return 0;
+                long id = SessionGate.sessionId(d, len), held = id == endedOn ? answerHeldMs : 0;
+                if (held > 0) heldUntil = MonoClock.ms() + held;
+                say("the phone's answer to try " + id + (held > 0 ? ", held " + held + " ms" : ""));
+                return held;
+            }
+            if (!connect) return open ? 0 : Wire.Rule.LOST;
+            long id = SessionGate.sessionId(d, len), now = MonoClock.ms();
+            boolean first = id != tryId;
+            if (first) {
+                tryId = id;
+                trySince = now;
+            }
+            if (!open) {
+                End e = end;
+                boolean inHand = !first && now - trySince >= SessionGate.SAME_SESSION_MS + 500;
+                if (e == End.ON_A_NEW_TRY && first || e == End.ON_THE_TRY_IN_HAND && inHand) {
+                    endedOn = id;
+                    open = true;
+                    say("the cut ends on " + (first ? "the first Connect of try " + id : "a Connect of try " + id + ", " + (now - trySince) + " ms old"));
+                }
+            }
+            if (open && !reachedThePhone.contains(id)) {
+                reachedThePhone.add(id);
+                if (id != endedOn) say("the first Connect of try " + id);
+            }
+            return open ? 0 : Wire.Rule.LOST;
+        }
+
+        private void say(String what) {
+            log.add("wire, " + (MonoClock.ms() - cutAt) + " ms into the cut: " + what);
+        }
     }
 
     /** The two sides count packets in step: a numbered request of the PC's is answered by a numbered packet of the phone's. */
@@ -104,15 +195,49 @@ class SessionIdEndToEndTest {
         assertEquals(ControlLink.State.READY, link.getState());
     }
 
+    /** What the wire and the drone said, for a failure's message. */
+    private String said() {
+        return "\n" + String.join("\n", log);
+    }
+
+    /**
+     * The link comes back as a try of the PC's begins - that try's first Connect is the first packet through, and the
+     * phone's picture, heard with it, ends nothing: one session, both sides.
+     */
     @Test
     void aReconnectIsOneSessionOnBothSides() throws Exception {
         start(false, false);
         cutUntilBothSidesLetGo();
-        wire.clear();
-        waitFor(() -> link.getState() == ControlLink.State.READY && drone.sessions() >= 2, 8000, "the link back", log);
+        cut.endOn(End.ON_A_NEW_TRY, 0);
+        waitFor(() -> link.getState() == ControlLink.State.READY && drone.sessions() >= 2, 12_000, "the link back", log);
         Thread.sleep(1500); // nothing more comes of the Connects that were in flight
-        assertEquals(2, drone.sessions(), "one new session on the phone");
-        assertEquals(2, link.getSessionStarts(), "one on the PC");
+        assertEquals(1, cut.reachedThePhone.size(), "one try of the PC's reached the phone: " + cut.reachedThePhone + said());
+        assertEquals(2, drone.sessions(), "one new session on the phone" + said());
+        assertEquals(2, link.getSessionStarts(), "one on the PC" + said());
+        assertBothSidesAreInOneSession();
+    }
+
+    /**
+     * The other end a cut can have, and the most a reconnect costs under F-001's rule ("one session when the link goes,
+     * one when it is back"): the link comes back on a Connect of the try the PC kept through the cut, and that try's
+     * answer is slow on its way back. The phone starts the try's session; the PC hears the phone's picture, gives the
+     * try up at once - its answer may be what was lost - and begins the next, which the phone takes for a new session.
+     * Two on the phone, never a third; one start on the PC, with the newer try's answer - the older try's, when it
+     * comes, starts nothing (the phone sends it only if it gets to it before the next try's Connect is there).
+     */
+    @Test
+    void aReconnectOnAConnectOfTheOldTryIsTwoSessionsOnThePhoneAndOneOnThePc() throws Exception {
+        start(false, false);
+        cutUntilBothSidesLetGo();
+        cut.endOn(End.ON_THE_TRY_IN_HAND, 1000);
+        waitFor(() -> link.getState() == ControlLink.State.READY && drone.sessions() >= 2, 12_000, "the link back", log);
+        waitFor(() -> MonoClock.ms() >= cut.heldUntil, 5000, "the held answer is at the PC", log);
+        Thread.sleep(1500); // and whatever it starts has started
+        List<Long> tries = cut.reachedThePhone;
+        assertEquals(2, tries.size(), "the try in hand and the one begun on hearing the phone: " + tries + said());
+        assertEquals((tries.get(0) + 1) & 0xFFFFFFFFL, tries.get(1), "the PC's very next try");
+        assertEquals(3, drone.sessions(), "a session for each of the two tries on the phone, none more" + said());
+        assertEquals(2, link.getSessionStarts(), "one start on the PC: the older try's answer started nothing" + said());
         assertBothSidesAreInOneSession();
     }
 
