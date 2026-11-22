@@ -17,10 +17,19 @@ on hardware yet.
 
 ## To judge (meant that way, as far as the code says)
 
+None now. What stood here the pilot answered on 2026-11-20 night, and what the answers asked for was built on
+2026-11-21 and released in 1.0.71 + phone pc.55: "Judged", next.
+
+## Judged (the pilot's answers of 2026-11-20 night, built 2026-11-21 for 1.0.71)
+
+Each as it was found, and what became of it. The answers in full: "The pilot's answers (2026-11-20 night), built
+2026-11-21" and "Fixed before the release", further down.
+
 **F-010's rest - In the smallest window (1093 x 584) PILOT UAV is half hidden and needs a scroll.** The left column's
 rule since 1.0.52: the mini-map keeps a least height (70) and the card above it scrolls its rows before the map gets
 less. At that size the rows that scroll away are the PILOT UAV button's. One way out: no mini-map at that height,
-POP OUT MAP stays. Not changed - the rule is the pilot's own.
+POP OUT MAP stays. **Answered, built for 1.0.71:** the mini-map is not shown below 140 px; POP OUT MAP stays and the
+LINK card's rows get the room.
 
 **F-001 - A link that is dead one way only makes a new session every second.**
 The phone hears the PC, the PC hears nothing (6 s, armed): the PC counts the link lost and keeps sending Connect;
@@ -28,20 +37,23 @@ each second the phone starts a new session - five for one cut - while the sticks
 armed. This is the link's own rule, in the code both apps share (`SessionGate`, the link round of 1.0.71 / pc.53):
 a Connect that stays unanswered gets a new id after a second, because the answer may have been lost - and the phone
 cannot tell a lost answer from a PC that has started over, so a new id is a new session. One way to make it gentler:
-keep an unanswered id longer with every try (1, 2, 4 s). Not changed: it is the heart of the reconnect, reviewed
+keep an unanswered id longer with every try (1, 2, 4 s). Not changed then: it is the heart of the reconnect, reviewed
 and tested as it is. **Measured on the real phone app in the emulator (2026-11-19 14:55,
 `phone/PhoneAndWindowsScenario`):** in 6 s of hearing the PC and not being heard the phone started 5 new sessions,
 as the made-up one does - and they cost it little: its camera was not closed, its video encoder not started anew;
 the live sound to the PC went off and on once (with a line "audioStreamRunnable error: codec is released already"
 in its log, no crash). LINK READY came 0.3 s after the PC heard the phone again. So this is five lines in a log and
 a click in the sound, not a picture lost.
-Test: the bad-link table's cell "cut 6 s phone to PC only" (`.\bench.ps1 link`), which stays red until judged.
+Test: the bad-link table's cell "cut 6 s phone to PC only" (`.\bench.ps1 link`), red until it was judged.
 **Read again by a separate reader of the code (2026-11-20), who came to the same:** the ids go out 2.1, 3.1, 4.1,
 5.1 and 6.1 s into a 6 s cut - five - and it is the table's "one at most" that disagrees with the rule, not the
 rule with itself. What each extra session costs the phone: the stick numbering starts over, the PC's resting
 sticks are forgotten, frame times and the extra parity go off until asked for again. A second way to make it
 gentler, in the PC alone: give an unanswered Connect a new id only when the phone has been heard since it first
 went out (a lost answer), and otherwise every 4 s or so - one session when the link goes, one when it is back.
+**Answered, built for 1.0.71:** the second way - a new id after a second only when the phone has been heard since
+the id went out, otherwise after 4 s (`SessionGate.Ids.UNHEARD_KEEP_MS`); a 6 s one-way cut makes two sessions at
+most, the bad-link table's limit now. What it cost after a cut of 2 - 4 s became F-057, fixed before the release.
 
 **F-002 - On a link with heavy jitter or heavy loss, the ARM switch must be put on several times - and with heavy
 jitter the drone may not arm at all.**
@@ -61,12 +73,14 @@ hardly one in seven seconds. The table now paces its sticks as the app does. **M
 (`runs\1120-0928-link`): "jitter 300 ms" armed at the first try, 60 ms after the switch; "loss 50 %" too** - every
 row of the table arms at the first try now. So what is left of F-002 is what a pilot on a real link of that kind
 would meet: a switch put on in the moment of a gap is refused once (ARMSWITCH) and must go off and on.
+**Answered: kept as it is** (Betaflight's ARMSWITCH rule).
 
 **F-019 - Right after PILOT UAV, before the link has ever been up, the OSD blinks "LINK LOST" in red.** The header
 says WAITING FOR PHONE and the picture "Waiting for the link..." at the same moment. On a quick link it is gone in
 a second; a phone that takes ten seconds to answer shows a red LINK LOST for ten seconds on a link that was never
-there. One way: "CONNECTING" until the first link of the session, LINK LOST only after one was up. Not changed -
-it is the OSD's oldest warning and the pilot's to word.
+there. One way: "CONNECTING" until the first link of the session, LINK LOST only after one was up. **Answered,
+built for 1.0.71:** CONNECTING in LINK LOST's place until the connection's first link - steady and white, its reason
+under it, no red frame, no alarm.
 
 **F-046 - CHECK EVERY set just before a sleep button is pressed can go to the other sleep mode.** DEEP SLEEP and
 OVERWATCH each keep their own check interval (1.0.56), and the one box shows one of them: DEEP SLEEP's until
@@ -76,13 +90,16 @@ presses DEEP SLEEP; the phone is told DEEP SLEEP's old value (2 min, say), the b
 press, and OVERWATCH now has 1 min. The log says what was sent ("Checks in every 2 min"). Found by the night's
 sleep cycles: six red, each a drone that woke in time by the interval it had really been given while the scenario
 waited by the one it had chosen (in 16 of the 36 cycles the two differed). One way: a value the pilot has just chosen
-goes to whichever sleep button is pressed next (and is kept for that mode). Not changed: two intervals and one box
-is the pilot's own rule.
+goes to whichever sleep button is pressed next (and is kept for that mode). **Answered, built for 1.0.71:** one CHECK
+EVERY for DEEP SLEEP and OVERWATCH, on the LINK card and in FLEET (the pilot's own choice, not the suggestion); the
+night's sleep cycles now fail on a difference.
 
 **F-043 - What three readers of the window suite's pictures saw** (`runs\1119-2154-ui`; two of them stopped
 half-way, so about 180 of the 441 pictures were read - the map scenarios' and PREVIOUS FLIGHTS' not at all). Each
 looked at again by me; mended where it was plainly a fault (the red menu row, above), listed here where it is a
-matter of layout or wording:
+matter of layout or wording. **Answered, all six built for 1.0.71:** the small map by F-010's rule; the guide's step
+count ("STEP 2" alone until the checks are in); INSTALL THE MOBILE APP's empty box and list; the wording; the OSD's
+warnings on a dark ground; OUT OF ACTION's 30 min in CHECK EVERY. As found:
 - **The small map is squashed on this very laptop's screen (1280 x 760 at 150 %).** With a drone chosen the PILOT
   MODE card takes the column, scrolls, and the map under it is some 60 px high: the red LAST KNOWN line is cut at
   the map's top edge, the zoom-out button at its lower one (`fly-23488-2\step-007.png`,
@@ -104,7 +121,9 @@ matter of layout or wording:
   new `OsdEditorScenario` looks again after 1.5 s: nothing cut, for each of the 40 elements, and with an element
   moved - the half line was the window still laying itself out).
 
-**What the reader of the PC's link code found, not changed** (the first two are the red rows' causes, above):
+**What the reader of the PC's link code found, not changed then** (the first two are the red rows' causes, above).
+**All four since settled for 1.0.71:** the late DISARMED, the later LINK READY (F-057) and the moved PC fixed
+before the release; DISCONNECT on a one-way link kept by the pilot's answer (the drone beeps). As found:
 - A DISARMED that arrives late can be read as fresh and stop the sticks of a drone that has just armed, for half a
   second to a second (`RcSession.watchLoss`): the phone's way up queues, the pilot arms, the queued telemetry
   trickles in over two seconds late and its first ARMED is lost. Narrow - several things must coincide. One way:
@@ -1027,7 +1046,8 @@ What could win it back: when the PC hears the phone again after a try whose answ
 fresh Connect at once instead of carrying on - one session more as the link comes back, which is what the pilot's
 rule allows ("one when it is back"). Not changed: it is the link's heart. The cell stays red until judged. (Built
 meanwhile: a Connect with the new id goes out the moment the phone is heard again in a longer cut, not at the next
-turn of the pace - `SessionGateIdTest.aNewIdIsDueTheMomentThePhoneIsHeardAgain`.)
+turn of the pace - `SessionGateIdTest.aNewIdIsDueTheMomentThePhoneIsHeardAgain`.) **Fixed before the release
+(above).**
 
 **Kept as they are:** F-002 (Betaflight's ARMSWITCH rule), F-033 (the words), F-015 (30 flights), F-053's cell count
 (CONFIRM writes the count shown - not the suggestion). **The pilot's own tries on hardware:** F-045, F-047, F-051,

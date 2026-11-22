@@ -347,10 +347,17 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   (`phone-logcat.txt`: the app's lines and Android's word on what ended it). Its battery is read once a minute:
   hotter than 42 degrees the scenario waits until it is 40 (half an hour at most), below 15 % it stops.
 - **Which scenarios** (tag `hwphone` beside `emulator`): `PhoneScenario`, `PhoneAndWindowsScenario`,
-  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneNightScenario`. `PhoneUpdateScenario` skips itself: the
-  bench build is test-only, and Android lets a test-only app be installed by adb alone, not by the app's own updater
-  (its class comment says what it would take). Not `PhoneSocketScenario`: an artefact of the emulator's Wi-Fi, read
-  with root.
+  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneNightScenario`. `PhoneUpdateScenario` skips itself with the
+  bench build: that one is test-only, and Android lets a test-only app be installed by adb alone, not by the app's own
+  updater. It runs on the released app's package (`phone.package`) with the word that it may be changed, and only
+  with its two test builds in `build\update-test-hw` (the emulator's: `build\update-test`). **Those builds must take
+  the bench's own update address:** since 2026-11-22 the phone app takes a remote update only from the project's
+  release downloads, and the scenario serves its newer build from this PC over plain http (`http://127.0.0.1:<port>/...`
+  through `adb reverse`; in the emulator `http://10.0.2.2:<port>/...`). A normal build refuses it; `flight-app\build.ps1
+  -UpdateTest` builds one that takes it, and nothing else besides the release downloads
+  ([bench-overlay/README.md](../flight-app/bench-overlay/README.md), "The update test's builds"). The phone keeps the
+  newer test build: the released app goes back on by hand before it flies. Not `PhoneSocketScenario`: an artefact of
+  the emulator's Wi-Fi, read with root.
 - **Before the phone:** `-Pphone.adb=emulator-5584` holds the emulator (running already, the app to fly on it) to a
   real phone's rules - the guard, no root, no console but the forwarded port.
 
