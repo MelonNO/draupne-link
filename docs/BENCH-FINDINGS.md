@@ -12,8 +12,8 @@ fleet) and the phone app 2.3.0-pc.54-beta in the Android emulator. From F-059 on
 
 ## Open
 
-None in the code. The test week's findings so far (F-059 - F-075) are fixed on `beta` (below), none of them tried
-on hardware yet.
+None in the code. The test week's findings so far (F-059 - F-075) are fixed on `beta` (below; F-065 is notes, left
+as they are), none of them tried on hardware yet.
 
 ## To judge (meant that way, as far as the code says)
 
@@ -220,6 +220,15 @@ back to As is ("Tick the box first."), on No "Motor 2 direction not changed.". A
 in / out is made only on the board it was asked of: the queue is emptied when the board is lost and when another
 opens ("Flight controller lost: nothing saved."). Tests: `MotorTestDirectionTest` - 4 red before. Not tried on
 hardware.
+
+**F-065 - Notes from the same safety read, not changed.** Nothing is changed for these unless the pilot says so or
+a hardware test shows a fault. The motor order's save waits 1 s for the board's answer: a slower real board would
+be told "no answer" for an order that was saved - to be timed on the real board. ESC "Beacon off" erases the ESC's
+settings page, then writes it: a cable pulled in between leaves it blank (the ESC starts on its defaults, a reversed
+motor turns the normal way); the app keeps a backup, but nothing says so at the next start (this drone's AM32 ESCs
+are not written at all). A radio that hangs while still plugged in keeps sending its last sticks; the cut for that is
+off by default (the pilot's decision of 5 Nov), only the OSD warns. At start, with the saved radio missing, the app
+takes any other joystick it finds; the start rule (throttle down, ARM off) still applies.
 
 **F-066 - An app started anew while the link was out let the ARM switch left on arm the drone on the ground
 (phone app).** Armed, the link lost, Betaflight's failsafe disarmed the drone and kept its "switch must be seen
