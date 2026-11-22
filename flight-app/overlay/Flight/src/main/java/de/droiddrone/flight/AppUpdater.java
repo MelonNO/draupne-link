@@ -29,6 +29,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 import de.droiddrone.common.GuardedCopy;
+import de.droiddrone.common.UpdateSource;
 import de.droiddrone.common.UpdateWithdraw;
 
 import static de.droiddrone.common.Logcat.log;
@@ -72,6 +73,7 @@ final class AppUpdater {
         // DRAUPNE Link (pc.19): nothing is installed that can't be checked - a release GitHub gave no SHA-256 for
         // (or not a sha256 one) isn't downloaded at all
         if (found.sha256 == null) throw new IOException(c.getString(R.string.dd_update_no_digest));
+        if (!UpdateSource.fromReleases(found.url)) throw new IOException("not from the project's release downloads");
         File d = dir(c);
         cleanUp(c);
         if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room to download");

@@ -29,10 +29,12 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import de.droiddrone.common.UpdateSource;
+
 /**
  * Is there a newer build of this app? Every DRAUPNE Link release on GitHub carries the phone app it installs
  * (DRAUPNE-Flight-&lt;version&gt;.apk), so one anonymous request for the latest release answers it. Only tells the
- * pilot; installing stays a tap (Android asks).
+ * pilot; installing stays a tap (Android asks). Only an asset among the project's release downloads (UpdateSource).
  */
 final class UpdateCheck {
     static final String LATEST_API = "https://api.github.com/repos/MelonNO/draupne-link/releases/latest";
@@ -75,7 +77,10 @@ final class UpdateCheck {
                 JSONObject a = assets.getJSONObject(i);
                 Matcher m = APK.matcher(a.getString("name"));
                 if (m.matches() && isNewer(m.group(1), current)) {
-                    return new Found(m.group(1), a.getString("browser_download_url"), sha256(a.optString("digest")));
+                    // only from this project's release downloads (UpdateSource), whatever address the answer names
+                    String url = a.getString("browser_download_url");
+                    if (!UpdateSource.fromReleases(url)) continue;
+                    return new Found(m.group(1), url, sha256(a.optString("digest")));
                 }
             }
         } catch (Exception e) {
