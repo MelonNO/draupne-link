@@ -2,6 +2,7 @@ package de.droiddrone.pc.gui;
 
 import de.droiddrone.bench.FakeUsb;
 import de.droiddrone.pc.setup.BetaflightUsb;
+import de.droiddrone.pc.setup.SetupBoard;
 import de.droiddrone.testing.Waits;
 
 import javax.swing.JButton;
@@ -12,7 +13,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -28,13 +28,13 @@ final class MotorsPageRig implements AutoCloseable {
     /** The settings the step saved. */
     final Map<String, String> saved = new ConcurrentHashMap<>();
     /** The flight controller Drone setup's first step has read (its port and id), as the step is told; null: none. */
-    volatile MotorTestDialog.Board board;
+    volatile SetupBoard board;
     /**
      * How often the step opened the motor test, for which flight controller, and what to tell it when that window
      * closes: whether a motor was turned.
      */
     volatile int motorTests;
-    volatile MotorTestDialog.Board motorTestFor;
+    volatile SetupBoard motorTestFor;
     volatile java.util.function.Consumer<Boolean> motorTestClosed;
     final DroneSetup.MotorsPage.Host host = new DroneSetup.MotorsPage.Host() {
         @Override
@@ -53,17 +53,21 @@ final class MotorsPageRig implements AutoCloseable {
         }
 
         @Override
-        public void motorTest(java.awt.Window owner, MotorTestDialog.Board board, java.util.function.Consumer<Boolean> onClosed) {
+        public void motorTest(java.awt.Window owner, SetupBoard board, java.util.function.Consumer<Boolean> onClosed) {
             motorTests++;
             motorTestFor = board;
             motorTestClosed = onClosed;
         }
 
         @Override
-        public void orientationCheck(java.awt.Window owner, String port, Runnable onPassed, Runnable onClosed) {
-            throw new IllegalStateException("no test opens the orientation check");
+        public void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, Runnable onClosed) {
+            orientationChecks++;
+            orientationCheckFor = board;
         }
     };
+    /** How often the step opened the orientation check, and for which flight controller. */
+    volatile int orientationChecks;
+    volatile SetupBoard orientationCheckFor;
     DroneSetup.MotorsPage page;
     WizardDialog wizard;
 
@@ -75,10 +79,10 @@ final class MotorsPageRig implements AutoCloseable {
      * The step as a guide's second page, as in Drone setup, and NEXT pressed: its live thread looks for a flight
      * controller from here on. (It ends when the guide it saw open is closed - so it must start in an open guide.)
      */
-    void open(Supplier<String> port) throws Exception {
+    void open() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             Theme.install();
-            page = new DroneSetup.MotorsPage(host, port, () -> board);
+            page = new DroneSetup.MotorsPage(host, () -> board);
             wizard = new WizardDialog(null, "Drone setup", List.of(new FirstPage(), page), null);
             wizard.pack(); // displayable as when open
             for (JButton b : all(wizard.getContentPane(), JButton.class)) {
@@ -133,6 +137,21 @@ final class MotorsPageRig implements AutoCloseable {
     String shows(int index) throws Exception {
         String[] out = new String[1];
         onSwing(() -> out[0] = row(index).getState() + ": " + says(index));
+        return out[0];
+    }
+
+    /** The line under the 3D model: what the live view reads, or why it has no flight controller. Not from the Swing thread. */
+    String underTheModel() {
+        String[] out = {""};
+        try {
+            onSwing(() -> {
+                for (javax.swing.JLabel l : all(row(ORIENTATION), javax.swing.JLabel.class)) { // the row's title, then that line
+                    if (l.getText() != null && !l.getText().isBlank() && !l.getText().equals("Orientation")) out[0] = l.getText();
+                }
+            });
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
         return out[0];
     }
 

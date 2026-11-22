@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.gui.CheckRow.State;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.GpsSetup;
+import de.droiddrone.pc.setup.SetupBoard;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
@@ -43,7 +44,8 @@ final class CompassCalibrationDialog extends JFrame {
     private static final int MSP_STATUS = 101, MSP_RAW_IMU = 102, MSP_MAG_CALIBRATION = 206;
 
     private final MainWindow main;
-    private final String chosenPort;
+    /** The flight controller whose compass is calibrated, and no other (F-071): the board Drone setup's first step read. */
+    private final SetupBoard target;
     private final CheckRow usb = new CheckRow("Flight controller on USB");
     private final CheckRow compass = new CheckRow("Compass");
     private final JButton start = Theme.primaryButton("Start");
@@ -65,14 +67,14 @@ final class CompassCalibrationDialog extends JFrame {
     private final List<float[]> points = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Thread worker;
 
-    private CompassCalibrationDialog(Window owner, MainWindow main, String chosenPort) {
+    private CompassCalibrationDialog(Window owner, MainWindow main, SetupBoard board) {
         super("Compass calibration - DRAUPNE Link");
         setIconImages(AppIcon.images());
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         // opened from a setup guide (Drone setup > Calibrate compass), which blocks the app's other windows: not this one
         setModalExclusionType(java.awt.Dialog.ModalExclusionType.APPLICATION_EXCLUDE);
         this.main = main;
-        this.chosenPort = chosenPort;
+        this.target = board;
         JPanel root = new JPanel(new BorderLayout(14, 14));
         root.setBackground(Theme.BG);
         root.setBorder(BorderFactory.createEmptyBorder(18, 20, 16, 20));
@@ -134,12 +136,15 @@ final class CompassCalibrationDialog extends JFrame {
     }
 
     /**
-     * @param chosenPort the USB port Drone setup uses, or null for the first that answers as Betaflight
-     * @param onClosed   run once the window is closed (and so stops using the USB port), or null
+     * @param board    the flight controller Drone setup's first step read (SetupBoard: it alone is calibrated), or
+     *                 null: then only a board that is alone on USB
+     * @param onClosed run once the window is closed (and so stops using the USB port), or null
      */
-    static void open(Window owner, MainWindow main, String chosenPort, Runnable onClosed) {
+    static void open(Window owner, MainWindow main, SetupBoard board, Runnable onClosed) {
+        // open for another board: closed, never brought forward as if it were this one's
+        if (open != null && open.isDisplayable() && !java.util.Objects.equals(open.target, board)) open.dispose();
         if (open == null || !open.isDisplayable()) {
-            open = new CompassCalibrationDialog(owner, main, chosenPort);
+            open = new CompassCalibrationDialog(owner, main, board);
             open.setVisible(true);
         } else {
             if ((open.getExtendedState() & ICONIFIED) != 0) open.setExtendedState(open.getExtendedState() & ~ICONIFIED);
@@ -273,31 +278,13 @@ final class CompassCalibrationDialog extends JFrame {
         }
     }
 
-    /** The chosen port, or the first port that answers as Betaflight; null (and why, shown) if none. */
+    /**
+     * The flight controller Drone setup's first step read, opened - that board and no other (F-071; as the
+     * orientation check and the motor test have it); null (and why, shown) while it is not there. This window is
+     * opened from that first step: READ AGAIN is on the page behind it.
+     */
     private BetaflightUsb openBetaflight() {
-        List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
-        if (chosenPort != null) ports = ports.stream().filter(p -> p.systemName().equals(chosenPort)).toList();
-        if (ports.isEmpty()) {
-            ui(() -> usb.set(State.WARN, "Not found. Plug in a USB data cable."));
-            return null;
-        }
-        String why = null;
-        for (BetaflightUsb.Port port : ports) {
-            BetaflightUsb fc = null;
-            try {
-                fc = BetaflightUsb.open(port);
-                String firmware = fc.firmware();
-                if (firmware.startsWith("BTFL")) return fc;
-                why = port.systemName() + " runs " + DroneSetup.BetaflightPage.firmwareName(firmware) + ", not Betaflight.";
-                fc.close();
-            } catch (IOException e) {
-                why = port.systemName() + ": " + e.getMessage();
-                if (fc != null) fc.close();
-            }
-        }
-        String w = why;
-        ui(() -> usb.set(State.BAD, w));
-        return null;
+        return OrientationCheckDialog.openBetaflight(target, SetupBoard.READ_AGAIN, (state, text) -> ui(() -> usb.set(state, text)));
     }
 
     /** Over the CLI: the offsets Betaflight learnt, changed from before Start; saved if it has them in RAM only, else just exit. */

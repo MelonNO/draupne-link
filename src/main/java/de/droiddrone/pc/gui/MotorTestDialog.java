@@ -1,8 +1,8 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.gui.CheckRow.State;
-import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.MotorTest;
+import de.droiddrone.pc.setup.SetupBoard;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
@@ -65,16 +65,12 @@ final class MotorTestDialog extends JFrame {
         void logLine(String text);
     }
 
-    /**
-     * The flight controller a motor test is for: the USB port and the board's id (SetupConfirm.boardId) as Drone
-     * setup last read them - the board its page shows and its CONFIRM is for (F-060).
-     */
-    record Board(String port, String id) {
-    }
-
     private final Host main;
-    /** The board this window is for, and no other; null: opened for none, then only a board that is alone on USB. */
-    private final Board target;
+    /**
+     * The flight controller this window is for, and no other (F-060): the board Drone setup's first step read, as
+     * every USB tool of Drone setup has it (SetupBoard); null: opened for none, then only a board that is alone on USB.
+     */
+    private final SetupBoard target;
     private final Diagram diagram = new Diagram();
     private final JCheckBox understood = new JCheckBox("<html><b>Propellers removed, I understand the risk</b> - enable motors.</html>");
     private final JButton stopAll = Theme.primaryButton("Stop all  (space)");
@@ -147,7 +143,7 @@ final class MotorTestDialog extends JFrame {
      * Built, not shown: {@link #open} shows it; tests don't.
      * @param board the flight controller it is for, or null (then only a board that is alone on USB)
      */
-    MotorTestDialog(Window owner, Host main, MotorLimits limits, Board board) {
+    MotorTestDialog(Window owner, Host main, MotorLimits limits, SetupBoard board) {
         super("Motor test - DRAUPNE Link"); // a window of its own: Windows' minimise, maximise and close
         this.limits = limits;
         this.target = board;
@@ -276,7 +272,7 @@ final class MotorTestDialog extends JFrame {
      * @param onClosed run once the window is closed (and so stops using the USB port), with whether a motor was
      *                 turned in it; or null
      */
-    static void open(Window owner, MainWindow main, Board board, java.util.function.Consumer<Boolean> onClosed) {
+    static void open(Window owner, MainWindow main, SetupBoard board, java.util.function.Consumer<Boolean> onClosed) {
         // open for another board: closed, never brought forward as if it were this one's
         if (open != null && open.isDisplayable() && !java.util.Objects.equals(open.target, board)) open.dispose();
         if (open == null || !open.isDisplayable()) {
@@ -755,15 +751,13 @@ final class MotorTestDialog extends JFrame {
                             Thread.sleep(300);
                             continue;
                         }
-                        List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
-                        if (ports.isEmpty()) {
-                            ui(() -> usb.set(State.WARN, "Not found. Plug in a USB data cable."));
-                            Thread.sleep(1500);
-                            continue;
-                        }
-                        test = openBoard(ports); // the board this window is for - not the first that answers (F-060)
-                        if (test == null) {
-                            Thread.sleep(2500);
+                        try { // the board this window is for - not the first that answers (F-060)
+                            test = SetupBoard.open(target, MotorTest::open);
+                        } catch (SetupBoard.NotThere e) {
+                            String line = e.html(SetupBoard.BACK_AND_READ_AGAIN)
+                                    + (e.why() == SetupBoard.NotThere.Why.FAILED ? "<br>Trying again by itself." : "");
+                            ui(() -> usb.set(e.waiting() ? State.WARN : State.BAD, line));
+                            Thread.sleep(e.why() == SetupBoard.NotThere.Why.NOT_FOUND ? 1500 : 2500);
                             continue;
                         }
                         MotorTest.Info i = test.info();
@@ -843,64 +837,6 @@ final class MotorTestDialog extends JFrame {
         } finally {
             if (test != null) test.close(); // sends STOP first, whatever ended the loop
         }
-    }
-
-    /**
-     * The flight controller this window is for, opened; null (and why, shown) while it is not there. F-060: the
-     * first Betaflight board that answered was taken, whatever board Drone setup showed - with two on USB the props
-     * came off one and the other's motors turned. Opened for a board: its USB port only, and only the board with its
-     * id - another one found there is asked what it is and sent nothing more. Opened for none: the one Betaflight
-     * board on USB; with two there is no telling which the pilot means, and none is opened.
-     */
-    private MotorTest openBoard(List<BetaflightUsb.Port> ports) {
-        if (target != null) {
-            BetaflightUsb.Port port = null;
-            for (BetaflightUsb.Port p : ports) if (p.systemName().equals(target.port())) port = p;
-            if (port == null) {
-                ui(() -> usb.set(State.WARN, "Drone setup's board is not on <b>" + target.port() + "</b>.<br>"
-                        + "Plug it in, or <b>Back</b> and <b>Read again</b>."));
-                return null;
-            }
-            try {
-                return MotorTest.open(port, target.id());
-            } catch (IOException e) {
-                String msg = MotorTest.OTHER_BOARD.equals(e.getMessage())
-                        ? "<b>" + target.port() + "</b>: not the board Drone setup read. Nothing sent.<br>"
-                        + "Plug that one in, or <b>Back</b> and <b>Read again</b>."
-                        : target.port() + ": " + e.getMessage() + "<br>Trying again by itself.";
-                ui(() -> usb.set(State.BAD, msg));
-                return null;
-            }
-        }
-        List<BetaflightUsb.Port> boards = ports;
-        String why = null;
-        if (ports.size() > 1) { // a GPS or ESC adapter may be among them: which ones answer as Betaflight (asked, nothing written)
-            boards = new java.util.ArrayList<>();
-            for (BetaflightUsb.Port port : ports) {
-                try (BetaflightUsb fc = BetaflightUsb.open(port)) {
-                    String firmware = fc.firmware();
-                    if (firmware.startsWith("BTFL")) boards.add(port);
-                    else why = port.systemName() + ": This flight controller doesn't run Betaflight (" + firmware + ").";
-                } catch (IOException e) {
-                    why = port.systemName() + ": " + e.getMessage();
-                }
-            }
-            if (boards.size() > 1) {
-                int n = boards.size();
-                ui(() -> usb.set(State.BAD, n + " flight controllers on USB. Unplug all but one."));
-                return null;
-            }
-        }
-        for (BetaflightUsb.Port port : boards) {
-            try {
-                return MotorTest.open(port);
-            } catch (IOException e) {
-                why = port.systemName() + ": " + e.getMessage();
-            }
-        }
-        String msg = why;
-        ui(() -> usb.set(State.BAD, msg + "<br>Trying again by itself."));
-        return null;
     }
 
     private void connected(MotorTest.Info i) {

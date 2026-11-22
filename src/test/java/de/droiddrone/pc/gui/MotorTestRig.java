@@ -4,6 +4,7 @@ import de.droiddrone.bench.FakeUsb;
 import de.droiddrone.bench.hw.FakeFlightBoard;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.MotorTest;
+import de.droiddrone.pc.setup.SetupBoard;
 import de.droiddrone.testing.Waits;
 
 import javax.swing.JCheckBox;
@@ -64,7 +65,8 @@ final class MotorTestRig implements AutoCloseable {
         return board;
     }
 
-    private static byte[] uid(int id) {
+    /** MSP_UID's twelve bytes of the made-up board number {@code id}. */
+    static byte[] uid(int id) {
         return new byte[]{0x4d, 0x41, 0x44, 0x45, 0x2d, 0x55, 0x50, 0, 0, 0, 0, (byte) id};
     }
 
@@ -79,7 +81,7 @@ final class MotorTestRig implements AutoCloseable {
     }
 
     /** The same, opened for this flight controller (Drone setup's). */
-    MotorTestDialog open(MotorLimits limits, MotorTestDialog.Board board) throws Exception {
+    MotorTestDialog open(MotorLimits limits, SetupBoard board) throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             Theme.install();
             window = new MotorTestDialog(null, host, limits, board);

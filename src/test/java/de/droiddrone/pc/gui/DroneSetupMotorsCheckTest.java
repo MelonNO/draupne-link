@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.pc.setup.SetupBoard;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -28,18 +29,18 @@ class DroneSetupMotorsCheckTest {
 
     @Test
     void checkNowOpensTheMotorTestForTheBoardDroneSetupRead() throws Exception {
-        rig.board = new MotorTestDialog.Board("MADEUP7", "uid:4d4144452d55500000000007");
-        rig.open(() -> null);
+        rig.board = new SetupBoard("MADEUP7", "uid:4d4144452d55500000000007");
+        rig.open();
         rig.press("CHECK NOW");
         assertEquals(1, rig.motorTests);
-        assertEquals(new MotorTestDialog.Board("MADEUP7", "uid:4d4144452d55500000000007"), rig.motorTestFor,
+        assertEquals(new SetupBoard("MADEUP7", "uid:4d4144452d55500000000007"), rig.motorTestFor,
                 "the same port and the same board id as Drone setup's CONFIRM");
         assertEquals("PENDING: Motor test open.", rig.shows(MotorsPageRig.MOTORS));
     }
 
     @Test
     void withNoBoardReadTheMotorTestIsOpenedForNone() throws Exception {
-        rig.open(() -> null);
+        rig.open();
         rig.press("CHECK NOW");
         assertEquals(1, rig.motorTests);
         assertNull(rig.motorTestFor, "none read: the motor test then takes only a board that is alone on USB");
@@ -47,7 +48,7 @@ class DroneSetupMotorsCheckTest {
 
     @Test
     void theRowSaysCheckedOnlyAfterAMotorWasTurned() throws Exception {
-        rig.open(() -> null);
+        rig.open();
         assertEquals("INFO: Not sure? Check now.", rig.shows(MotorsPageRig.MOTORS));
         rig.press("CHECK NOW");
         motorTestClosed(false);
@@ -62,7 +63,7 @@ class DroneSetupMotorsCheckTest {
     @Test
     void aCheckMadeBeforeStandsWhenTheWindowIsClosedWithNoMotorTurned() throws Exception {
         rig.saved.put(CHECKED, "true");
-        rig.open(() -> null);
+        rig.open();
         assertEquals("OK: Checked.", rig.shows(MotorsPageRig.MOTORS));
         rig.press("CHECK NOW");
         motorTestClosed(false);
@@ -71,7 +72,7 @@ class DroneSetupMotorsCheckTest {
 
     @Test
     void alreadyCheckedIsThePilotsOwnWord() throws Exception {
-        rig.open(() -> null);
+        rig.open();
         rig.press("ALREADY CHECKED");
         assertEquals("OK: Checked.", rig.shows(MotorsPageRig.MOTORS));
         assertEquals("true", rig.saved.get(CHECKED));

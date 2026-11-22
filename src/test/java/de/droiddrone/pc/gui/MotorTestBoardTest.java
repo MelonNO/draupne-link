@@ -1,6 +1,7 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.bench.hw.FakeFlightBoard;
+import de.droiddrone.pc.setup.SetupBoard;
 import de.droiddrone.testing.Waits;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -42,7 +43,7 @@ class MotorTestBoardTest {
     @Test
     void withTwoBoardsOnUsbOnlyTheOneDroneSetupReadIsOpenedAndTurned() throws Exception {
         FakeFlightBoard a = rig.plug("MADEUP1", 1), b = rig.plug("MADEUP2", 2); // A comes first in the port list
-        rig.open(limits(), new MotorTestDialog.Board("MADEUP2", MotorTestRig.id(2)));
+        rig.open(limits(), new SetupBoard("MADEUP2", MotorTestRig.id(2)));
         rig.connectAndTick();
         raiseMotor1();
         Waits.await(() -> b.motors()[0] == RAISED, 5000, "board B's motor 1 to turn");
@@ -55,7 +56,7 @@ class MotorTestBoardTest {
     @Test
     void anotherBoardOnDroneSetupsPortIsRefusedAndItsMotorsAreSentNothing() throws Exception {
         FakeFlightBoard swapped = rig.plug("MADEUP1", 2);
-        rig.open(limits(), new MotorTestDialog.Board("MADEUP1", MotorTestRig.id(1)));
+        rig.open(limits(), new SetupBoard("MADEUP1", MotorTestRig.id(1)));
         Waits.await(() -> swapped.opens >= 2, 15_000, "the motor test to look at the port again by itself");
         assertTrue(WHAT_IT_IS.containsAll(swapped.mspRequests()),
                 "the other board is asked what it is and nothing else - no motor value, not even STOP: " + swapped.mspRequests());
@@ -67,7 +68,7 @@ class MotorTestBoardTest {
     @Test
     void whileDroneSetupsBoardIsNotPluggedInNoOtherBoardIsOpened() throws Exception {
         FakeFlightBoard other = rig.plug("MADEUP1", 1);
-        rig.open(limits(), new MotorTestDialog.Board("MADEUP2", MotorTestRig.id(2)));
+        rig.open(limits(), new SetupBoard("MADEUP2", MotorTestRig.id(2)));
         Waits.waitFor(() -> rig.usbRow().equals("WARN: Drone setup's board is not on MADEUP2. Plug it in, or Back and Read again."),
                 10_000, "the window to say Drone setup's board is not there");
         assertEquals(0, other.opens, "the board that is there is not opened");
@@ -98,7 +99,7 @@ class MotorTestBoardTest {
     @Test
     void closedWithNoMotorTurnedItSaysSo() throws Exception {
         FakeFlightBoard board = rig.plug("MADEUP1", 1);
-        rig.open(limits(), new MotorTestDialog.Board("MADEUP1", MotorTestRig.id(1)));
+        rig.open(limits(), new SetupBoard("MADEUP1", MotorTestRig.id(1)));
         List<Boolean> turned = new CopyOnWriteArrayList<>();
         MotorTestRig.onSwing(() -> rig.window.whenClosed(turned::add));
         rig.connectAndTick(); // the box ticked, no slider moved
@@ -111,7 +112,7 @@ class MotorTestBoardTest {
     @Test
     void closedAfterAMotorTurnedItSaysSo() throws Exception {
         FakeFlightBoard board = rig.plug("MADEUP1", 1);
-        rig.open(limits(), new MotorTestDialog.Board("MADEUP1", MotorTestRig.id(1)));
+        rig.open(limits(), new SetupBoard("MADEUP1", MotorTestRig.id(1)));
         List<Boolean> turned = new CopyOnWriteArrayList<>();
         MotorTestRig.onSwing(() -> rig.window.whenClosed(turned::add));
         rig.connectAndTick();

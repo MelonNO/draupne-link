@@ -11,6 +11,7 @@ import de.droiddrone.pc.setup.CliWrite;
 import de.droiddrone.pc.setup.GpsSearch;
 import de.droiddrone.pc.setup.GpsSetup;
 import de.droiddrone.pc.setup.ModeSwitch;
+import de.droiddrone.pc.setup.SetupBoard;
 import de.droiddrone.pc.setup.SetupConfirm;
 import de.droiddrone.pc.setup.SetupPlanner;
 import de.droiddrone.pc.setup.SetupPlanner.Gps;
@@ -52,7 +53,7 @@ final class DroneSetup {
      */
     static List<Page> pages(MainWindow main) {
         BetaflightPage betaflight = new BetaflightPage(main);
-        return List.of(betaflight, new MotorsPage(host(main), () -> betaflight.chosenPort, betaflight::board));
+        return List.of(betaflight, new MotorsPage(host(main), betaflight::board));
     }
 
     /** The main window as the Motors and orientation step's host. */
@@ -74,13 +75,13 @@ final class DroneSetup {
             }
 
             @Override
-            public void motorTest(java.awt.Window owner, MotorTestDialog.Board board, java.util.function.Consumer<Boolean> onClosed) {
+            public void motorTest(java.awt.Window owner, SetupBoard board, java.util.function.Consumer<Boolean> onClosed) {
                 MotorTestDialog.open(owner, main, board, onClosed);
             }
 
             @Override
-            public void orientationCheck(java.awt.Window owner, String port, Runnable onPassed, Runnable onClosed) {
-                OrientationCheckDialog.open(owner, main, port, onPassed, onClosed);
+            public void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, Runnable onClosed) {
+                OrientationCheckDialog.open(owner, main, board, onPassed, onClosed);
             }
         };
     }
@@ -208,17 +209,30 @@ final class DroneSetup {
         static final String CONFIRMED_KEY = "drone.confirmed";
         /** CONFIRM, and the confirmed state, of one board (SetupConfirm): a drone plugged in afterwards needs its own. */
         private final SetupConfirm confirm = new SetupConfirm();
-        /** The board the last round read (SetupConfirm.boardId), what CONFIRM is pressed for; null = none read. */
-        private String lastBoardId;
+        /**
+         * The board the last round read (SetupConfirm.boardId), what CONFIRM is pressed for; null = none read. Set on
+         * the Swing thread, read by the second step's live thread too ({@link #board()}).
+         */
+        private volatile String lastBoardId;
 
         /**
-         * The flight controller this page shows - the USB port and the id of the board the last round read, what
-         * CONFIRM is for - for the motor test, which then turns that one's motors and no other's (F-060). Null when
-         * none was read or its id is not known. Swing thread.
+         * The flight controller this page shows, for every tool that works on it over USB (F-060 the motor test;
+         * F-071 the orientation check, the compass calibration, the live view behind CALIBRATE, FIND GPS, the ESC
+         * row): each opens that board and no other (SetupBoard.open).
          */
-        MotorTestDialog.Board board() {
-            String port = lastFcPort, id = lastBoardId;
-            return port == null || id == null ? null : new MotorTestDialog.Board(port, id);
+        SetupBoard board() {
+            return board(chosenPort, lastFcPort, lastBoardId);
+        }
+
+        /**
+         * The rule: the USB port and the id of the board the last round read - what CONFIRM is for. The id is null
+         * when the board does not say it: then the port alone. A port the pilot has chosen and nothing was read on
+         * yet: that port alone, never the board read on another. Null: nothing read and the port on Automatic - a
+         * tool then takes only a board that is alone on USB.
+         */
+        static SetupBoard board(String chosenPort, String lastFcPort, String lastBoardId) {
+            if (chosenPort != null && !chosenPort.equals(lastFcPort)) return new SetupBoard(chosenPort, null);
+            return lastFcPort == null ? null : new SetupBoard(lastFcPort, lastBoardId);
         }
         private final Part receiver = settings.part("Receiver");
         private final Part stickDelay = settings.part("Stick delay");
@@ -942,7 +956,7 @@ final class DroneSetup {
             }
             compassCalOpen = true;
             compassPart.set(State.PENDING, "Compass calibration open.");
-            CompassCalibrationDialog.open(javax.swing.SwingUtilities.getWindowAncestor(usb), main, chosenPort, () -> {
+            CompassCalibrationDialog.open(javax.swing.SwingUtilities.getWindowAncestor(usb), main, board(), () -> {
                 compassCalOpen = false;
                 nextTry = System.currentTimeMillis() + 1500; // the calibration lets go of the port first
                 done = false;
@@ -1901,17 +1915,17 @@ final class DroneSetup {
             escWanted = 0;
             escBusy = true;
             busy = true;
-            String port = lastFcPort;
+            SetupBoard target = board(); // the board on the page now: its ESCs, no other board's
             java.nio.file.Path keep = de.droiddrone.pc.AppPaths.dataDir().resolve("esc-backup");
-            background(() -> de.droiddrone.pc.setup.EscCheck.run(() -> openPort(port), silence, keep, main::logLine), this::escsDone);
+            background(() -> de.droiddrone.pc.setup.EscCheck.run(() -> escBoard(target), silence, keep, main::logLine), this::escsDone);
         }
 
-        /** The flight controller's USB port as the last round read it (any, when not known). */
-        private static BetaflightUsb openPort(String port) throws IOException {
-            for (BetaflightUsb.Port p : BetaflightUsb.findFlightControllers()) {
-                if (port == null || p.systemName().equals(port)) return BetaflightUsb.open(p);
-            }
-            throw new IOException("The flight controller isn't there" + (port == null ? "" : " (" + port + ")") + ".");
+        /**
+         * The flight controller whose ESCs are read or written: the board the last round read, and no other (F-071:
+         * its port was opened whatever board was on it - any port, when none was known). Why not, as the row says it.
+         */
+        static BetaflightUsb escBoard(SetupBoard target) throws IOException {
+            return SetupBoard.open(target);
         }
 
         private void escsDone(de.droiddrone.pc.setup.EscCheck.Result r) {
@@ -1952,28 +1966,21 @@ final class DroneSetup {
             searching = true;
             busy = true;
             searchSaid = null;
-            String port = lastFcPort;
-            GpsSearch search = new GpsSearch(() -> openBetaflight(port), (diff, version) -> backup(diff, version),
+            SetupBoard target = board(); // the board on the page now: after each restart that one again, no other
+            GpsSearch search = new GpsSearch(() -> gpsBoard(target), (diff, version) -> backup(diff, version),
                     line -> javax.swing.SwingUtilities.invokeLater(() -> {
                         if (searching) gps.set(State.PENDING, line);
                     }), main::logLine, () -> abandoned);
             background(search::run, this::searchDone);
         }
 
-        /** Betaflight on that USB port (any, when not known), for the search: opened again after each restart. */
-        private static GpsSearch.Board openBetaflight(String port) throws IOException {
-            for (BetaflightUsb.Port p : BetaflightUsb.findFlightControllers()) {
-                if (port != null && !p.systemName().equals(port)) continue;
-                BetaflightUsb fc = BetaflightUsb.open(p);
-                try {
-                    if (fc.firmware().startsWith("BTFL")) return GpsSearch.of(fc);
-                } catch (IOException e) {
-                    fc.close();
-                    throw e;
-                }
-                fc.close();
-            }
-            throw new IOException("the flight controller isn't there" + (port == null ? "" : " (" + port + ")"));
+        /**
+         * The flight controller the search writes its tries to, opened again after each restart: the board the last
+         * round read, and no other (F-071: its port was opened whatever Betaflight board was on it - any port, when
+         * none was known).
+         */
+        static GpsSearch.Board gpsBoard(SetupBoard target) throws IOException {
+            return GpsSearch.of(SetupBoard.open(target));
         }
 
         private void searchDone(GpsSearch.Result r) {
@@ -2165,15 +2172,18 @@ final class DroneSetup {
              * Opens the motor test for this flight controller (null: none was read - then only a board that is
              * alone on USB); onClosed once its window is closed, with whether a motor was turned in it.
              */
-            void motorTest(java.awt.Window owner, MotorTestDialog.Board board, java.util.function.Consumer<Boolean> onClosed);
+            void motorTest(java.awt.Window owner, SetupBoard board, java.util.function.Consumer<Boolean> onClosed);
 
-            /** Opens the guided orientation check on this USB port (null: the first that answers as Betaflight). */
-            void orientationCheck(java.awt.Window owner, String port, Runnable onPassed, Runnable onClosed);
+            /** Opens the guided orientation check for this flight controller (null: as for the motor test). */
+            void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, Runnable onClosed);
         }
 
         private final Host main;
-        private final java.util.function.Supplier<String> port;
-        private final java.util.function.Supplier<MotorTestDialog.Board> board;
+        /**
+         * The flight controller Drone setup's first step read: what the motor test, the orientation check and this
+         * step's own live view (and so CALIBRATE) work on, and no other board (F-060, F-071).
+         */
+        private final java.util.function.Supplier<SetupBoard> board;
         private final CheckRow level = new CheckRow("Accelerometer");
         private final CheckRow motors = new CheckRow("Motors and props");
         private final CheckRow orientation = new CheckRow("Orientation");
@@ -2202,13 +2212,9 @@ final class DroneSetup {
         private volatile boolean shown;
         private Thread live;
 
-        /**
-         * @param port  Drone setup's port choice (null: automatic), for the live view and the orientation check
-         * @param board the flight controller Drone setup's first step last read - the one the motor test is for
-         */
-        MotorsPage(Host main, java.util.function.Supplier<String> port, java.util.function.Supplier<MotorTestDialog.Board> board) {
+        /** @param board the flight controller Drone setup's first step last read (BetaflightPage.board); asked from the live thread too */
+        MotorsPage(Host main, java.util.function.Supplier<SetupBoard> board) {
             this.main = main;
-            this.port = port;
             this.board = board;
         }
 
@@ -2298,8 +2304,9 @@ final class DroneSetup {
                         }
                         if (fc == null) {
                             levelNotDone(); // asked of a board that is gone: never done on the one that opens next
-                            fc = OrientationCheckDialog.openBetaflight(port.get(), (s, text) -> javax.swing.SwingUtilities.invokeLater(() -> {
-                                reading.setText(text.replaceAll("<[^>]+>", ""));
+                            // the board the first step read, no other (F-071): what the model follows is what CALIBRATE levels
+                            fc = OrientationCheckDialog.openBetaflight(board.get(), SetupBoard.BACK_AND_READ_AGAIN, (s, text) -> javax.swing.SwingUtilities.invokeLater(() -> {
+                                reading.setText(text.replace("<br>", " ").replaceAll("<[^>]+>", ""));
                                 model.clear();
                             }));
                             if (fc == null) {
@@ -2427,7 +2434,7 @@ final class DroneSetup {
             }
             orientation.set(State.PENDING, "Check open.");
             boolean[] passed = {false};
-            main.orientationCheck(javax.swing.SwingUtilities.getWindowAncestor(orientation), port.get(), () -> {
+            main.orientationCheck(javax.swing.SwingUtilities.getWindowAncestor(orientation), board.get(), () -> {
                 passed[0] = true;
                 orientation.set(State.OK, "Checked: correct.");
             }, () -> {

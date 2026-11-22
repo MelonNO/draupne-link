@@ -4,6 +4,7 @@ import de.droiddrone.pc.gui.CheckRow.State;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.GpsSetup;
 import de.droiddrone.pc.setup.Orientation;
+import de.droiddrone.pc.setup.SetupBoard;
 
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
@@ -47,7 +48,8 @@ final class OrientationCheckDialog extends JFrame {
     private enum Step { FLAT, NOSE_UP, FLAT_AGAIN, RIGHT_DOWN, NORTH, EAST, SOUTH, WEST, DONE }
 
     private final MainWindow main;
-    private final String chosenPort;
+    /** The flight controller this check reads and writes, and no other (F-071): the board Drone setup's first step read. */
+    private final SetupBoard setupBoard;
     private final Runnable onPassed;
     private final CheckRow usb = new CheckRow("Flight controller on USB");
     private final CheckRow flat = new CheckRow("Flat");
@@ -81,13 +83,13 @@ final class OrientationCheckDialog extends JFrame {
     /** What APPLY wrote in this window ("yaw 0° -> 90°"), for the verdict after the restart; null none. */
     private volatile String applied;
 
-    private OrientationCheckDialog(Window owner, MainWindow main, String chosenPort, Runnable onPassed) {
+    private OrientationCheckDialog(Window owner, MainWindow main, SetupBoard board, Runnable onPassed) {
         super("Orientation check - DRAUPNE Link");
         setIconImages(AppIcon.images());
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         setModalExclusionType(java.awt.Dialog.ModalExclusionType.APPLICATION_EXCLUDE); // beside Drone setup's guide
         this.main = main;
-        this.chosenPort = chosenPort;
+        this.setupBoard = board;
         this.onPassed = onPassed;
         this.compassWanted = Boolean.TRUE.equals(GpsSetup.parseYesNo(main.config().getString(GpsSetup.GPS_KEY)))
                 && Boolean.TRUE.equals(GpsSetup.parseYesNo(main.config().getString(GpsSetup.COMPASS_KEY)));
@@ -161,13 +163,16 @@ final class OrientationCheckDialog extends JFrame {
     }
 
     /**
-     * @param chosenPort the USB port Drone setup uses, or null for the first that answers as Betaflight
-     * @param onPassed   run (Swing thread) when Betaflight saw every move the right way, or null
-     * @param onClosed   run once the window is closed (and so stops using the USB port), or null
+     * @param board    the flight controller Drone setup's first step read (SetupBoard: it alone is read and written),
+     *                 or null: then only a board that is alone on USB
+     * @param onPassed run (Swing thread) when Betaflight saw every move the right way, or null
+     * @param onClosed run once the window is closed (and so stops using the USB port), or null
      */
-    static void open(Window owner, MainWindow main, String chosenPort, Runnable onPassed, Runnable onClosed) {
+    static void open(Window owner, MainWindow main, SetupBoard board, Runnable onPassed, Runnable onClosed) {
+        // open for another board: closed, never brought forward as if it were this one's
+        if (open != null && open.isDisplayable() && !java.util.Objects.equals(open.setupBoard, board)) open.dispose();
         if (open == null || !open.isDisplayable()) {
-            open = new OrientationCheckDialog(owner, main, chosenPort, onPassed);
+            open = new OrientationCheckDialog(owner, main, board, onPassed);
             open.setVisible(true);
         } else {
             if ((open.getExtendedState() & ICONIFIED) != 0) open.setExtendedState(open.getExtendedState() & ~ICONIFIED);
@@ -284,7 +289,7 @@ final class OrientationCheckDialog extends JFrame {
                             Thread.sleep(200);
                             continue;
                         }
-                        fc = openBetaflight(chosenPort, (state, text) -> ui(() -> usb.set(state, text)));
+                        fc = openBetaflight(setupBoard, SetupBoard.BACK_AND_READ_AGAIN, (state, text) -> ui(() -> usb.set(state, text)));
                         if (fc == null) {
                             retryAt = now + 1500;
                             continue;
@@ -682,31 +687,19 @@ final class OrientationCheckDialog extends JFrame {
     }
 
     /**
-     * The chosen port, or the first port that answers as Betaflight; null if none, and why (to the state consumer).
-     * Shared with the Motors and orientation step's live view.
+     * The flight controller Drone setup's first step read, opened - that board and no other (SetupBoard.open, as the
+     * motor test has it; F-071: on Automatic it was the first port that answered as Betaflight, whatever board the
+     * page showed); null if it is not there, and why (to the state consumer). Shared with the Motors and
+     * orientation step's live view and with the compass calibration.
+     * @param readAgain how the pilot has another board read in from where the line is shown
+     *                  (SetupBoard.READ_AGAIN or BACK_AND_READ_AGAIN)
      */
-    static BetaflightUsb openBetaflight(String chosenPort, BiConsumer<State, String> problem) {
-        List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
-        if (chosenPort != null) ports = ports.stream().filter(p -> p.systemName().equals(chosenPort)).toList();
-        if (ports.isEmpty()) {
-            problem.accept(State.WARN, "Not found. Plug in a USB data cable.");
+    static BetaflightUsb openBetaflight(SetupBoard target, String readAgain, BiConsumer<State, String> problem) {
+        try {
+            return SetupBoard.open(target);
+        } catch (SetupBoard.NotThere e) {
+            problem.accept(e.waiting() ? State.WARN : State.BAD, e.html(readAgain));
             return null;
         }
-        String why = null;
-        for (BetaflightUsb.Port port : ports) {
-            BetaflightUsb fc = null;
-            try {
-                fc = BetaflightUsb.open(port);
-                String firmware = fc.firmware();
-                if (firmware.startsWith("BTFL")) return fc;
-                why = port.systemName() + " runs " + DroneSetup.BetaflightPage.firmwareName(firmware) + ", not Betaflight.";
-                fc.close();
-            } catch (IOException e) {
-                why = port.systemName() + ": " + e.getMessage();
-                if (fc != null) fc.close();
-            }
-        }
-        problem.accept(State.BAD, why);
-        return null;
     }
 }
