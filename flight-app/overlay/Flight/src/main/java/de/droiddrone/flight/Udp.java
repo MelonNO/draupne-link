@@ -93,6 +93,7 @@ import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.KnownPcs;
 import de.droiddrone.common.LinkSocket;
 import de.droiddrone.common.Log;
+import de.droiddrone.common.MavlinkRaw;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.Observe;
@@ -2103,6 +2104,13 @@ public class Udp {
             }
             case UdpCommon.MavlinkRawPacket:
             {
+                // to the flight controller only where the phone is set up to carry MAVLink for it (MavlinkRaw): a MAVLink
+                // flight controller and the phone's own bridge "from the control device". DRAUPNE Link never sends it
+                if (!MavlinkRaw.mayWrite(mavlink.isInitialized(), config.getMavlinkUdpBridge())) {
+                    if (!mavlinkRawRefusedSaid) log("A raw MAVLink packet from the PC: not written to the FC (not a MAVLink FC, or the phone's bridge is not set for it)");
+                    mavlinkRawRefusedSaid = true;
+                    break;
+                }
                 int dataSize = buffer.getRemaining();
                 byte[] buf = new byte[dataSize];
                 int read = buffer.read(buf, 0, dataSize);
@@ -2113,6 +2121,9 @@ public class Udp {
             }
         }
     }
+
+    /** A raw MAVLink packet was dropped (MavlinkRaw): said once (the buffer thread's own). */
+    private boolean mavlinkRawRefusedSaid;
 
     public void sendMavlinkPacket(byte[] buf) {
         if (socket == null || socket.isClosed() || buf == null) return;
