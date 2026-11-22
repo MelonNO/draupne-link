@@ -2467,16 +2467,27 @@ public class MainWindow extends JFrame {
         if (c != null && !c.getLink().isSpectator()) {
             // 1.0.64: the button stays a while after the link is back (it popped in and out in weak coverage) - one
             // click then ended a link that flies. Up again: asked first, "keep flying" the default
+            // Q-002: and with the link down, asked once when the drone was armed (or not read) as the link went - it
+            // may be on its way home, and ending the link ends the tries to get it back. "Keep trying" the default
             ControlLink l = c.getLink();
-            FcTelemetry.Status st = l.getTelemetry().getStatus();
-            long age = st == null ? -1 : MonoClock.ms() - st.receivedAt();
-            if (linkBack(l.getState(), l.isLinkStalled(), l.isFcLost(), age) || linkUpUnread(l.getState(), l.isLinkStalled(), l.isFcLost(), age)) {
-                String[] options = {"Keep flying", "End link - lost"};
-                int choice = Dialogs.option(this, "Link is back. End it and mark the drone lost?", "Lost drone",
+            LostDroneAsk ask = LostDroneAsk.of(l.getState(), l.isLinkStalled(), l.isFcLost(), l.getTelemetry().getStatus(), MonoClock.ms());
+            if (ask != LostDroneAsk.NOTHING) {
+                String[] options = {ask.keep(), "End link - lost"};
+                int choice = Dialogs.option(this, ask.question(), ask.title(),
                         JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
                 if (choice != 1) {
-                    logLine("LOST DRONE: link is back - kept.");
+                    logLine(ask == LostDroneAsk.LINK_BACK ? "LOST DRONE: link is back - kept." : "LOST DRONE: not ended - still trying.");
                     return;
+                }
+                if (ask != LostDroneAsk.LINK_BACK) {
+                    // the question may have stood a while: answered for a link that was down - not for one that has
+                    // come back meanwhile, nor for another (the map window stays open to the pilot beside it)
+                    if (connection != c) return;
+                    if (LostDroneAsk.of(l.getState(), l.isLinkStalled(), l.isFcLost(), l.getTelemetry().getStatus(), MonoClock.ms()) == LostDroneAsk.LINK_BACK) {
+                        logLine("LOST DRONE: link is back - kept.");
+                        return;
+                    }
+                    logLine("LOST DRONE " + ask.confirmedIn() + ": confirmed.");
                 }
             }
         }
@@ -2673,7 +2684,7 @@ public class MainWindow extends JFrame {
         boolean inWindow = !link.isSpectator() && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS && track != null && !track.isEmpty();
         // 1.0.64: only once it has lasted, and then it stays through a link that flickers back (LostDroneShow)
         boolean show = lostDroneShow.update(dropped, inWindow, now);
-        if (show && !shown(lostDroneButton)) logLine("Link lost while armed: LOST DRONE shows the last position.");
+        if (show && !shown(lostDroneButton)) logLine(LostDroneAsk.atLoss(st).offered()); // Q-002: says that the button ends the link
         if (shown(lostDroneButton) != show) {
             show(lostDroneButton, show);
             if (!show) lostDroneButton.setText("Lost drone");
@@ -2740,6 +2751,67 @@ public class MainWindow extends JFrame {
      */
     static boolean linkUpUnread(ControlLink.State state, boolean stalled, boolean fcLost, long statusAgeMs) {
         return state == ControlLink.State.READY && !stalled && !fcLost && !(statusAgeMs >= 0 && statusAgeMs < 2000);
+    }
+
+    /**
+     * Q-002 (the maintainer, 2026-11-22: "Ask once, only when the drone was armed at the loss"): what LOST DRONE asks
+     * before it ends the link. With the link down it was one click - no more reconnecting, OUT OF ACTION, its phone
+     * told to sleep - also for a drone that was armed as the link went and may be coming home on its GPS rescue: not
+     * to be taken back until PILOT UAV was pressed again. One question at most, "keep" the default; with the flight
+     * controller's last word DISARMED, none, as ever. Pure: the window hands in what its link says.
+     */
+    enum LostDroneAsk {
+        /** The link is down and the flight controller's last word was DISARMED: ended at the one click. */
+        NOTHING,
+        /** The link is up again (1.0.64; F-062: also before its first status). */
+        LINK_BACK,
+        /** The link is down and the flight controller's last word was ARMED. */
+        ARMED_AT_LOSS,
+        /** The link is down and whether the drone was armed was not read (F-062: not known counts as armed). */
+        NOT_KNOWN_AT_LOSS;
+
+        /** @param last the flight controller's last status on this link, or null */
+        static LostDroneAsk of(ControlLink.State state, boolean stalled, boolean fcLost, FcTelemetry.Status last, long now) {
+            long age = last == null ? -1 : now - last.receivedAt();
+            return linkBack(state, stalled, fcLost, age) || linkUpUnread(state, stalled, fcLost, age) ? LINK_BACK : atLoss(last);
+        }
+
+        /** What the flight controller last said before the link went: its last status, however old. */
+        static LostDroneAsk atLoss(FcTelemetry.Status last) {
+            if (last != null && last.armed()) return ARMED_AT_LOSS;
+            return last != null && last.armedKnown() ? NOTHING : NOT_KNOWN_AT_LOSS;
+        }
+
+        String title() {
+            return this == ARMED_AT_LOSS ? "Lost drone while armed?" : this == NOT_KNOWN_AT_LOSS ? "Lost drone - armed?" : "Lost drone";
+        }
+
+        /** The question; null when nothing is asked. */
+        String question() {
+            String ends = "\nLost drone ends the link: no more reconnecting, and it is marked OUT OF ACTION.";
+            return switch (this) {
+                case NOTHING -> null;
+                case LINK_BACK -> "Link is back. End it and mark the drone lost?";
+                case ARMED_AT_LOSS -> "The drone was armed when the link was lost: it may still be flying." + ends;
+                case NOT_KNOWN_AT_LOSS -> "Not known if the drone was armed when the link was lost." + ends;
+            };
+        }
+
+        /** The default answer's button. */
+        String keep() {
+            return this == LINK_BACK ? "Keep flying" : "Keep trying";
+        }
+
+        /** For the log, after "LOST DRONE": what the pilot confirmed it in. */
+        String confirmedIn() {
+            return this == ARMED_AT_LOSS ? "while armed" : "with the armed state not known";
+        }
+
+        /** The log's line when the button comes up, by what the flight controller last said: plain that it ends the link. */
+        String offered() {
+            String button = " LOST DRONE ends the link and shows the last position.";
+            return (this == ARMED_AT_LOSS ? "Link lost while armed." : this == NOT_KNOWN_AT_LOSS ? "Link lost, armed not known." : "Link lost.") + button;
+        }
     }
 
     /**
