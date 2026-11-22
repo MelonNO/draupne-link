@@ -50,6 +50,11 @@ public final class FakeEscBoard implements BetaflightUsb.Wire {
     private Esc connected;
     /** The next answer goes out with a wrong checksum (noise on the line), once. */
     public boolean noiseOnce;
+    /**
+     * The pack voltage MSP_BATTERY_STATE answers, one reading after the other, the last one kept (16.0, then 0.3: the
+     * battery pulled during the read). Empty: not answered, as a Betaflight that does not say.
+     */
+    public final List<Double> volts = new ArrayList<>();
 
     /** An EFM8BB2 ESC (settings at 0x1A00) with BLHeli_S-kind settings. name "" = BLHeli_S itself. */
     public Esc silabs(String name, int main, int sub, String layout, int beacon, int direction) {
@@ -173,6 +178,14 @@ public final class FakeEscBoard implements BetaflightUsb.Wire {
                 payload[6] = (byte) (armed ? 1 : 0);
             } else if (cmd == 2) {
                 payload = new byte[]{'B', 'T', 'F', 'L'};
+            } else if (cmd == 130 && !volts.isEmpty()) { // MSP_BATTERY_STATE: cells, capacity, 0.1 V, mAh, A, state, 0.01 V
+                double v = volts.size() > 1 ? volts.remove(0) : volts.get(0);
+                int cV = (int) Math.round(v * 100);
+                payload = new byte[11];
+                payload[0] = (byte) (v >= 3 ? 4 : 0);
+                payload[3] = (byte) Math.min(255, Math.round(v * 10));
+                payload[9] = (byte) cV;
+                payload[10] = (byte) (cV >> 8);
             } else if (cmd == EscLink.MSP_SET_PASSTHROUGH) {
                 payload = new byte[]{(byte) escs.size()};
                 passthrough = true;

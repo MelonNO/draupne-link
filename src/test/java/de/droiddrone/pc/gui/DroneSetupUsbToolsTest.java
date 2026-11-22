@@ -189,6 +189,38 @@ class DroneSetupUsbToolsTest {
         assertEquals(0, written(a));
     }
 
+    /**
+     * F-080: ESC 1 of the board read does not answer with the battery in - motor 1 may not turn until the battery is
+     * unplugged. The row is red, and Drone setup is not ready for that board (its status line says why instead of
+     * "Betaflight set up") until a read in which all answer; another board is not held by it.
+     */
+    @Test
+    void anEscThatDidNotAnswerHoldsDroneSetupNotReadyForThatBoardUntilAllAnswer() {
+        FakeFlightBoard a = plug("MADEUP1", 1);
+        a.escs().get(0).refuseConnects = 1000; // never reached
+        SetupBoard target = read("MADEUP1", 1);
+        EscCheck.Result r = EscCheck.run(() -> DroneSetup.BetaflightPage.escBoard(target), false, dir, log::add);
+        assertEquals("BAD", r.state(), r.text());
+        assertEquals(MotorTestRig.id(1), r.board(), "the board that was read");
+        String line = "ESC 1 did not answer - it may not turn now. Unplug the battery, plug it in, Read ESCs again.";
+        assertTrue(log.contains(line), log.toString());
+
+        EscCheck.Hold hold = new EscCheck.Hold();
+        assertTrue(hold.after(r.board(), r));
+        assertEquals(line, DroneSetup.BetaflightPage.escStatus(hold.on(MotorTestRig.id(1))), "not ready: said in the step's status line");
+        assertNull(DroneSetup.BetaflightPage.escStatus(hold.on(MotorTestRig.id(2))), "another board is not held");
+        assertArrayEquals(new String[]{"BAD", "ESC 1 did not answer - it may not turn now. Unplug the battery, plug it in, <b>Read ESCs</b> again."},
+                DroneSetup.BetaflightPage.escIdle(hold.on(MotorTestRig.id(1))), "the row as Drone setup opens again on that board");
+        assertArrayEquals(new String[]{"INFO", "Battery in, props off: <b>Read ESCs</b>."}, DroneSetup.BetaflightPage.escIdle(hold.on(MotorTestRig.id(2))));
+
+        // the battery out and in again: all answer, ready again
+        a.escs().get(0).refuseConnects = 0;
+        EscCheck.Result good = EscCheck.run(() -> DroneSetup.BetaflightPage.escBoard(target), false, dir, log::add);
+        assertEquals(List.of(), good.silent(), good.text());
+        assertTrue(hold.after(good.board(), good));
+        assertNull(DroneSetup.BetaflightPage.escStatus(hold.on(MotorTestRig.id(1))));
+    }
+
     // ------------------------------------------------------------------ FIND GPS
 
     private GpsSearch.Result findGps(SetupBoard target) {

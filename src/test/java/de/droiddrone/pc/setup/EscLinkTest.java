@@ -173,10 +173,12 @@ class EscLinkTest {
         try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
             List<EscFirmware.Info> all = escs.infoAll();
             assertEquals("Bluejay 0.19", all.get(0).firmware());
-            assertEquals("no answer (battery on?)", all.get(2).problem());
+            assertEquals("no answer", all.get(2).problem(), "why is for EscCheck to say, from the battery");
+            assertTrue(all.get(2).silent());
             assertFalse(all.get(2).canSilence());
+            assertFalse(all.get(0).silent());
             assertEquals("Bluejay 0.19", all.get(3).firmware());
-            assertTrue(EscFirmware.summary(all).contains("3: no answer (battery on?)"), EscFirmware.summary(all));
+            assertTrue(EscFirmware.summary(all).contains("3: no answer;"), EscFirmware.summary(all));
         }
     }
 
@@ -287,10 +289,12 @@ class EscLinkTest {
     void theRowSaysWhenNothingAnswersOrTheDroneIsArmedOrAWriteFailed() {
         FakeEscBoard dead = bluejayQuad();
         for (FakeEscBoard.Esc e : dead.escs) e.answers = false;
+        dead.volts.addAll(List.of(16.0, 0.3)); // the battery in, then out during the read: they had no power
         EscCheck.Result none = EscCheck.run(() -> BetaflightUsb.onWire(dead), false, dir, log::add);
         assertEquals("WARN", none.state());
         assertEquals("No ESC answered. <b>Battery in</b>, props off, then <b>Read ESCs</b>.", none.text());
         assertFalse(none.canSilence());
+        assertFalse(none.holds());
 
         FakeEscBoard armed = bluejayQuad();
         armed.armed = true;
@@ -322,6 +326,161 @@ class EscLinkTest {
             assertEquals("The drone is armed. Disarm it first.", said.getMessage());
             assertFalse(board.inPassthrough());
             assertFalse(board.said.contains("MSP 245"));
+        }
+    }
+
+    // ------------------------------------------------------------------ F-080: an ESC that did not answer
+
+    private static final String ESC1_RED = "ESC 1 did not answer - it may not turn now. Unplug the battery, plug it in, <b>Read ESCs</b> again.";
+
+    /** The test drone of F-080: four AM32 2.17, the battery in as Betaflight reads it. */
+    private static FakeEscBoard am32Quad() {
+        FakeEscBoard board = new FakeEscBoard();
+        for (int i = 0; i < 4; i++) board.am32(2, 17);
+        board.volts.add(16.0);
+        return board;
+    }
+
+    private EscCheck.Result read(FakeEscBoard board, boolean silence) {
+        board.plugInAgain();
+        return EscCheck.run(() -> BetaflightUsb.onWire(board), silence, dir, log::add);
+    }
+
+    @Test
+    void anEscThatDoesNotAnswerWithTheBatteryInIsRedAndSaysUnplugTheBattery() {
+        FakeEscBoard board = am32Quad();
+        board.escs.get(0).answers = false;
+        EscCheck.Result r = read(board, false);
+        assertEquals("BAD", r.state(), r.text());
+        assertTrue(r.holds());
+        assertEquals(List.of(1), r.silent());
+        assertEquals("1: no answer; 2: AM32 2.17 - no beacon timer; 3: AM32 2.17 - no beacon timer; 4: AM32 2.17 - no beacon timer.<br>"
+                + ESC1_RED, r.text());
+        assertFalse(r.text().contains("battery on?"), "the battery is in: not the reason");
+        assertTrue(log.contains("ESC 1 did not answer - it may not turn now. Unplug the battery, plug it in, Read ESCs again."), log.toString());
+        assertFalse(board.inPassthrough(), "the port is given back");
+
+        // several
+        board.escs.get(2).answers = false;
+        EscCheck.Result two = read(board, false);
+        assertEquals("BAD", two.state());
+        assertTrue(two.text().endsWith("<br>ESC 1, 3 did not answer - they may not turn now. Unplug the battery, plug it in, <b>Read ESCs</b> again."), two.text());
+
+        // none: red too, with the battery in
+        for (FakeEscBoard.Esc e : board.escs) e.answers = false;
+        EscCheck.Result none = read(board, false);
+        assertEquals("BAD", none.state());
+        assertEquals("ESC 1, 2, 3, 4 did not answer - they may not turn now. Unplug the battery, plug it in, <b>Read ESCs</b> again.", none.text());
+        assertTrue(none.holds());
+
+        // Betaflight does not say what the battery is: nothing says it is out - red
+        FakeEscBoard unknown = bluejayQuad();
+        unknown.escs.get(0).answers = false;
+        EscCheck.Result notKnown = read(unknown, false);
+        assertEquals("BAD", notKnown.state());
+        assertTrue(notKnown.text().endsWith("<br>" + ESC1_RED), notKnown.text());
+        assertFalse(notKnown.canSilence(), "Beacon off waits for a read in which all answer");
+    }
+
+    @Test
+    void whenAllAnswerTheRowIsAsBefore() {
+        EscCheck.Result r = read(am32Quad(), false);
+        assertEquals("OK", r.state());
+        assertEquals("4 x AM32 2.17 - no beacon timer.", r.text());
+        assertFalse(r.holds());
+        assertEquals(List.of(), r.silent());
+        FakeEscBoard beeping = bluejayQuad();
+        beeping.volts.add(16.0);
+        EscCheck.Result b = read(beeping, false);
+        assertEquals("WARN", b.state());
+        assertEquals("4 x Bluejay 0.19 - beacon 10 min.<br>Beeps at rest. <b>Beacon off</b> ends it.", b.text());
+        assertFalse(log.stream().anyMatch(l -> l.contains("did not answer")), log.toString());
+    }
+
+    @Test
+    void withNoBatteryTheRowStillAsksForItAndIsNotRed() {
+        // the battery pulled during the read: ESC 3 had no power
+        FakeEscBoard pulled = bluejayQuad();
+        pulled.volts.addAll(List.of(16.0, 0.3));
+        pulled.escs.get(2).answers = false;
+        EscCheck.Result r = read(pulled, false);
+        assertEquals("WARN", r.state(), r.text());
+        assertFalse(r.holds());
+        assertTrue(r.text().contains("3: no answer (battery on?)"), r.text());
+        assertFalse(r.text().contains("did not answer"), r.text());
+        // out from the start: the ESCs are not asked
+        FakeEscBoard out = bluejayQuad();
+        out.volts.add(0.3);
+        EscCheck.Result no = read(out, false);
+        assertEquals("WARN", no.state());
+        assertEquals("No battery. <b>Battery in</b>, props off, then <b>Read ESCs</b>.", no.text());
+        assertFalse(out.said.contains("MSP 245"), "no passthrough without a battery");
+    }
+
+    @Test
+    void beaconOffSaysTheSameAndWritesOnlyTheEscsThatAnswered() {
+        FakeEscBoard board = bluejayQuad();
+        board.volts.add(16.0);
+        board.escs.get(1).answers = false;
+        EscCheck.Result r = read(board, true);
+        assertEquals("BAD", r.state());
+        assertTrue(r.text().endsWith("<br>ESC 2 did not answer - it may not turn now. Unplug the battery, plug it in, <b>Read ESCs</b> again."), r.text());
+        assertFalse(r.canSilence(), "Beacon off is not offered again until all answer");
+        assertEquals(0, board.escs.get(1).erases + board.escs.get(1).writes);
+        assertEquals(EscFirmware.BEACON_INFINITE, board.escs.get(0).memory[0x1A00 + EscFirmware.BEACON_DELAY]);
+        assertTrue(log.contains("ESC 2 did not answer - it may not turn now. Unplug the battery, plug it in, Read ESCs again."), log.toString());
+    }
+
+    @Test
+    void theRedStaysWithTheBoardUntilAReadInWhichAllAnswer() {
+        FakeEscBoard board = am32Quad();
+        board.escs.get(0).answers = false;
+        EscCheck.Hold hold = new EscCheck.Hold();
+        assertTrue(hold.after("uid:01", read(board, false)));
+        assertEquals(List.of(1), hold.on("uid:01"));
+        assertEquals(List.of(), hold.on("uid:02"), "another board is not held by it");
+        assertEquals(List.of(), hold.on(null));
+
+        // Drone setup closed and opened again: still held
+        EscCheck.Hold again = new EscCheck.Hold();
+        again.restore(hold.saved());
+        assertEquals(List.of(1), again.on("uid:01"));
+
+        // a read that does not reach the ESCs changes nothing; its row stays red and says why under its own words
+        board.armed = true;
+        EscCheck.Result armed = read(board, false);
+        assertFalse(again.after("uid:01", armed));
+        assertArrayEquals(new String[]{"BAD", "The drone is armed. Disarm it first.<br>" + ESC1_RED}, EscCheck.row(armed, again.on("uid:01")));
+        // nor does one with the battery out
+        board.armed = false;
+        board.volts.clear();
+        board.volts.addAll(List.of(16.0, 0.3));
+        EscCheck.Result out = read(board, false);
+        assertFalse(again.after("uid:01", out));
+        assertEquals("BAD", EscCheck.row(out, again.on("uid:01"))[0]);
+        assertEquals(List.of(1), again.on("uid:01"));
+
+        // the battery unplugged and in again: all answer, the hold goes and the row is as before
+        board.escs.get(0).answers = true;
+        board.volts.clear();
+        board.volts.add(16.0);
+        EscCheck.Result good = read(board, false);
+        assertTrue(again.after("uid:01", good));
+        assertEquals(List.of(), again.on("uid:01"));
+        assertEquals("", again.saved());
+        assertArrayEquals(new String[]{"OK", "4 x AM32 2.17 - no beacon timer."}, EscCheck.row(good, again.on("uid:01")));
+    }
+
+    @Test
+    void theHoldIsKeptByBoardAndReadsBackWhatItSaved() {
+        EscCheck.Hold hold = new EscCheck.Hold();
+        hold.restore("uid:0a=1,3;?=2");
+        assertEquals(List.of(1, 3), hold.on("uid:0a"));
+        assertEquals(List.of(2), hold.on(null), "a board that does not say its id");
+        assertEquals("uid:0a=1,3;?=2", hold.saved());
+        for (String nothing : new String[]{null, "", "false", "uid:0a=", "uid:0a=x", "=1"}) {
+            hold.restore(nothing);
+            assertEquals("", hold.saved(), String.valueOf(nothing));
         }
     }
 

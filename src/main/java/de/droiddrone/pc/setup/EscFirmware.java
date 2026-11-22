@@ -46,6 +46,10 @@ public final class EscFirmware {
     public static final int SILABS_SETTINGS = 0x100;
     public static final int AM32_SETTINGS = 0xB0;
     private static final String[] BEACON = {"", "1 min", "2 min", "5 min", "10 min", "off"};
+    /** An ESC that did not answer the read (F-080: with the battery in it may then not turn until the battery is unplugged). */
+    public static final String NO_ANSWER = "no answer";
+    /** The same, said so when the board reads no battery: the ESCs had no power. */
+    public static final String NO_ANSWER_NO_BATTERY = "no answer (battery on?)";
 
     private EscFirmware() {
     }
@@ -93,6 +97,11 @@ public final class EscFirmware {
         /** "10 min", "off", or "" when there is none to speak of. */
         public String beaconText() {
             return beacon >= 1 && beacon <= BEACON_INFINITE ? BEACON[beacon] : "";
+        }
+
+        /** It did not answer the read. */
+        public boolean silent() {
+            return NO_ANSWER.equals(problem) || NO_ANSWER_NO_BATTERY.equals(problem);
         }
 
         public static Info failed(int index, String problem) {

@@ -8,6 +8,7 @@ import de.droiddrone.pc.setup.Beepers;
 import de.droiddrone.pc.setup.BetaflightPlan;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.CliWrite;
+import de.droiddrone.pc.setup.EscCheck;
 import de.droiddrone.pc.setup.GpsSearch;
 import de.droiddrone.pc.setup.GpsSetup;
 import de.droiddrone.pc.setup.ModeSwitch;
@@ -296,7 +297,8 @@ final class DroneSetup {
         /**
          * ESCS (1.0.71): what each ESC runs and its own beacon - BLHeli_S kinds beep through the motors after 10 min
          * at rest, whatever Betaflight says - read through the flight controller (battery in), and BEACON OFF.
-         * Not part of CONFIRM: it is the ESCs' own memory, read and written only when the pilot asks.
+         * Not part of CONFIRM: it is the ESCs' own memory, read and written only when the pilot asks. An ESC that did
+         * not answer with the battery in is red and keeps the page not done (F-080, {@link #escHold}).
          */
         private final Section escSection = settings.section("ESCS");
         private final Part escRow = escSection.part("ESC beacon");
@@ -306,6 +308,14 @@ final class DroneSetup {
         /** The ESCs have the USB port: the rounds wait. */
         private boolean escBusy;
         private static final String ESC_HINT = "Battery in, props off: <b>Read ESCs</b>.";
+        /**
+         * F-080: ESCs that did not answer a read with the battery in, by board (saved, EscCheck.Hold.KEY) - motor 1 then
+         * stayed still until the battery was unplugged. The row is red and the page not done for that board until a
+         * read in which all answer.
+         */
+        private final EscCheck.Hold escHold = new EscCheck.Hold();
+        /** The ESC row was set for a board read on this page (the first round, then another board). */
+        private boolean escRowRead;
         /** The pilot's failsafe choice: GPS rescue by default (Drop without a GPS). */
         private volatile ModeSwitch.Failsafe failsafeChoice = ModeSwitch.Failsafe.KEEP;
         private javax.swing.JComboBox<ModeSwitch.Failsafe> failsafeCombo;
@@ -695,6 +705,7 @@ final class DroneSetup {
             beaconOff.setVisible(false);
             card.add(escSection.build(line(escRow, "ESCS", readEscs, beaconOff)));
             escRow.set(State.INFO, ESC_HINT);
+            escHold.restore(main.config().getString(EscCheck.Hold.KEY)); // shown once a round says which board it is
             card.add(javax.swing.Box.createVerticalStrut(10));
             alsoSetsText.setVisible(false); // Q-003: above CONFIRM, what it also writes that no row shows
             card.add(alsoSetsText);
@@ -1683,9 +1694,11 @@ final class DroneSetup {
             lastFcPort = r.port();
             restartedAt = now; // the CLI was open and is closed now: Betaflight restarts
             if (!r.version().isEmpty()) fcVersion = r.version();
-            if (r.boardId() != null && !r.boardId().equals(lastBoardId) && !escBusy && escWanted == 0) { // another drone: its ESCs are not read yet
+            // the first board read here, or another drone: its ESCs are not read yet on this page - red if held (F-080)
+            if ((!escRowRead || r.boardId() != null && !r.boardId().equals(lastBoardId)) && !escBusy && escWanted == 0) {
+                escRowRead = true;
                 beaconOff.setVisible(false);
-                escRow.set(State.INFO, ESC_HINT);
+                showEscIdle(r.boardId());
             }
             lastBoardId = r.boardId();
             // CONFIRM, and the green rows, belong to the board they were given for: another one plugged in needs its own
@@ -1795,7 +1808,8 @@ final class DroneSetup {
             modesWrong |= showFailsafe(r, pendingWrite);
             boolean byHandNeeded = !pendingWrite && (!r.msp() || (r.rate() >= 0 && r.rate() < r.target()) || cellsWrong || gpsWrong || modesWrong);
             markByHand(byHandNeeded);
-            cleanDone = confirm.confirmed() && r.plan().isEmpty() && !byHandNeeded && lastRefused == null && beeperProblem == null;
+            cleanDone = confirm.confirmed() && r.plan().isEmpty() && !byHandNeeded && lastRefused == null && beeperProblem == null
+                    && escHold.on(r.boardId()).isEmpty(); // F-080: not done while an ESC of it did not answer
             if (cleanDone) usb.set(State.OK, usbText + "<br><b>Done - unplug the drone.</b>");
         }
 
@@ -1970,7 +1984,25 @@ final class DroneSetup {
             busy = true;
             SetupBoard target = board(); // the board on the page now: its ESCs, no other board's
             java.nio.file.Path keep = de.droiddrone.pc.AppPaths.dataDir().resolve("esc-backup");
-            background(() -> de.droiddrone.pc.setup.EscCheck.run(() -> escBoard(target), silence, keep, main::logLine), this::escsDone);
+            background(() -> EscCheck.run(() -> escBoard(target), silence, keep, main::logLine), this::escsDone);
+        }
+
+        /**
+         * F-080: the step's status line while an ESC of the board did not answer its last read - instead of
+         * "Betaflight set up": Drone setup is not ready. Null when none is held.
+         */
+        static String escStatus(List<Integer> held) {
+            return held.isEmpty() ? null : EscCheck.plain(EscCheck.silentLine(held));
+        }
+
+        /** The ESC row before a read on this page: red with F-080's words while the board's ESCs are held. {state, html} */
+        static String[] escIdle(List<Integer> held) {
+            return held.isEmpty() ? new String[]{"INFO", ESC_HINT} : new String[]{"BAD", EscCheck.silentLine(held)};
+        }
+
+        private void showEscIdle(String boardId) {
+            String[] idle = escIdle(escHold.on(boardId));
+            escRow.set(State.valueOf(idle[0]), idle[1]);
         }
 
         /**
@@ -1981,20 +2013,26 @@ final class DroneSetup {
             return SetupBoard.open(target);
         }
 
-        private void escsDone(de.droiddrone.pc.setup.EscCheck.Result r) {
+        private void escsDone(EscCheck.Result r) {
             escBusy = false;
             busy = false;
             nextTry = System.currentTimeMillis() + 3000; // the ESCs start again; then the page reads on
             done = false;
             readEscs.setEnabled(found && !failed);
             beaconOff.setEnabled(found && !failed);
+            escRowRead = true;
             if (r == null) {
                 beaconOff.setVisible(false);
-                escRow.set(State.BAD, "Reading the ESCs failed (see log).");
+                List<Integer> held = escHold.on(lastBoardId);
+                escRow.set(State.BAD, "Reading the ESCs failed (see log)." + (held.isEmpty() ? "" : "<br>" + EscCheck.silentLine(held)));
                 return;
             }
+            // F-080: held for this board while an ESC did not answer, let go by a read in which all answer
+            String board = r.board() != null ? r.board() : lastBoardId;
+            if (escHold.after(board, r)) main.save(Map.of(EscCheck.Hold.KEY, escHold.saved()));
+            String[] row = EscCheck.row(r, escHold.on(board));
             beaconOff.setVisible(r.canSilence());
-            escRow.set(State.valueOf(r.state()), r.text());
+            escRow.set(State.valueOf(row[0]), row[1]);
         }
 
         /** FIND GPS: over USB, on the bench; when the round running now is over. */
@@ -2188,6 +2226,11 @@ final class DroneSetup {
             if (paused) return busy ? "Finishing read, then freeing the port..." : "USB port free - press Reconnect.";
             if (busy && found) return "Reading Betaflight...";
             if (done) {
+                String escs = escStatus(escHold.on(lastBoardId));
+                if (escs != null) { // F-080: not ready - before any "set up"
+                    wizard.setStatusColor(Theme.BAD);
+                    return escs;
+                }
                 if (cleanDone) return "Betaflight set up - unplug the drone.";
                 if (!confirm.armed() && !confirm.confirmed()) return "Set everything, then Confirm.";
                 wizard.setStatusColor(Theme.WARN);

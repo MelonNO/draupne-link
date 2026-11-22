@@ -94,7 +94,7 @@ public final class EscLink implements AutoCloseable {
                 try {
                     all.set(i, info(i));
                 } catch (IOException e) {
-                    all.set(i, EscFirmware.Info.failed(i, "no answer (battery on?)"));
+                    all.set(i, EscFirmware.Info.failed(i, EscFirmware.NO_ANSWER)); // EscCheck says why, from the battery
                     if (pass == 1) log.accept("ESC " + (i + 1) + ": " + e.getMessage());
                 }
             }
