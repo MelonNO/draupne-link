@@ -69,9 +69,9 @@ public class FrameAssembler {
      * before, any size up to 8 MB was, per frame number). Not from the stream's config: a restarted stream's key
      * frame often comes before its config, and a bigger picture's would be dropped.
      */
-    static final int PLAUSIBLE_FRAME_BYTES = 1920 * 1080 * 3 / 2 + (64 << 10);
+    public static final int PLAUSIBLE_FRAME_BYTES = 1920 * 1080 * 3 / 2 + (64 << 10);
     /** What the frames being put together may hold in all; beyond it the oldest go (a flood of broken sizes). */
-    static final long PENDING_BUDGET = 4L * PLAUSIBLE_FRAME_BYTES;
+    public static final long PENDING_BUDGET = 4L * PLAUSIBLE_FRAME_BYTES;
     /**
      * A frame this far ahead of the last one released (plus MAX_FPS a second since it) can't be this stream's: a late
      * frame of the stream before a restart. AHEAD_NEAR_OLD_STREAM for a number near where the old stream stood
@@ -187,8 +187,12 @@ public class FrameAssembler {
             int end = offset + length;
             if (size > 0 && end > size) length = Math.max(0, size - offset); // beyond the frame: not the phone's; clipped
             if (data.length < offset + length) { // before the size is known: a provisional array that grows
+                // as far as a frame can reach. A fragment longer than the phone cuts them (SEGMENT), at the far end,
+                // was copied past the array's end: an ArrayIndexOutOfBoundsException on the receive thread. What fits
+                int most = PLAUSIBLE_FRAME_BYTES + SEGMENT;
+                if (offset + length > most) length = Math.max(0, most - offset);
                 int grown = Math.max(offset + length, Math.max(PROVISIONAL_BYTES, data.length * 2));
-                data = Arrays.copyOf(data, Math.min(grown, PLAUSIBLE_FRAME_BYTES + SEGMENT));
+                data = Arrays.copyOf(data, Math.min(grown, most));
             }
             System.arraycopy(buf, bufOffset, data, offset, length);
             if (count == offsets.length) {
@@ -327,6 +331,18 @@ public class FrameAssembler {
             return true;
         }
 
+        /** The bytes this frame holds: its own array and every parity packet kept for it. Counted, not kept: only asked on the rare paths. */
+        long held() {
+            long n = data.length + (parity == null ? 0 : parity.length);
+            if (groupParity != null) for (byte[] g : groupParity) if (g != null) n += g.length;
+            if (rs != null) {
+                for (byte[][] block : rs) {
+                    if (block != null) for (byte[] p : block) if (p != null) n += p.length;
+                }
+            }
+            return n;
+        }
+
         /** The frame's bytes: the array the fragments went into, when it is the frame's size (nearly always). */
         byte[] assemble() {
             return data.length == size ? data : Arrays.copyOf(data, size);
@@ -373,8 +389,27 @@ public class FrameAssembler {
             frame.setSize(frameSize);
             keepToBudget(frameNum);
         }
+        int room = frame.data.length;
         frame.put(offset, buf, dataOffset, length);
+        // a frame whose first fragment has not come keeps its fragments in an array that grows: inside the budget
+        // too. It was only looked at when a frame's size came, and 64 such frames could hold 200 MB between them.
+        // (A frame whose size is known never comes here: its array is its size. One comparison a packet.)
+        if (frame.data.length != room) keepToBudget(frameNum);
         return finish(frameNum, frame, keyFrame);
+    }
+
+    /**
+     * Parity kept for the frames being put together counts to the budget as their own bytes do. The budget is looked
+     * at again each time this much more parity has been kept (not at every parity packet: a sum over the frames),
+     * and then cut to that much under it, so what is held never passes {@link #PENDING_BUDGET}.
+     */
+    static final int PARITY_CHECK_BYTES = 64 << 10;
+    private int parityKept;
+
+    private void parityKept(short frameNum, int bytes) {
+        if ((parityKept += bytes) < PARITY_CHECK_BYTES) return;
+        parityKept = 0;
+        keepToBudget(frameNum);
     }
 
     /**
@@ -390,6 +425,7 @@ public class FrameAssembler {
         if (!parityWanted(frameNum, frameSize, length)) return null;
         Pending frame = parityFor(frameNum, keyFrame, frameSize);
         frame.parity = Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
+        parityKept(frameNum, length);
         frame.recover();
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
     }
@@ -407,6 +443,7 @@ public class FrameAssembler {
         if (frame.groupParity == null) frame.groupParity = new byte[groups][];
         else if (frame.groupParity.length < groups) frame.groupParity = Arrays.copyOf(frame.groupParity, groups);
         frame.groupParity[group] = Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
+        parityKept(frameNum, length);
         frame.recover();
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
     }
@@ -432,6 +469,7 @@ public class FrameAssembler {
         if (block == Fec.blocks(packets) - 1 && index == m - 1) frame.rsLastIn = true;
         if (!frame.blockWhole(Fec.blockFirst(packets, block), Fec.blockK(packets, block))) {
             frame.keepRs(block, m, index, d, len);
+            parityKept(frameNum, len - Fec.HEADER);
             frame.recover();
         }
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
@@ -618,19 +656,22 @@ public class FrameAssembler {
         return out;
     }
 
-    /** What the frames being put together hold now, bytes (tests). */
-    long pendingBytes() {
+    /** What the frames being put together hold now, bytes: their own and the parity kept for them (tests). */
+    public long pendingBytes() {
         long held = 0;
-        for (Pending p : pending.values()) held += p.data.length;
+        for (Pending p : pending.values()) held += p.held();
         return held;
     }
 
-    /** Over PENDING_BUDGET in all: the oldest frames (not this one) go, lost. */
+    /**
+     * Over the budget in all - the frames' own bytes and the parity kept for them: the oldest frames (not this one)
+     * go, lost. Cut to PARITY_CHECK_BYTES under PENDING_BUDGET: that much parity may come before the next look.
+     */
     private void keepToBudget(short frameNum) {
         while (pending.size() > 1) {
             long held = 0;
-            for (Pending p : pending.values()) held += p.data.length;
-            if (held <= PENDING_BUDGET) return;
+            for (Pending p : pending.values()) held += p.held();
+            if (held <= PENDING_BUDGET - PARITY_CHECK_BYTES) return;
             Short oldest = null;
             for (short n : pending.keySet()) if (n != frameNum && (oldest == null || isOlder(n, oldest))) oldest = n;
             if (oldest == null) return;
