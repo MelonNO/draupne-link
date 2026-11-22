@@ -19,6 +19,7 @@ are not part of it.
 .\bench.ps1 ui -Tests *Looks* -Scale 1.5    the picture tours at another Windows text scaling
 .\bench.ps1 ui -Screen 1093x584    every scenario on a screen that small (a 1366 x 768 laptop at Windows' 125 %)
 .\bench.ps1 report -Root <folder>  a run's report written again
+.\bench.ps1 sitl                   Betaflight 4.4.1 itself, as a program in WSL (-Betaflight 4.5.5 another version)
 .\bench.ps1 hw                     REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
 .\bench.ps1 phone                  REAL HARDWARE: the real phone itself
 ```
@@ -58,7 +59,7 @@ somebody removes their folders.
 | The long run | `soak` | Flight after flight for hours on changing bad links, every third with a cut in the air: no flight lost, no freeze, memory and threads flat. |
 | The night | `night -Until HH:mm` | What only hours can test, each with its share of the time until the hour given (one flight for hours first, so that begun before midnight it flies across it; the map's part beside the others all night - it has no window and takes next to no processor, and has a build folder of its own under the run's folder): **sleep and wake** in real time (a phone put to DEEP SLEEP or OVERWATCH checks every 1, 2 or 5 minutes; PILOT UAV must have it at its next check, cycle after cycle); **one flight that lasts for hours** (the same link, track and recording past the hour on every clock, across midnight when begun before it; memory against the flight's length; afterwards one flight with its true length and a REPORT); **the real phone app left running** in the emulator (flown on a poor link with cuts, put to sleep, left through its own check, woken - round after round, its memory and its log watched); **the map on an internet that comes and goes** (the app's own tile cache against a server that says nothing, sends half a tile, hangs up, says 503 or is gone - for seconds or minutes, hundreds of times; after each the map must be whole by itself, and how long that took is the figure; no window); then **flight after flight** as the long run. A part that hangs is ended at its time and the next begins. One table a part in the report. |
 | The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`). |
-| Betaflight | `sitl` | Not built: needs the administrator step below. |
+| Betaflight | `sitl` | Betaflight 4.4.1 itself, as a program in WSL, set up as the drone is (see "Betaflight as a program"): a snapshot, settings changed, the restore - the board as the snapshot again; the keeper's lock, a window under the cap, its ends, END safe; the drone's own failsafe when the sticks stop, timed. About 6 min. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
 | Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Two scenarios: the phone found, the link, the picture, STANDBY - nothing armed; and the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`). See "Real hardware", "The keeper". |
 | Real hardware: the phone | `phone` | Never part of `quick` or `full`. The emulator's phone scenarios against this bench's one real phone on adb, with the bench build of the app: first start, the PC's link and the camera's picture through the bench's wire, a weak link, a cut, a link dead one way, the camera closed under a size change (a real camera here), the app ended by an error and killed asleep - asleep "on battery" though it is on a cable - and, with `-Tests *PhoneNight* -Hours 8`, the app left running for hours. Ends with `gradlew phoneReset`. See "Real hardware", "The phone run". |
@@ -366,16 +367,62 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
 - **Before the phone:** `-Pphone.adb=emulator-5584` holds the emulator (running already, the app to fly on it) to a
   real phone's rules - the guard, no root, no console but the forwarded port.
 
-## Betaflight firmware (waits for an administrator)
+## Betaflight as a program
 
-Real firmware as a program (SITL) needs Windows' Linux part. Once, as administrator: `wsl --install -d Ubuntu`,
-then restart the PC (that closes a running DRAUPNE Link). After that the suite can be built: `.\bench.ps1 sitl`
-says so until then.
+Betaflight's own source built for the PC (SITL) and run in Windows' Linux part (WSL, Ubuntu, as root). Set up on
+this PC 2026-11-22. It is the real flight code: the arming rules, the CLI, save, the failsafe - with no sensors but
+what a simulator sends it, no battery (it reads 0 V), and motors by PWM only. Nothing of it touches a real board.
+
+```
+.\bench.ps1 sitl                         the suite on 4.4.1 (the drone's version): SITL started before it, stopped after
+.\bench.ps1 sitl -Betaflight 4.5.5       on another version (4.5.5, 2025.12.5; 4.3.2 has no GPS rescue in SITL)
+tools\sitl\build.ps1 -Version 4.4.1      built from Betaflight's tag (-All: 4.4.1, 4.5.5, 2025.12.5, 4.3.2); a minute each
+tools\sitl\start.ps1 -Version 4.4.1 -Feed   one started by hand; returns when it answers MSP, says its folder
+tools\sitl\status.ps1                    which runs, where, how often it was started; which are built
+tools\sitl\stop.ps1                      ended
+gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand against it
+```
+
+- **Where things are.** In WSL: `/opt/draupne-sitl` - Betaflight's repository (`src`), one checkout a version
+  (`tree/<version>`), the program and its `build.txt` (`<version>/`: commit, compiler, make line, the changes made,
+  SHA-256). On Windows: a folder a run (`%LOCALAPPDATA%\DraupneBench\sitl\<version>-<time>`, or the bench run's
+  `sitl\<version>`) with the board's `eeprom.bin`, `sitl.log` (what Betaflight says, with the time) and `starts.txt`.
+  `-Run <folder>` starts it on that folder's board again; `-Eeprom <file>` copies a board's eeprom.bin in first.
+- **How it is built.** With the newest Ubuntu compiler that builds each version with Betaflight's own Makefile:
+  gcc 14 for 4.3 to 4.5 (gcc 15 refuses them; gcc 11's build of 4.4.1 hangs at start), gcc 15 for 2025.12. With the
+  GPS built in (`-DUSE_GPS`, as the drone's firmware has it; SITL leaves it out by itself); 4.5 has one warning
+  (an unused function) let through for it. Three small changes to SITL's own glue, never to the flight code: SITL's
+  TCP "UART" gets the two functions the GPS calls (they were empty, and a GPS on a UART ended SITL); its answers
+  leave within 10 ms instead of up to 0.5 s on 4.3 and 4.4 (as 4.5 has it); 4.3's crash at start taken out (as 4.4
+  did).
+- **Ports.** Fixed in Betaflight's source: UART n listens on TCP 5760 + n (UART1, MSP, on 5761; the drone's GPS
+  UART3 on 5763, where nothing answers - no fix), UDP 9003 takes the simulator's packets. WSL brings TCP to Windows'
+  127.0.0.1 by itself. One SITL at a time; it takes one TCP client at a time.
+- **Save and restart.** `save`, the CLI's `exit` and MSP's reboot end the program (exit code 0); the start script's
+  supervisor starts it again in the same folder within a second, eeprom.bin kept - as a board restarts. Five crashes
+  in a row at start and it is not started again (`sitl.log` says so). `diff all` and `dump all` read the same twice in
+  a visit and across restarts (no brushed-ESC detection in SITL).
+- **Arming.** It arms only with the feeder (`-Feed`, `tools\sitl\feeder.py`): forty packets a second of a drone
+  level and still. Without them SITL's attitude is never set and ANGLE holds. Set up as the drone is
+  (`bench/sitl/Sitl.likeTheDrone`) it also wants its accelerometer calibrated once (the scenarios do it). The sticks
+  come over MSP (MSP_SET_RAW_RC on UART1, as the phone app sends them): **Betaflight takes one MSP request per run of
+  its serial task, 100 a second** (serial_update_rate_hz) - at 100 stick frames a second nothing else was answered,
+  so the scenarios send 25.
+- **What was seen of the drone's failsafe** (4.4.1, `SitlFailsafeScenario`; GPS-RESCUE after failsafe_delay 200,
+  rxfail 3 h and 4 h, no GPS fix, arming without a fix allowed): the sticks stop at throttle 1080; RXLOSS 0.17 s later;
+  armed and every motor held where it was for 20 s; at 20.1 s GPS rescue, which with no fix gives up at once - the
+  motors at rest and disarmed 0.1 s later, FAILSAFE and ARMSWITCH among the blocks; no motor ever above the held
+  throttle. Sticks back with ARM off: free again 2 s later. The film's `failsafe-timeline.tsv` has every change.
+- **The keeper against it** (`SitlKeeperScenario`): as a real board's in every rule but the battery
+  (`noBattery`, `battery=none` by hand - refused for a real board).
 
 ## For whoever adds a scenario
 
 - Classes live under `src/test/java/de/droiddrone/bench/**`, are named `...Scenario` and carry a tag: `ui`,
   `badlink`, `edge`, `soak`, `emulator`, `sitl`, `finding` - or `hw`, `hwphone` for real hardware. One JVM per class.
+- A SITL scenario (`bench/sitl`): `Assumptions.assumeTrue(Sitl.missing() == null, ...)` first; `Sitl.open(log)` is
+  the board as BetaflightUsb has a USB one (BoardSnapshot and BoardRestore take `Sitl.BOARD`), `FcKeeper.tcp(...)`
+  the keeper's way, `SitlLink` sticks and questions at once; `Sitl.likeTheDrone(limit, log)` sets it up as the drone.
 - A hardware scenario: `Assumptions.assumeTrue(Hardware.present(), ...)` first, then
   `AppRig.scenario("name").hardware(Hardware.load()).run(rig -> { ... })`; `rig.hardware` has the bench's facts.
   `rig.radio.handsOff()` is the hard stop (ARM off, throttle down, held); a made-up drone's scenario lets go of the
