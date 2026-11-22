@@ -923,7 +923,8 @@ final class OsdRenderer {
         // 1.0.71 (the test bench's F-004): not while armed - it stood there through every flight of a drone that
         // has not been through Drone setup, about a thing nobody can do in the air
         boolean armNote = d.armSwitchUnknown() && (s == null || !s.armed());
-        int lines = (hint ? 1 : d.fcLost() ? 2 : rcGap || blocked ? 1 : 0) + (armNote ? 1 : 0);
+        String takeOver = failsafe ? rescueTakeOver(d.linkReady(), d.rcLive(), s) : null;
+        int lines = (hint ? 1 : d.fcLost() ? 2 : rcGap || blocked ? 1 : 0) + (armNote ? 1 : 0) + (takeOver != null ? 1 : 0);
         // the whole block stays in the picture, also when placed low: it moves up by what doesn't fit
         int bigLines = big.size() + (waking ? 1 : 0);
         float below = bigLines > 0 ? (bigLines - 1) * 38 * unit : 0;
@@ -941,6 +942,10 @@ final class OsdRenderer {
         }
         float ly = y + 4 * unit;
         g.setFont(Theme.headingFont(18 * unit));
+        if (takeOver != null) { // under FAILSAFE: how the pilot gets the drone back from the rescue
+            put(takeOver, x, ly, YELLOW, a);
+            ly += 24 * unit;
+        }
         if (hint) { // under LINK LOST: why
             put(d.linkHint(), x, ly, YELLOW, a);
             ly += 24 * unit;
@@ -961,6 +966,23 @@ final class OsdRenderer {
         if (armNote) { // Drone setup has not read which switch arms
             put("ARM SWITCH NOT READ - RUN DRONE SETUP", x, ly, YELLOW, a);
         }
+    }
+
+    /** I-002: under FAILSAFE while a GPS rescue flies on with the link back. */
+    static final String RESCUE_TAKE_OVER = "LINK BACK - MOVE ROLL OR PITCH TO FLY";
+
+    /**
+     * I-002: the line under FAILSAFE, or null. A failsafe's GPS rescue flies on when the sticks come back, until the pilot
+     * moves roll or pitch past failsafe_stick_threshold (30 % by default; Betaflight 4.4 failsafe.c, areSticksActive:
+     * roll, pitch and yaw, and yaw reads centred while GPS rescue steers it - throttle never counts). Said only while
+     * that is so: the link up and this PC's sticks going out (RC OUTPUT: LIVE), the FC in failsafe with GPS RESCUE on.
+     * Landing (it ends as the sticks return) and a drop (disarmed) say nothing.
+     */
+    static String rescueTakeOver(boolean linkReady, boolean rcLive, FcTelemetry.Status s) {
+        if (!linkReady || !rcLive || s == null || !s.armed()) return null;
+        boolean failsafe = s.blockers().stream().anyMatch(b -> b.osdName().equals("FAILSAFE"));
+        boolean rescue = s.activeModes().stream().anyMatch(m -> m.toUpperCase(Locale.ROOT).replace(" ", "").equals("GPSRESCUE"));
+        return failsafe && rescue ? RESCUE_TAKE_OVER : null;
     }
 
     /**
