@@ -9,6 +9,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 ui -Tests *Fly*       one suite (self ui link edge emulator sitl findings), or some of its scenarios
   .\bench.ps1 ui -Screen 1093x584   the app on a screen that small (a 1366 x 768 laptop at 125 %)
   .\bench.ps1 emulator -Avd draupne-a26   the phone app on another Android (draupne-a26 / a30 / a33 / a35: 8 / 11 / 13 / 15)
+  .\bench.ps1 sitl                  Betaflight 4.4.1 itself, as a program in WSL (-Betaflight 4.5.5 / 2025.12.5 another)
   .\bench.ps1 report -Root <folder> the report of a run's folder written again
   .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
@@ -33,7 +34,9 @@ param(
     [string]$Screen = '',
     [string]$Root = '',
     # the emulator's Android device for this run (its folder under %LOCALAPPDATA%\DroidDroneBuild\avd); left out: draupne-bench
-    [string]$Avd = ''
+    [string]$Avd = '',
+    # the Betaflight the sitl suite runs as a program (tools\sitl): 4.4.1 (the drone's), 4.5.5, 2025.12.5, 4.3.2
+    [string]$Betaflight = '4.4.1'
 )
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
@@ -277,7 +280,7 @@ $suites = @{
     edge     = @('benchEdge', 'Edge cases')
     findings = @('benchFindings', 'The tests of bugs found and not fixed')
     emulator = @('benchEmulator', 'The real phone app in the emulator')
-    sitl     = @('benchSitl', 'Real Betaflight firmware')
+    sitl     = @('benchSitl', 'Betaflight as a program (SITL)')
     soak     = @('benchSoak', 'The long run')
 }
 
@@ -397,6 +400,57 @@ function Invoke-PhoneReset {
 }
 # <<< R5 --------------------------------------------------------------------------------------------------------------
 
+# >>> R7, Betaflight as a program (tools\sitl; docs/TESTING.md, "Betaflight as a program") -----------------------------
+# The sitl suite gets Betaflight -Betaflight (4.4.1) started in WSL before it - built first if it is not, a fresh board
+# in the run's folder (sitl\<version>: its eeprom.bin and sitl.log stay there), the level-attitude feeder beside it -
+# and stopped after it, however it went. One SITL at a time: one that runs already (started by hand) is not touched,
+# and the suite waits for another run.
+function Start-Sitl {
+    $tools = Join-Path $repo 'tools\sitl'
+    Write-Host ("{0:HH:mm:ss}  Betaflight {1} as a program ..." -f (Get-Date), $Betaflight)
+    $log = Join-Path $runRoot 'logs\sitl-start.log'
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $built = (& wsl.exe -d Ubuntu -u root -- bash -c "test -x /opt/draupne-sitl/$Betaflight/betaflight_SITL.elf && echo yes") -join ''
+        if ($built -ne 'yes') {
+            Write-Host "          not built yet: tools\sitl\build.ps1 -Version $Betaflight (a few minutes the first time)"
+            & (Join-Path $tools 'build.ps1') -Version $Betaflight *>> $log
+        }
+        # its words (Write-Host) into the log, its one output - the folder - kept
+        $said = @(& (Join-Path $tools 'start.ps1') -Version $Betaflight -Run (Join-Path $runRoot "sitl\$Betaflight") -Feed *>&1)
+        $said | ForEach-Object { "$_" } | Add-Content -Path $log
+        $folder = $said | Where-Object { $_ -is [string] } | Select-Object -Last 1
+    } catch {
+        $folder = $null
+        Add-Content -Path $log -Value $_.Exception.Message
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    if (-not $folder) {
+        $why = (Get-Content $log -Tail 1 -ErrorAction SilentlyContinue)
+        Write-Host "          not started: $why"
+        [void]$pending.Add("Betaflight as a program - SITL $Betaflight did not start ($why; logs\sitl-start.log).   .\bench.ps1 sitl")
+        return $null
+    }
+    Write-Host "          answers MSP on 127.0.0.1:5761; its folder: $folder"
+    $env:BENCH_SITL_VERSION = $Betaflight
+    $env:BENCH_SITL_FOLDER = $folder
+    return $folder
+}
+
+function Stop-Sitl {
+    Write-Host ("{0:HH:mm:ss}  Betaflight as a program: stopped" -f (Get-Date))
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & (Join-Path $repo 'tools\sitl\stop.ps1') *>> (Join-Path $runRoot 'logs\sitl-stop.log')
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+}
+# <<< R7 --------------------------------------------------------------------------------------------------------------
+
 if ($Run -ne 'report') {
     switch ($Run) {
         'quick' { $order = @('self', 'ui', 'link') }
@@ -418,8 +472,18 @@ if ($Run -ne 'report') {
             [void]$pending.Add("The real phone app in the emulator - $noBenchBuild.   .\bench.ps1 emulator")
             continue
         }
-        if ($s -eq 'sitl' -and -not (Test-Wsl)) {
-            [void]$pending.Add("Real Betaflight firmware - waits for the administrator step (docs/TESTING.md, 'Betaflight').   .\bench.ps1 sitl")
+        if ($s -eq 'sitl') {
+            if (-not (Test-Wsl)) {
+                [void]$pending.Add("Betaflight as a program - no WSL on this PC (docs/TESTING.md, 'Betaflight as a program').   .\bench.ps1 sitl")
+                continue
+            }
+            # R7: SITL started before the suite, stopped after it however it went
+            if (-not (Start-Sitl)) { continue }
+            try {
+                Invoke-Suite $suites[$s][0] ("{0} {1}" -f $suites[$s][1], $Betaflight)
+            } finally {
+                Stop-Sitl
+            }
             continue
         }
         if ($s -eq 'soak') {
