@@ -50,6 +50,10 @@ public final class FakeEscBoard implements BetaflightUsb.Wire {
     private Esc connected;
     /** The next answer goes out with a wrong checksum (noise on the line), once. */
     public boolean noiseOnce;
+    /** Every connect asked for, by ESC (0 = motor 1), in the order asked. */
+    public final List<Integer> asked = new ArrayList<>();
+    /** When the passthrough began, and when its first command came (System.nanoTime; 0: none yet). */
+    public long passthroughAt, firstCommandAt;
     /**
      * The pack voltage MSP_BATTERY_STATE answers, one reading after the other, the last one kept (16.0, then 0.3: the
      * battery pulled during the read). Empty: not answered, as a Betaflight that does not say.
@@ -190,6 +194,8 @@ public final class FakeEscBoard implements BetaflightUsb.Wire {
                 payload = new byte[]{(byte) escs.size()};
                 passthrough = true;
                 connected = null;
+                passthroughAt = System.nanoTime();
+                firstCommandAt = 0;
             } else {
                 payload = new byte[0];
             }
@@ -237,6 +243,7 @@ public final class FakeEscBoard implements BetaflightUsb.Wire {
     private void answer(int cmd, int address, byte[] params, boolean crcOk) {
         byte[] back = {0};
         int ack = EscLink.ACK_OK;
+        if (firstCommandAt == 0) firstCommandAt = System.nanoTime();
         if (!crcOk) {
             ack = EscLink.ACK_INVALID_CRC;
         } else {
@@ -246,6 +253,7 @@ public final class FakeEscBoard implements BetaflightUsb.Wire {
                     int i = params[0] & 0xff;
                     Esc e = i < escs.size() ? escs.get(i) : null;
                     connected = null;
+                    asked.add(i);
                     if (e == null) {
                         ack = 8;
                     } else if (!e.answers || e.refuseConnects-- > 0) {

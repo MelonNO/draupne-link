@@ -24,23 +24,48 @@ import java.util.List;
  *                                  low value. For when the silent check can't say whether the ESCs work again.
  * gradlew escProbe -Pesc=stop      STOP to every motor, and what they do now.
  * gradlew escProbe -Pesc=spinonly  each motor turning for a moment with no visit to the ESCs before it.
+ * gradlew escProbe -Pesc=recover   NOISE: as spin, with 4 s of silence on the ESC lines before the first connect
+ *                                  (-PfirstWaitMs= to change it) - an AM32 that answers its telemetry but will not
+ *                                  turn (F-080) gives up on the lost signal, restarts into its bootloader, and is
+ *                                  started again at the end of the visit. Does motor 1 turn again without a battery
+ *                                  unplug?
  * </pre>
  * The port is the first flight controller found, or {@code -Pport=COM9}. One visit to the ESCs a run, whatever is
  * done there: every visit ends in their start-up tones.
+ * <p>
+ * F-080 tries (read, silence, spin, recover; the app's own visit is unchanged and row always uses it): every connect
+ * gets a line with the time since the passthrough began, and an AM32's settings header is shown.
+ * <pre>
+ * -Porder=4,3,2,1     which ESCs, in that order (motor numbers); left out: not asked. Default 1,2,3,4.
+ * -PfirstWaitMs=3000  nothing sent to any ESC until then, counted from the passthrough's start. Default 0 (recover 4000).
+ * -Ptries=6           connects of each ESC in one pass. Default 6.
+ * -PpauseMs=250       between those connects. Default 250.
+ * -Ppasses=2          rounds over the ESCs that have not answered. Default 2.
+ * </pre>
  */
 public final class EscProbe {
     private static final int MSP_MOTOR_CONFIG = 131, MSP_MOTOR_TELEMETRY = 139, MSP_ANALOG = 110, MSP_STATUS = 101;
     /** A spin, when asked for: as low and short as shows a motor turning. */
     private static final int SPIN_VALUE = 1060;
     private static final long SPIN_MS = 800;
+    /** recover: long enough for any AM32 to give up on the lost signal (0.5 s armed, 2 s not) and settle. */
+    static final long RECOVER_WAIT_MS = 4000;
 
     public static void main(String[] args) throws Exception {
         String mode = args.length > 0 && !args[0].isEmpty() ? args[0] : "read";
         String wanted = args.length > 1 ? args[1] : "";
-        if (!List.of("check", "beeper", "read", "row", "silence", "spin", "spinonly", "stop").contains(mode)) {
-            System.out.println("Unknown: " + mode + " (check, beeper, read, row, silence, spin, spinonly, stop)");
+        if (!List.of("check", "beeper", "read", "row", "silence", "spin", "spinonly", "stop", "recover").contains(mode)) {
+            System.out.println("Unknown: " + mode + " (check, beeper, read, row, silence, spin, spinonly, stop, recover)");
             return;
         }
+        EscLink.Visit visit;
+        try {
+            visit = visit(mode, arg(args, 2), arg(args, 3), arg(args, 4), arg(args, 5), arg(args, 6));
+        } catch (IllegalArgumentException e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+        if (mode.equals("row") && visit != EscLink.Visit.AS_THE_APP) System.out.println("row is the app's own visit: -Porder, -PfirstWaitMs, -Ptries, -PpauseMs, -Ppasses are not used.");
         List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
         System.out.println("Flight controllers: " + ports);
         BetaflightUsb.Port port = ports.stream().filter(p -> wanted.isEmpty() || p.systemName().equalsIgnoreCase(wanted)).findFirst().orElse(null);
@@ -50,7 +75,8 @@ public final class EscProbe {
         }
         System.out.println("Sound to expect: " + switch (mode) {
             case "check", "stop", "beeper" -> "none.";
-            case "spin" -> "the ESCs' start-up tones, then each motor turning for " + SPIN_MS / 1000.0 + " s.";
+            case "spin", "recover" -> (visit.firstWaitMs() > 0 ? "none for " + visit.firstWaitMs() / 1000.0 + " s, then " : "")
+                    + "the ESCs' start-up tones, then each motor turning for " + SPIN_MS / 1000.0 + " s.";
             case "spinonly" -> "each motor turning for " + SPIN_MS / 1000.0 + " s (no visit to the ESCs, no start-up tones).";
             default -> "the ESCs' start-up tones, once, at the end. No motor turns.";
         });
@@ -89,8 +115,11 @@ public final class EscProbe {
             }
             long t0 = System.currentTimeMillis();
             try (EscLink escs = fc.escs(s -> System.out.println("  " + s))) {
-                List<EscFirmware.Info> all = escs.infoAll();
-                for (EscFirmware.Info i : all) System.out.println("  " + i);
+                List<EscFirmware.Info> all = escs.infoAll(visit.withTrace(s -> System.out.println("  " + s)));
+                for (EscFirmware.Info i : all) {
+                    String header = i.index() < escs.settingsRead.length && i.kind() == EscFirmware.Kind.AM32 ? am32Details(escs.settingsRead[i.index()]) : "";
+                    System.out.println("  " + i + (header.isEmpty() ? "" : "\n      " + header));
+                }
                 System.out.println("ESCs: " + EscFirmware.summary(all) + " (" + (System.currentTimeMillis() - t0) + " ms)");
                 if (mode.equals("silence")) {
                     Path dir = Path.of(System.getProperty("java.io.tmpdir"), "draupne-esc-backup");
@@ -111,8 +140,60 @@ public final class EscProbe {
             System.out.println("The ESCs start again now (their tones). Waiting 7 s...");
             Thread.sleep(7000);
             check(fc, "After");
-            if (mode.equals("spin")) spin(fc);
+            if (mode.equals("spin") || mode.equals("recover")) spin(fc);
         }
+    }
+
+    private static String arg(String[] args, int at) {
+        return args.length > at ? args[at] : "";
+    }
+
+    /**
+     * The visit the F-080 options ask for: blank options keep the app's own ({@link EscLink.Visit#AS_THE_APP} itself
+     * when all are blank and the mode is not recover); recover waits {@link #RECOVER_WAIT_MS} unless told otherwise.
+     */
+    static EscLink.Visit visit(String mode, String order, String firstWaitMs, String tries, String pauseMs, String passes) {
+        EscLink.Visit app = EscLink.Visit.AS_THE_APP;
+        boolean recover = "recover".equals(mode);
+        if (!recover && blank(order) && blank(firstWaitMs) && blank(tries) && blank(pauseMs) && blank(passes)) return app;
+        return new EscLink.Visit(EscLink.Visit.order(order),
+                number("firstWaitMs", firstWaitMs, recover ? RECOVER_WAIT_MS : app.firstWaitMs()),
+                (int) number("tries", tries, app.tries()),
+                number("pauseMs", pauseMs, app.pauseMs()),
+                (int) number("passes", passes, app.passes()), null);
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
+    }
+
+    private static long number(String name, String text, long otherwise) {
+        if (blank(text)) return otherwise;
+        try {
+            long n = Long.parseLong(text.trim());
+            if (n < 0 || n > 600_000) throw new NumberFormatException();
+            return n;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(name + ": a whole number 0 - 600000 (not \"" + text + "\")");
+        }
+    }
+
+    /**
+     * What an AM32's settings header says that may set one ESC apart (layout of AM32 2.17's eeprom.h): the bootloader
+     * version (byte 2), the settings layout (1), input type (46: 0 auto, 1 DShot, 2 servo, 3 serial, 4 EDT arming),
+     * low-voltage cut-off (36), direction (17), 3D (18), sine start (19), telemetry interval (31). "" when too short.
+     */
+    static String am32Details(byte[] s) {
+        if (s == null || s.length < 47) return "";
+        int input = s[46] & 0xff;
+        String[] inputs = {"auto", "DShot", "servo", "serial", "EDT arming"};
+        return "bootloader " + (s[2] & 0xff) + ", settings layout " + (s[1] & 0xff)
+                + ", input " + (input < inputs.length ? inputs[input] : "?") + " (" + input + ")"
+                + ", low-voltage cut-off " + ((s[36] & 0xff) == 1 ? "on" : "off")
+                + ", direction " + ((s[17] & 0xff) == 1 ? "reversed" : "normal")
+                + ", 3D " + ((s[18] & 0xff) == 1 ? "on" : "off")
+                + ", sine start " + ((s[19] & 0xff) == 1 ? "on" : "off")
+                + ", telemetry interval " + (s[31] & 0xff);
     }
 
     /**

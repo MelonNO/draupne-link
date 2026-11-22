@@ -496,4 +496,126 @@ class EscLinkTest {
         assertTrue(escs.closed());
         assertEquals(1, board.escs.get(3).restarts);
     }
+
+    // ------------------------------------------------------------------ F-080: the by-hand tries' visit (EscProbe)
+
+    @Test
+    void theAppsOwnReadStillAsksMotorOneFirstSixTimesThenTheOthersThenAgain() throws IOException {
+        FakeEscBoard board = am32Quad();
+        board.escs.get(0).refuseConnects = 6; // not in its bootloader for the whole first pass
+        try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
+            List<EscFirmware.Info> all = escs.infoAll();
+            assertEquals("4 x AM32 2.17 - no beacon timer", EscFirmware.summary(all));
+        }
+        assertEquals(List.of(0, 0, 0, 0, 0, 0, 1, 2, 3, 0), board.asked);
+    }
+
+    @Test
+    void aVisitAsksTheEscsInTheOrderGivenAndOnlyThose() throws IOException {
+        FakeEscBoard board = am32Quad();
+        List<String> trace = new ArrayList<>();
+        EscLink.Visit v = new EscLink.Visit(EscLink.Visit.order("4,3,2,1"), 0, 6, 0, 2, trace::add);
+        try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
+            assertEquals("4 x AM32 2.17 - no beacon timer", EscFirmware.summary(escs.infoAll(v)));
+            for (int i = 0; i < 4; i++) assertNotNull(escs.settingsRead[i], "ESC " + (i + 1) + "'s settings kept for the probe");
+        }
+        assertEquals(List.of(3, 2, 1, 0), board.asked);
+        assertTrue(trace.get(0).matches("\\+\\d+\\.\\d{3} s ESC 4 connect \\(pass 1, try 1\\): answered, 1F06 mode 4"), trace.get(0));
+        for (FakeEscBoard.Esc e : board.escs) assertEquals(1, e.restarts, "every ESC is started again at the end, asked or not");
+
+        board.asked.clear();
+        board.plugInAgain();
+        trace.clear();
+        try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
+            List<EscFirmware.Info> all = escs.infoAll(new EscLink.Visit(EscLink.Visit.order("4, 2,6"), 0, 6, 0, 2, trace::add));
+            assertEquals(EscLink.NOT_ASKED, all.get(0).problem());
+            assertEquals(EscLink.NOT_ASKED, all.get(2).problem());
+            assertEquals("AM32 2.17", all.get(1).firmware());
+            assertEquals("AM32 2.17", all.get(3).firmware());
+            assertNull(escs.settingsRead[0]);
+        }
+        assertEquals(List.of(3, 1), board.asked);
+        assertTrue(trace.stream().anyMatch(s -> s.endsWith("ESC 6: Betaflight has only 4 motor outputs - skipped")), trace.toString());
+    }
+
+    @Test
+    void theFirstWaitSendsNothingToAnyEscBeforeItsTime() throws IOException {
+        FakeEscBoard board = am32Quad();
+        List<String> trace = new ArrayList<>();
+        try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
+            escs.infoAll(new EscLink.Visit(null, 150, 6, 0, 2, trace::add));
+        }
+        long waited = (board.firstCommandAt - board.passthroughAt) / 1_000_000;
+        assertTrue(waited >= 150, "the first connect came " + waited + " ms after the passthrough began");
+        assertTrue(trace.get(0).endsWith("nothing sent until 0.150 s (the ESC lines held high)"), trace.get(0));
+        assertEquals(List.of(0, 1, 2, 3), board.asked);
+    }
+
+    @Test
+    void triesAndPassesAreAsGivenAndEachConnectHasItsLine() throws IOException {
+        FakeEscBoard board = am32Quad();
+        board.escs.get(0).refuseConnects = 3;
+        List<String> trace = new ArrayList<>();
+        try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
+            List<EscFirmware.Info> all = escs.infoAll(new EscLink.Visit(null, 0, 2, 0, 1, trace::add));
+            assertTrue(all.get(0).silent(), "two connects, one pass: not enough for this one");
+            assertEquals("AM32 2.17", all.get(3).firmware());
+        }
+        assertEquals(List.of(0, 0, 1, 2, 3), board.asked);
+        assertTrue(trace.get(1).endsWith("ESC 1 connect (pass 1, try 2): ESC connect: the ESC did not answer"), trace.get(1));
+        assertTrue(log.contains("ESC 1: ESC connect: the ESC did not answer"), log.toString());
+
+        board.asked.clear();
+        board.plugInAgain();
+        board.escs.get(0).refuseConnects = 3;
+        try (BetaflightUsb fc = BetaflightUsb.onWire(board); EscLink escs = open(fc)) {
+            List<EscFirmware.Info> all = escs.infoAll(new EscLink.Visit(null, 0, 2, 0, 2, null));
+            assertEquals("AM32 2.17", all.get(0).firmware(), "a second pass, and it answers on its fourth connect");
+        }
+        assertEquals(List.of(0, 0, 1, 2, 3, 0, 0), board.asked);
+    }
+
+    @Test
+    void theOrderIsReadAsMotorNumbers() {
+        assertArrayEquals(new int[]{3, 2, 1, 0}, EscLink.Visit.order("4,3,2,1"));
+        assertArrayEquals(new int[]{0}, EscLink.Visit.order(" 1 "));
+        assertNull(EscLink.Visit.order(" "));
+        assertNull(EscLink.Visit.order(null));
+        for (String bad : List.of("0", "1,1", "x", "1,,2", "256")) {
+            assertThrows(IllegalArgumentException.class, () -> EscLink.Visit.order(bad), bad);
+        }
+        assertThrows(IllegalArgumentException.class, () -> new EscLink.Visit(null, -1, 6, 0, 2, null));
+        assertThrows(IllegalArgumentException.class, () -> new EscLink.Visit(null, 0, 0, 0, 2, null));
+        assertThrows(IllegalArgumentException.class, () -> new EscLink.Visit(null, 0, 6, 0, 0, null));
+    }
+
+    @Test
+    void theProbesOptionsKeepTheAppsVisitUnlessAskedAndRecoverWaits() {
+        assertTrue(EscProbe.visit("read", "", "", "", "", "") == EscLink.Visit.AS_THE_APP);
+        EscLink.Visit recover = EscProbe.visit("recover", "1", "", "", "", "");
+        assertEquals(EscProbe.RECOVER_WAIT_MS, recover.firstWaitMs());
+        assertArrayEquals(new int[]{0}, recover.order());
+        assertEquals(6, recover.tries());
+        EscLink.Visit v = EscProbe.visit("spin", "4,3,2,1", "3000", "1", "100", "3");
+        assertArrayEquals(new int[]{3, 2, 1, 0}, v.order());
+        assertEquals(3000, v.firstWaitMs());
+        assertEquals(1, v.tries());
+        assertEquals(100, v.pauseMs());
+        assertEquals(3, v.passes());
+        assertEquals(-1, EscProbe.visit("read", "", "2500", "", "", "").pauseMs(), "the link's own pause");
+        assertThrows(IllegalArgumentException.class, () -> EscProbe.visit("read", "", "soon", "", "", ""));
+        assertThrows(IllegalArgumentException.class, () -> EscProbe.visit("read", "", "", "0", "", ""));
+    }
+
+    @Test
+    void theProbeShowsWhatAnAm32sHeaderSays() {
+        FakeEscBoard board = new FakeEscBoard();
+        FakeEscBoard.Esc e = board.am32(2, 17);
+        e.memory[0x7C00 + 46] = 4;
+        e.memory[0x7C00 + 36] = 1;
+        assertEquals("bootloader 13, settings layout 2, input EDT arming (4), low-voltage cut-off on, direction normal, 3D off, "
+                + "sine start off, telemetry interval 0", EscProbe.am32Details(e.bytes(0x7C00, EscFirmware.AM32_SETTINGS)));
+        assertEquals("", EscProbe.am32Details(new byte[10]));
+        assertEquals("", EscProbe.am32Details(null));
+    }
 }

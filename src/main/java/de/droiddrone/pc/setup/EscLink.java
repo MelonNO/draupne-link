@@ -53,12 +53,66 @@ public final class EscLink implements AutoCloseable {
         }
     }
 
+    /**
+     * How a by-hand visit asks the ESCs (F-080, EscProbe's -Porder -PfirstWaitMs -Ptries -PpauseMs -Ppasses). The
+     * app's own read is {@link #infoAll()}, which never uses this.
+     * <ul>
+     * <li>order: which ESCs, in that order (0 = motor 1); null: all, in motor order</li>
+     * <li>firstWaitMs: counted from the passthrough's start, nothing is sent before it - the lines stay high, so
+     * each ESC has the time to give up on the lost signal and fall into its bootloader by itself (AM32: 0.5 s when
+     * armed, 2 s when not)</li>
+     * <li>tries: connects of each ESC in one pass; pauseMs: between them (below 0: the link's own, 250 ms)</li>
+     * <li>passes: rounds over the ESCs that have not answered yet</li>
+     * <li>trace: a line for each connect, with the time since the passthrough began (null: none)</li>
+     * </ul>
+     */
+    public record Visit(int[] order, long firstWaitMs, int tries, long pauseMs, int passes, Consumer<String> trace) {
+        /** What {@link #infoAll()} does: every ESC in motor order, at once, six connects each, two passes. */
+        public static final Visit AS_THE_APP = new Visit(null, 0, 6, -1, 2, null);
+
+        public Visit {
+            if (firstWaitMs < 0 || tries < 1 || passes < 1) throw new IllegalArgumentException("a wait of 0 or more, 1 try and 1 pass at least");
+        }
+
+        public Visit withTrace(Consumer<String> trace) {
+            return new Visit(order, firstWaitMs, tries, pauseMs, passes, trace);
+        }
+
+        /** "4,3,2,1" (motor numbers, as Betaflight counts them) -> {3, 2, 1, 0}; blank: null (all, in motor order). */
+        public static int[] order(String text) {
+            if (text == null || text.isBlank()) return null;
+            String[] parts = text.trim().split("\\s*,\\s*");
+            int[] order = new int[parts.length];
+            boolean[] seen = new boolean[256];
+            for (int i = 0; i < parts.length; i++) {
+                int motor;
+                try {
+                    motor = Integer.parseInt(parts[i]);
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("order: motor numbers 1 - 255, like 4,3,2,1 (not \"" + parts[i] + "\")");
+                }
+                if (motor < 1 || motor > 255) throw new IllegalArgumentException("order: motor numbers 1 - 255, like 4,3,2,1 (not " + motor + ")");
+                if (seen[motor]) throw new IllegalArgumentException("order: motor " + motor + " twice");
+                seen[motor] = true;
+                order[i] = motor - 1;
+            }
+            return order;
+        }
+    }
+
+    /** An ESC the visit's order left out. */
+    public static final String NOT_ASKED = "not asked";
+
     private final BetaflightUsb.Wire wire;
     private final int count;
     private final Consumer<String> log;
     private final byte[] in = new byte[512];
     private int inAt, inLen;
     private boolean closed;
+    /** When the passthrough began (Betaflight answered MSP_SET_PASSTHROUGH): a visit's clock. */
+    private final long openedAt = System.nanoTime();
+    /** What {@link #info} read of each ESC's settings, as read (null: not read) - for the by-hand probe. */
+    final byte[][] settingsRead;
     /** Between tries of a command, ms. Tests: 0. */
     static long RETRY_PAUSE_MS = 250;
     long retryPauseMs = RETRY_PAUSE_MS;
@@ -66,8 +120,14 @@ public final class EscLink implements AutoCloseable {
     EscLink(BetaflightUsb.Wire wire, int count, Consumer<String> log) {
         this.wire = wire;
         this.count = count;
+        this.settingsRead = new byte[Math.max(0, count)][];
         this.log = log == null ? s -> {
         } : log;
+    }
+
+    /** Milliseconds since the passthrough began. */
+    long msSinceStart() {
+        return (System.nanoTime() - openedAt) / 1_000_000;
     }
 
     /** The port is back with MSP. */
@@ -102,14 +162,96 @@ public final class EscLink implements AutoCloseable {
         return all;
     }
 
+    /**
+     * As {@link #infoAll()}, asked the way v says (F-080 tries, by hand; the app does not use this): which ESCs in
+     * which order, a wait before the first byte to any of them, how many connects. An ESC left out of the order is
+     * in the list as {@link #NOT_ASKED}. Interrupted: what was read so far.
+     */
+    public List<EscFirmware.Info> infoAll(Visit v) {
+        List<EscFirmware.Info> all = new ArrayList<>();
+        for (int i = 0; i < count; i++) all.add(EscFirmware.Info.failed(i, NOT_ASKED));
+        int[] order = v.order();
+        if (order == null) {
+            order = new int[count];
+            for (int i = 0; i < count; i++) order[i] = i;
+        }
+        long pauseMs = v.pauseMs() < 0 ? retryPauseMs : v.pauseMs();
+        boolean[] done = new boolean[count];
+        try {
+            if (v.firstWaitMs() > 0) trace(v, "nothing sent until " + seconds(v.firstWaitMs()) + " (the ESC lines held high)");
+            for (long left; (left = v.firstWaitMs() - msSinceStart()) > 0; ) pause(left);
+            for (int pass = 0; pass < v.passes(); pass++) {
+                for (int esc : order) {
+                    if (esc >= count) {
+                        if (pass == 0) trace(v, "ESC " + (esc + 1) + ": Betaflight has only " + count + " motor outputs - skipped");
+                        continue;
+                    }
+                    if (done[esc]) continue;
+                    try {
+                        all.set(esc, read(esc, connect(esc, v, pass, pauseMs)));
+                        done[esc] = all.get(esc).problem() == null;
+                    } catch (IOException e) {
+                        if (Thread.currentThread().isInterrupted()) throw e;
+                        all.set(esc, EscFirmware.Info.failed(esc, EscFirmware.NO_ANSWER));
+                        if (pass == v.passes() - 1) log.accept("ESC " + (esc + 1) + ": " + e.getMessage());
+                    }
+                }
+            }
+        } catch (IOException interrupted) {
+            trace(v, "interrupted");
+        }
+        return all;
+    }
+
+    /** One pass's connects of one ESC, each with its own line in v's trace. */
+    private Device connect(int esc, Visit v, int pass, long pauseMs) throws IOException {
+        IOException last = null;
+        for (int t = 0; t < v.tries(); t++) {
+            if (t > 0) pause(pauseMs);
+            long at = msSinceStart();
+            String what = "ESC " + (esc + 1) + " connect (pass " + (pass + 1) + ", try " + (t + 1) + ")";
+            try {
+                Device d = init(esc, 1);
+                trace(v, at, what + ": answered, " + String.format("%04X mode %d", d.signature(), d.mode()));
+                return d;
+            } catch (Refused | java.io.InterruptedIOException e) { // not in its bootloader (yet), noise on the line
+                if (Thread.currentThread().isInterrupted()) throw e;
+                trace(v, at, what + ": " + e.getMessage());
+                last = e;
+            }
+        }
+        throw last;
+    }
+
+    private void trace(Visit v, String line) {
+        trace(v, msSinceStart(), line);
+    }
+
+    private static void trace(Visit v, long atMs, String line) {
+        if (v.trace() != null) v.trace().accept("+" + seconds(atMs) + " " + line);
+    }
+
+    private static String seconds(long ms) {
+        return String.format(java.util.Locale.ROOT, "%.3f s", ms / 1000.0);
+    }
+
     /** Which firmware ESC esc (0 = motor 1) runs, and its beacon delay. Reads only. */
     public EscFirmware.Info info(int esc) throws IOException {
-        Device d = init(esc);
+        return read(esc, init(esc));
+    }
+
+    /** The firmware and beacon of the ESC the interface is connected to now (d: what its bootloader said). */
+    private EscFirmware.Info read(int esc, Device d) throws IOException {
         EscFirmware.Chip chip = EscFirmware.chip(d.signature(), d.mode());
         if (chip == null) return EscFirmware.Info.failed(esc, String.format("ESC chip not known (%04X, mode %d)", d.signature(), d.mode()));
-        if (!chip.silabs()) return EscFirmware.arm(esc, chip, readBytes(chip.settingsAt(), EscFirmware.AM32_SETTINGS));
-        byte[] settings = readBytes(chip.settingsAt(), EscFirmware.SILABS_SETTINGS);
+        if (!chip.silabs()) return EscFirmware.arm(esc, chip, kept(esc, readBytes(chip.settingsAt(), EscFirmware.AM32_SETTINGS)));
+        byte[] settings = kept(esc, readBytes(chip.settingsAt(), EscFirmware.SILABS_SETTINGS));
         return EscFirmware.silabs(esc, chip, settings, jesc(settings));
+    }
+
+    private byte[] kept(int esc, byte[] settings) {
+        if (esc >= 0 && esc < settingsRead.length) settingsRead[esc] = settings;
+        return settings;
     }
 
     /** JESC says its name in the firmware itself, and only a nameless BLHeli_S is asked. */
@@ -200,7 +342,11 @@ public final class EscLink implements AutoCloseable {
 
     /** Connects the interface to ESC esc's bootloader; an ESC just sent there may need a few tries. */
     public Device init(int esc) throws IOException {
-        byte[] p = command(INIT_FLASH, 0, new byte[]{(byte) esc}, 3000, 6);
+        return init(esc, 6);
+    }
+
+    private Device init(int esc, int tries) throws IOException {
+        byte[] p = command(INIT_FLASH, 0, new byte[]{(byte) esc}, 3000, tries);
         if (p.length < 4) throw new IOException("ESC " + (esc + 1) + ": short answer from the interface");
         return new Device((p[1] & 0xff) << 8 | p[0] & 0xff, p[3] & 0xff);
     }

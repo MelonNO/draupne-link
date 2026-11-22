@@ -268,10 +268,10 @@ tasks.register('mapProbe', JavaExec) {
 // By hand on a real drone, battery on, props off: the ESCs' firmware and beacon (-Pesc=silence switches the beacons off).
 tasks.register('escProbe', JavaExec) {
     group = 'verification'
-    description = "Reads the ESCs of the flight controller on USB (-Pesc=silence: beacon off; -Pport=COM9)"
+    description = "Reads the ESCs of the flight controller on USB (-Pesc=silence: beacon off; -Pport=COM9; F-080 tries: -Porder=4,3,2,1 -PfirstWaitMs=3000 -Ptries=6 -PpauseMs=250 -Ppasses=2, -Pesc=recover)"
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'de.droiddrone.pc.setup.EscProbe'
-    args((project.findProperty('esc') ?: 'read').toString(), (project.findProperty('port') ?: '').toString())
+    args([(project.findProperty('esc') ?: 'read').toString()] + ['port', 'order', 'firstWaitMs', 'tries', 'pauseMs', 'passes'].collect { (project.findProperty(it) ?: '').toString() })
 }
 
 // By hand, on ONE real Betaflight board on USB (src/test/java/de/droiddrone/pc/setup/MspRateProbe): the PC sends what the
