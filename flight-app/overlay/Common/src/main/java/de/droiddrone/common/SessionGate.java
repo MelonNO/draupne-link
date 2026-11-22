@@ -295,7 +295,8 @@ public final class SessionGate {
      * <li>An answer that carries an older id - a try this side gave up - starts nothing on the PC (the phone has gone
      * on to the newer try's session, or will when its Connects arrive). It shows that the way there and back takes
      * longer than a try was kept: {@link #olderAnswer} keeps the id in use, and the ones after it until a session is
-     * up, half as long again as that answer took - or every answer would be an older try's by the time it came.</li>
+     * up, half as long again as that answer took - or every answer would be an older try's by the time it came. What
+     * it took is counted from the Connect it can be the answer to, never from Connects lost in a cut (F-072).</li>
      * </ul>
      */
     public static final class Ids {
@@ -303,16 +304,24 @@ public final class SessionGate {
         static final long SLOW_KEEP_MAX_MS = 5000;
         /** How long an id is kept unanswered while nothing at all is heard from the phone (F-001). */
         public static final long UNHEARD_KEEP_MS = 4000;
-        /** The ids remembered with their first send. */
+        /**
+         * F-072: nothing heard from the phone for this long, nor since the try began - its Connect goes out into the
+         * silence: a cut, as far as the PC can tell (it counts a link lost after as long).
+         */
+        static final long SILENT_MS = 2000;
+        /** The ids remembered with the Connect an answer to them is counted from. */
         private static final int PAST = 8;
         private int id;
         /** When the id was first sent, and how long it is kept unanswered. */
         private long since, keepMs;
         /** The id was a session's (or none was given out yet): the next Connect takes a new one. */
         private boolean spent = true;
-        /** The last ids given out and when each was first sent (a ring; given counts them all). */
+        /**
+         * The last ids given out (a ring; given counts them all), and for each the Connect its answer is counted from
+         * ({@link #olderAnswer}): the first of the try, or the newest of those sent into the silence.
+         */
         private final int[] pastId = new int[PAST];
-        private final long[] pastSince = new long[PAST];
+        private final long[] pastSent = new long[PAST];
         private int given;
         /** Until a session is up: every id is kept at least this long (0: no older try's answer came). */
         private long slowKeepMs;
@@ -356,8 +365,10 @@ public final class SessionGate {
                 keepMs = Math.max(Math.max(SAME_SESSION_MS, roundMs), slowKeepMs);
                 spent = false;
                 pastId[given % PAST] = id;
-                pastSince[given % PAST] = now;
+                pastSent[given % PAST] = now;
                 given++;
+            } else if (heardAt < since && now - heardAt >= SILENT_MS) {
+                pastSent[(given - 1) % PAST] = now; // F-072: into the silence - the ones before it may all be lost
             }
             return id & 0xFFFFFFFFL;
         }
@@ -371,13 +382,19 @@ public final class SessionGate {
         /**
          * An answer came that carries sessionId, not {@link #current}: if it is one of the last ids given out, the
          * answer of a try given up - the ids are kept longer from now on (see the class).
-         * @return how long ago that id was first sent, ms: the most its answer took; -1 for an id not given out
+         * <p>
+         * F-072, what the answer took: a try sends many Connects and none says which of them was answered. The phone
+         * answers the first to reach it - with the phone heard, the try's first, and from that it is counted. A Connect
+         * that went out into the silence ({@link #SILENT_MS}) may be lost with all before it, so the newest of those
+         * counts: counted from the try's first, an answer after a cut of 3.6 s had "taken" 3.6 s, the next try was kept
+         * 5 s for a slow way that was none, and when its answer was lost LINK READY came 4 s late.
+         * @return how long that answer took at most, ms, as far as this side can know; -1 for an id not given out
          * lately, or the one in use (nothing changes)
          */
         public synchronized long olderAnswer(long sessionId, long now) {
             for (int i = Math.min(given, PAST) - 1; i >= 0; i--) {
                 if ((pastId[i] & 0xFFFFFFFFL) != sessionId || pastId[i] == id) continue;
-                long took = Math.max(0, now - pastSince[i]);
+                long took = Math.max(0, now - pastSent[i]);
                 if (!spent) { // trying: learn (with a session up its own answer came in time - nothing to learn)
                     slowKeepMs = Math.max(slowKeepMs, Math.min(SLOW_KEEP_MAX_MS, took * 3 / 2));
                     keepMs = Math.max(keepMs, slowKeepMs);

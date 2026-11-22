@@ -412,6 +412,58 @@ class SessionGateIdTest {
     }
 
     @Test
+    void anAnswerAfterACutIsCountedFromTheLastConnectSentIntoTheSilence() {
+        // F-072, with the times of a run of SessionIdEndToEndTest (2026-11-21; ms into a cut both ways that ended at
+        // 5.6 s). The PC counts the link lost after 2 s and begins a try; unheard, the try is kept (F-001)
+        SessionGate.Ids ids = new SessionGate.Ids(1436);
+        long heardBeforeTheCut = 0;
+        long kept = ids.next(2062, 0, heardBeforeTheCut);
+        for (long t = 2062 + 187; t < 5614; t += 187) assertEquals(kept, ids.next(t, 0, heardBeforeTheCut), "lost in the cut, the try kept");
+        assertEquals(kept, ids.next(5614, 0, heardBeforeTheCut), "the Connect that gets through as the cut ends");
+        // the phone's picture is heard a millisecond later: the try, 3.5 s old, is given up for the next (F-001)
+        assertTrue(ids.renewDue(5677, 5615));
+        long next = ids.next(5677, 0, 5615);
+        assertEquals(kept + 1, next);
+        // the phone's answer to the kept try: 79 ms after the Connect it answers - and 3.6 s after the try began
+        assertEquals(79, ids.olderAnswer(kept, 5693), "from the last Connect sent into the silence: a cut's length is no way there and back");
+        // so the next try is kept its second and no longer (5 s before F-072): its answer lost, the one after it mends
+        assertFalse(ids.renewDue(5677 + SAME_SESSION_MS - 1, 5690));
+        assertEquals(next, ids.next(5677 + SAME_SESSION_MS - 1, 0, 5690));
+        assertTrue(ids.renewDue(5677 + SAME_SESSION_MS, 5690), "a new id a second after, the phone heard: F-001's rule");
+        assertEquals(next + 1, ids.next(5677 + SAME_SESSION_MS, 0, 5690));
+        // a try begun in a cut that ends 0.4 s later goes on for its second, the phone heard: its answer is counted
+        // from the last Connect sent into the silence - the ones after it are not the first to reach the phone
+        SessionGate.Ids young = new SessionGate.Ids(40);
+        long p = young.next(2000, 0, 0);
+        assertEquals(p, young.next(2190, 0, 0));
+        assertEquals(p, young.next(2380, 0, 0));
+        assertEquals(p, young.next(2570, 0, 2500), "heard at 2.5 s, the try half a second old: kept");
+        assertEquals(p, young.next(2950, 0, 2940));
+        assertNotEquals(p, young.next(3000, 0, 2990));
+        assertEquals(900, young.olderAnswer(p, 3280), "from the Connect of 2.38 s");
+    }
+
+    @Test
+    void anAnswerOnASlowWayIsCountedFromItsTrysFirstConnectAsBefore() {
+        // F-072 changes nothing where the phone is heard: it answers the first Connect of a try to reach it, and with
+        // the way alive that is the try's first. As ControlLink asks: the phone last heard a moment before each Connect
+        SessionGate.Ids ids = new SessionGate.Ids(7);
+        long a = ids.next(10_000, 0, 9_990);
+        for (long t = 10_150; t < 11_000; t += 150) assertEquals(a, ids.next(t, 0, t - 10));
+        long b = ids.next(11_000, 0, 10_990);
+        assertEquals(1600, ids.olderAnswer(a, 11_600), "1.6 s there and back");
+        assertEquals(b, ids.next(11_000 + 2399, 0, 13_390), "the next try kept half as long again");
+        assertNotEquals(b, ids.next(11_000 + 2400, 0, 13_390));
+        // nor where the phone is heard seldom (standby: once a second): not heard since the try began is no silence
+        // yet - the PC itself counts a link lost after 2 s
+        SessionGate.Ids seldom = new SessionGate.Ids(7);
+        long c = seldom.next(20_000, 0, 19_900);
+        for (long t = 20_150; t < 21_000; t += 150) assertEquals(c, seldom.next(t, 0, t < 20_900 ? 19_900 : 20_900));
+        seldom.next(21_000, 0, 20_900);
+        assertEquals(1600, seldom.olderAnswer(c, 21_600));
+    }
+
+    @Test
     void aSlowPathsRoundIsOneSession() {
         // 1.6 s there and back: the round's Connects (0.6 s of them) reach the phone 0.8 s late, and the answer is
         // back before the next round - one session, where the clock's rule made the Connects after a second another

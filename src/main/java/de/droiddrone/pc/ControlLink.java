@@ -1168,7 +1168,7 @@ public class ControlLink {
         if (trying && id != sessionIds.current()) {
             long took = sessionIds.olderAnswer(id, now);
             if (++olderAnswers <= OLDER_ANSWERS_DROPPED) {
-                log("Connect: the answer to an older try came" + (took < 0 ? "" : ", " + took + " ms after it began") + " - waiting for this try's.");
+                log("Connect: the answer to an older try came" + (took < 0 ? "" : ", " + took + " ms after its Connect") + " - waiting for this try's.");
                 return true;
             }
             log("Connect: the third late answer in a row - taken (a very slow way to the phone).");

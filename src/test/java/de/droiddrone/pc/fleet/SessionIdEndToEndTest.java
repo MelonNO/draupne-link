@@ -13,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import java.net.InetAddress;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -122,10 +124,29 @@ class SessionIdEndToEndTest {
         private volatile boolean open;
         /** The try whose Connects are going by (the wire's thread to the phone): its id, and when its first one came. */
         private long tryId = SessionGate.NO_ID, trySince;
-        /** The try whose Connect ended the cut, how long that try's answer is held on its way back, and until when. */
-        private volatile long endedOn = SessionGate.NO_ID, answerHeldMs, heldUntil;
+        /** The try whose Connect ended the cut and when it did, how long that try's answer is held on its way back, and until when. */
+        private volatile long endedOn = SessionGate.NO_ID, endedAt, answerHeldMs, heldUntil;
         /** The tries that have reached the phone since the cut ended, in order. */
         final List<Long> reachedThePhone = new CopyOnWriteArrayList<>();
+        /** When each try's first Connect came by, lost or not: when the PC began it. */
+        private final Map<Long, Long> began = new ConcurrentHashMap<>();
+        /** F-072: the next try waits for the answer to the one the cut ended on, which has come by or not; that next try's answers to lose. */
+        private volatile boolean nextTryWaits, answered;
+        private volatile int answersToLose;
+
+        long began(long id) {
+            return began.get(id);
+        }
+
+        /**
+         * F-072's order of things, with {@link End#ON_THE_TRY_IN_HAND}: the PC's next try reaches the phone only once
+         * the phone's answer to the try in hand is on the wire (the phone sends it only if it gets to it before a
+         * newer try's Connect is there), and the phone's first answer to that next try is lost on its way back.
+         */
+        void theNextTrysAnswerIsLost() {
+            nextTryWaits = true;
+            answersToLose = 1;
+        }
 
         /**
          * From now on the cut ends
@@ -151,6 +172,12 @@ class SessionIdEndToEndTest {
                 if (!open) return Wire.Rule.LOST;
                 if (!connect) return 0;
                 long id = SessionGate.sessionId(d, len), held = id == endedOn ? answerHeldMs : 0;
+                if (id == endedOn) answered = true;
+                if (id != endedOn && answersToLose > 0) {
+                    answersToLose--; // this thread's alone once the cut has ended
+                    say("the phone's answer to try " + id + ", lost");
+                    return Wire.Rule.LOST;
+                }
                 if (held > 0) heldUntil = MonoClock.ms() + held;
                 say("the phone's answer to try " + id + (held > 0 ? ", held " + held + " ms" : ""));
                 return held;
@@ -161,21 +188,24 @@ class SessionIdEndToEndTest {
             if (first) {
                 tryId = id;
                 trySince = now;
+                began.put(id, now);
             }
             if (!open) {
                 End e = end;
                 boolean inHand = !first && now - trySince >= SessionGate.SAME_SESSION_MS + 500;
                 if (e == End.ON_A_NEW_TRY && first || e == End.ON_THE_TRY_IN_HAND && inHand) {
                     endedOn = id;
+                    endedAt = now;
                     open = true;
                     say("the cut ends on " + (first ? "the first Connect of try " + id : "a Connect of try " + id + ", " + (now - trySince) + " ms old"));
                 }
             }
-            if (open && !reachedThePhone.contains(id)) {
+            if (!open || id != endedOn && nextTryWaits && !answered) return Wire.Rule.LOST;
+            if (!reachedThePhone.contains(id)) {
                 reachedThePhone.add(id);
-                if (id != endedOn) say("the first Connect of try " + id);
+                if (id != endedOn) say("the first Connect of try " + id + " to reach the phone, " + (now - began(id)) + " ms after the try began");
             }
-            return open ? 0 : Wire.Rule.LOST;
+            return 0;
         }
 
         private void say(String what) {
@@ -238,6 +268,36 @@ class SessionIdEndToEndTest {
         assertEquals((tries.get(0) + 1) & 0xFFFFFFFFL, tries.get(1), "the PC's very next try");
         assertEquals(3, drone.sessions(), "a session for each of the two tries on the phone, none more" + said());
         assertEquals(2, link.getSessionStarts(), "one start on the PC: the older try's answer started nothing" + said());
+        assertBothSidesAreInOneSession();
+    }
+
+    /**
+     * F-072: the phone's answer to the try kept through a cut comes when the PC has gone on to the next - an older
+     * try's answer, and those are counted for how slow the way is (on a slow way the tries are kept longer). This one
+     * took 0.4 s from the Connect it answers; the try it belongs to began 3.5 s earlier, in the cut, and counted from
+     * there the next try was kept 5 s. With that try's answer lost - the case a try's second is there for - the PC
+     * begins the one after a second later, as F-001's rule has it, and LINK READY is there 1.25 s after the link came
+     * back, not 5.3 s.
+     */
+    @Test
+    void anAnswerAfterACutIsNotTakenForASlowWay() throws Exception {
+        start(false, false);
+        cutUntilBothSidesLetGo();
+        cut.theNextTrysAnswerIsLost();
+        cut.endOn(End.ON_THE_TRY_IN_HAND, 300);
+        waitFor(() -> link.getState() == ControlLink.State.READY && drone.sessions() >= 2, 12_000, "the link back", log);
+        long readyAfter = MonoClock.ms() - cut.endedAt;
+        Thread.sleep(1500); // nothing more comes of the Connects that were in flight
+        List<Long> tries = cut.reachedThePhone;
+        assertEquals(3, tries.size(), "the try in hand, the one begun on hearing the phone, the one after its answer was lost: " + tries + said());
+        assertEquals((tries.get(0) + 1) & 0xFFFFFFFFL, tries.get(1), "the PC's tries, one after the other");
+        assertEquals((tries.get(1) + 1) & 0xFFFFFFFFL, tries.get(2));
+        long kept = cut.began(tries.get(2)) - cut.began(tries.get(1));
+        assertTrue(kept >= SessionGate.SAME_SESSION_MS - 100 && kept < 2 * SessionGate.SAME_SESSION_MS,
+                "the try whose answer was lost was kept a second - the cut's length is no slow way: " + kept + " ms" + said());
+        assertTrue(readyAfter < 3000, "LINK READY a second and a way there and back after the link came back, not five: " + readyAfter + " ms" + said());
+        assertEquals(4, drone.sessions(), "a session on the phone for each of the three tries, none more" + said());
+        assertEquals(2, link.getSessionStarts(), "one start on the PC" + said());
         assertBothSidesAreInOneSession();
     }
 
