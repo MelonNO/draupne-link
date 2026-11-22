@@ -99,8 +99,12 @@ function Invoke-Suite([string]$task, [string]$what, [string]$logName = '', [int]
 # into an error of its own, and Java prints one at each start.
 function Invoke-Gradle([string[]]$gradleArgs, [string]$log, [int]$killAfterMin = 0) {
     if ($killAfterMin -le 0) {
-        $p = Start-Process -FilePath $gradle -ArgumentList $gradleArgs -WorkingDirectory $repo -NoNewWindow -Wait -PassThru `
+        # WaitForExit, not Start-Process -Wait: -Wait waits for every process gradlew started too, and a Gradle daemon
+        # gradlew starts lives on for hours after the build - the run then never came back (seen 2026-11-22, twice).
+        $p = Start-Process -FilePath $gradle -ArgumentList $gradleArgs -WorkingDirectory $repo -NoNewWindow -PassThru `
             -RedirectStandardOutput $log -RedirectStandardError ($log + '.err')
+        $h = $p.Handle   # kept, or the exit code is lost once it has ended
+        $p.WaitForExit()
         return $p.ExitCode
     }
     # A part of the night gets its time and no more: a scenario that hangs must not take the rest of the night with it.
