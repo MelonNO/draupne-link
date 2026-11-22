@@ -26,9 +26,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p>
  * Seen on 4.4.1 (2026-11-22): the stick frames stop; RXLOSS a tenth of a second later; for 20 s nothing else - armed,
  * every motor where the held throttle put it (stage 1); then stage 2, GPS rescue, which without a GPS fix gives up at
- * once: the motors drop to rest and the board disarms within a tenth of a second, FAILSAFE among its arming blocks. The
- * rescue never runs a motor up. Sticks back with the ARM switch off: the failsafe lets go a second or two later.
- * Every change, with its time after the last stick frame, is in the film's failsafe-timeline.tsv.
+ * once and the board disarms within a tenth of a second, FAILSAFE among its arming blocks. In that tenth the rescue
+ * may have run every motor up to its hover throttle (gps_rescue_throttle_hover): seen in one run of two, 1290 for at
+ * most 0.09 s where 1100 was held - so around stage 2 the motors are read as fast as they answer, and the run-up, if
+ * any, is said and timed: it has to be in stage 2 and over with the disarm within half a second. Sticks back with the
+ * ARM switch off: the failsafe lets go two seconds later. Every change, with its time after the last stick frame, is
+ * in the film's failsafe-timeline.tsv.
  */
 @Tag("sitl")
 class SitlFailsafeScenario {
@@ -54,8 +57,17 @@ class SitlFailsafeScenario {
     }
 
     private static Look look(SitlLink link, int[] boxIds, long sinceNs) throws Exception {
+        return look(link, boxIds, sinceNs, true);
+    }
+
+    /** withPhase false: two questions instead of three (the phase reads "-"), for looking as often as can be. */
+    private static Look look(SitlLink link, int[] boxIds, long sinceNs, boolean withPhase) throws Exception {
         byte[] status = link.ask(Msp.STATUS, null, 1000);
         int[] motors = Arrays.copyOf(Msp.motors(link.ask(Msp.MOTOR, null, 1000)), 4);
+        if (!withPhase) {
+            return new Look((System.nanoTime() - sinceNs) / 1e9, Msp.armed(status), Msp.armingDisableFlags(status), Msp.modeFlag(status, index(boxIds, GPS_RESCUE_BOX)),
+                    Msp.modeFlag(status, index(boxIds, FAILSAFE_BOX)), motors, "-");
+        }
         byte[] debug = link.ask(Sitl.DEBUG, null, 1000);
         int phase = debug.length >= 8 ? (short) Msp.u16(debug, 6) : -1;
         return new Look((System.nanoTime() - sinceNs) / 1e9, Msp.armed(status), Msp.armingDisableFlags(status), Msp.modeFlag(status, index(boxIds, GPS_RESCUE_BOX)),
@@ -83,6 +95,11 @@ class SitlFailsafeScenario {
             check(Sitl.startedVersion().isEmpty() || Sitl.startedVersion().equals(version), "the Betaflight that answers is the one the run started (" + Sitl.startedVersion() + "): " + version);
             film.add("set up as the drone is: " + String.join("; ", Sitl.likeTheDrone(100, film::remark)), null, "sitl", "saved; Betaflight restarted");
 
+            String hover;
+            try (BetaflightUsb fc = Sitl.open(film::remark)) {
+                fc.enterCli();
+                hover = fc.command("get gps_rescue_throttle_hover").replaceAll("(?s).*?=\\s*(\\d+).*", "$1");
+            } // left with "exit": Betaflight restarts
             int[] boxIds;
             String blocks;
             try (BetaflightUsb fc = Sitl.open(film::remark)) {
@@ -113,18 +130,25 @@ class SitlFailsafeScenario {
 
                 // ---- the sticks stop, as a receiver that lost its radio
                 long cut = link.stopSticks();
-                Double rxLoss = null, stage2 = null, disarmed = null, failsafeBlock = null;
+                Double rxLoss = null, stage2 = null, disarmed = null, failsafeBlock = null, runUpFrom = null, runUpTo = null;
                 boolean heldThroughStage1 = true, armedThroughStage1 = true;
                 int highest = 0;
                 String last = "";
                 long end = System.currentTimeMillis() + 27_000;
                 while (System.currentTimeMillis() < end) {
-                    Look l = look(link, boxIds, cut);
+                    // around stage 2's start nothing but the status and the motors, as fast as they answer (about 20 ms a look)
+                    double at = (System.nanoTime() - cut) / 1e9;
+                    boolean close = at > 19.0 && at < 22.0;
+                    Look l = look(link, boxIds, cut, !close);
                     if (!l.key().equals(last)) {
                         timeline.add(l.line());
                         last = l.key();
                     }
                     for (int m : l.motors()) highest = Math.max(highest, m);
+                    if (l.armed() && Arrays.stream(l.motors()).anyMatch(m -> m > held + 3)) {
+                        if (runUpFrom == null) runUpFrom = l.s();
+                        runUpTo = l.s();
+                    }
                     if (rxLoss == null && (l.flags() >> Msp.ARMING_DISABLED_RXLOSS_BIT & 1) != 0) rxLoss = l.s();
                     boolean inStage2 = l.rescue() || l.phase().equals("GPS_RESCUE") || l.phase().equals("LANDED") || l.phase().equals("RX_LOSS_MONITORING") || !l.armed();
                     if (stage2 == null && inStage2) stage2 = l.s();
@@ -135,7 +159,7 @@ class SitlFailsafeScenario {
                     if (disarmed == null && !l.armed()) disarmed = l.s();
                     if (failsafeBlock == null && (l.flags() >> Msp.ARMING_DISABLED_FAILSAFE_BIT & 1) != 0) failsafeBlock = l.s();
                     if (disarmed != null && l.s() > disarmed + 1.5) break;
-                    Sitl.pause(40);
+                    if (!close) Sitl.pause(40);
                 }
                 Look after = look(link, boxIds, cut);
                 timeline.add(after.line());
@@ -144,7 +168,12 @@ class SitlFailsafeScenario {
                 check(armedThroughStage1 && heldThroughStage1, "stage 1 (failsafe_delay): armed, every motor held where the throttle was (" + held + ") until stage 2");
                 check(stage2 != null && stage2 >= 19.5 && stage2 <= 21.5, "stage 2 begins about 20 s (failsafe_delay 200) after the last stick frame: " + seconds(stage2));
                 check(disarmed != null && stage2 != null && disarmed - stage2 <= 1.0, "GPS rescue with no GPS fix disarms at once: " + seconds(disarmed) + " (stage 2 at " + seconds(stage2) + ")");
-                check(highest <= held + 3, "no motor ever ran above the held throttle after the sticks stopped (the rescue never ran the motors up): highest " + highest);
+                String runUp = runUpFrom == null ? "no motor ever above the held throttle (highest " + highest + ")"
+                        : String.format(Locale.ROOT, "THE RESCUE RAN THE MOTORS UP: to %d (gps_rescue_throttle_hover %s), seen from %.2f to %.2f s - each look is about 20 ms",
+                        highest, hover, runUpFrom, runUpTo);
+                film.remark(runUp);
+                check(runUpFrom == null || stage2 != null && disarmed != null && runUpFrom >= stage2 - 0.01 && runUpTo < disarmed && disarmed - runUpFrom <= 0.5,
+                        "a run-up of the motors, if any, only in stage 2 and over with the disarm within half a second: " + runUp);
                 check(!after.armed() && Arrays.stream(after.motors()).allMatch(m -> m <= REST), "afterwards: disarmed, every motor at rest " + Arrays.toString(after.motors()));
                 check(failsafeBlock != null, "FAILSAFE is among its arming blocks after it: " + Msp.armingBlocks(after.flags()));
 
@@ -159,9 +188,8 @@ class SitlFailsafeScenario {
                 check(free.flags() == 0 && !free.armed() && free.phase().equals("IDLE"), "sticks back, ARM off: the failsafe lets go after " + seconds(free.s())
                         + " (" + Msp.armingBlocks(free.flags()) + ", phase " + free.phase() + ")");
                 film.remark(String.format(Locale.ROOT, "SEEN on Betaflight %s as a program: the sticks stopped; RXLOSS after %s; stage 1 for %s, armed, motors held at %d; "
-                                + "stage 2 (GPS rescue, no GPS fix) at %s; disarmed at %s, motors at rest; FAILSAFE block at %s; the rescue never ran a motor up (highest %d); "
-                                + "sticks back with ARM off: free again after %s.", version, seconds(rxLoss), seconds(stage2), held, seconds(stage2), seconds(disarmed),
-                        seconds(failsafeBlock), highest, seconds(free.s())));
+                                + "stage 2 (GPS rescue, no GPS fix) at %s; %s; disarmed at %s, motors at rest; FAILSAFE block at %s; sticks back with ARM off: free again after %s.",
+                        version, seconds(rxLoss), seconds(stage2), held, seconds(stage2), runUp, seconds(disarmed), seconds(failsafeBlock), seconds(free.s())));
                 link.stopSticks();
             }
         } catch (Exception e) {
