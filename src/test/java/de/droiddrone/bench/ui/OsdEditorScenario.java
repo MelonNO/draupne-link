@@ -67,7 +67,7 @@ class OsdEditorScenario {
         });
     }
 
-    /** "23 / 40 ON" over the list: {on, all}; null when it is not there. */
+    /** "23 / 41 ON" over the list: {on, all}; null when it is not there. */
     private static int[] count(Ui ui) {
         for (String t : ui.texts()) {
             Matcher m = COUNT.matcher(t);

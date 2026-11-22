@@ -42,6 +42,7 @@ final class OsdDataBuilder {
      * @param awaitingWake 1.0.64: PILOT UAV waits for a sleeping phone (the link not READY since)
      * @param wakeInMs until its next check-in; -1: it listens all along, or unknown
      * @param tier the video tier now, or null (watching: the pilot PC's isn't known here)
+     * @param linkHistory I-011: the link's last 30 s (LINK HISTORY), handed on as it is; null none
      */
     record In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
               FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
@@ -50,7 +51,22 @@ final class OsdDataBuilder {
               ControlLink.PilotView pilotView, String pilotLeft, int ping, boolean fcLost, FcTelemetry telemetry,
               VideoPipeline.Stats stats, boolean invertPitch, boolean recording, boolean spectatorPaused,
               boolean linkStalled, boolean relayed, long now, boolean awaitingWake, long wakeInMs, ControlLink.Tier tier,
-              boolean neverUp) {
+              boolean neverUp, LinkHistory linkHistory) {
+        /** Up to 1.0.71: no link history. */
+        In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
+           FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
+           long msSinceInputChanged, RcSession.Banner resume, boolean frozenStopped, boolean armSwitchUnknown,
+           String rcWaiting, short[] channels, boolean standbyWanted, int lagMs, String linkHint,
+           ControlLink.PilotView pilotView, String pilotLeft, int ping, boolean fcLost, FcTelemetry telemetry,
+           VideoPipeline.Stats stats, boolean invertPitch, boolean recording, boolean spectatorPaused,
+           boolean linkStalled, boolean relayed, long now, boolean awaitingWake, long wakeInMs, ControlLink.Tier tier,
+           boolean neverUp) {
+            this(spectator, watchOnly, ready, hasStream, sincePicture, sinceStreamStart, status, phoneState, session, rcEnabled,
+                    msSinceInputChanged, resume, frozenStopped, armSwitchUnknown, rcWaiting, channels, standbyWanted, lagMs, linkHint,
+                    pilotView, pilotLeft, ping, fcLost, telemetry, stats, invertPitch, recording, spectatorPaused, linkStalled, relayed,
+                    now, awaitingWake, wakeInMs, tier, neverUp, null);
+        }
+
         /** Up to F-019: the link of this connection taken as up before. */
         In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
            FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
@@ -176,6 +192,6 @@ final class OsdDataBuilder {
                 rcWaiting, in.recording(), banner, spectator && !in.watchOnly(),
                 sticksAge, armUnknown, liveBanner, spectator && in.spectatorPaused(), relayed,
                 ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS, lostText,
-                waking, spectator || !in.ready() ? null : tierTag(in.tier()));
+                waking, spectator || !in.ready() ? null : tierTag(in.tier()), null, in.linkHistory());
     }
 }

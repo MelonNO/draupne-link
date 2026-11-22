@@ -51,7 +51,9 @@ enum OsdElement {
     CLOCK("clock", "Clock", "This PC's time of day.", false, 0.5, y(110), true, true),
     STICKS_LEFT("sticksLeft", "Left stick", "Left stick (mode 2: throttle and yaw).", false, 560 / 1280.0, y(600), true, true),
     STICKS_RIGHT("sticksRight", "Right stick", "Right stick (mode 2: pitch and roll).", false, 720 / 1280.0, y(600), true, true),
-    G2G("g2g", "Picture delay", "Camera to screen, estimated. Needs phone app pc.53.", false, right(), y(218), true, true);
+    G2G("g2g", "Picture delay", "Camera to screen, estimated. Needs phone app pc.53.", false, right(), y(218), true, true),
+    // I-011: under the picture delay; y is its label's baseline, the strip under it
+    LINK_HISTORY("linkHistory", "Link history", "Ping (line) and lost video frames (marks), the last 30 s.", false, right(), y(244), true, true);
 
     final String key;
     final String title;

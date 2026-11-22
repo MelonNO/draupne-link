@@ -229,6 +229,117 @@ class OsdLayoutTest {
         return seen.entrySet().stream().max(Map.Entry.comparingByValue()).orElseThrow().getKey();
     }
 
+    /** I-011: LINK HISTORY is an extra - off until turned on - and where it stands is saved and read back. */
+    @Test
+    void theLinkHistoryIsOffUntilTurnedOnAndItsPlaceIsSaved() {
+        assertFalse(OsdElement.LINK_HISTORY.defaultOn);
+        assertFalse(OsdLayout.defaults().isOn(OsdElement.LINK_HISTORY), "off by default");
+        assertFalse(OsdLayout.load(k -> null).isOn(OsdElement.LINK_HISTORY), "and for settings saved before it existed");
+        assertEquals("linkHistory", OsdElement.LINK_HISTORY.key);
+        assertEquals(OsdLayout.Align.RIGHT, OsdLayout.defaults().get(OsdElement.LINK_HISTORY).align());
+        OsdLayout on = OsdLayout.defaults().with(OsdElement.LINK_HISTORY, new OsdLayout.Placement(true, 0.7, 0.4));
+        Map<String, String> file = new HashMap<>(on.toSettings());
+        assertEquals("on,0.70000,0.40000", file.get("osd.linkHistory"));
+        OsdLayout back = OsdLayout.load(file::get);
+        assertTrue(back.isOn(OsdElement.LINK_HISTORY), "read back on");
+        assertEquals(0.7, back.get(OsdElement.LINK_HISTORY).x(), 1e-5);
+        assertEquals(0.4, back.get(OsdElement.LINK_HISTORY).y(), 1e-5);
+        file.put("osd.linkHistory", "off,0.70000,0.40000");
+        assertFalse(OsdLayout.load(file::get).isOn(OsdElement.LINK_HISTORY), "and off again");
+    }
+
+    /**
+     * I-011: drawn when on - the ping as a line in the LINK figure's colours (green near the link's usual, yellow and
+     * red over it; without a usual yet by 80 / 150 ms), higher for a longer ping, and the lost frames as marks under it.
+     */
+    @Test
+    void theLinkHistoryDrawsThePingInTheLinksColoursAndTheLossAsMarks() {
+        long now = de.droiddrone.pc.MonoClock.ms();
+        Strip good = strip(history(now, 50, 40, 0, 0), true);
+        assertNotNull(good.bounds, "drawn when on");
+        assertTrue(new Rectangle2D.Double(0, 0, 1920, 1080).contains(good.bounds), "inside the picture: " + good.bounds);
+        assertTrue(good.green > 100 && good.yellow == 0 && good.red == 0, "near the usual: green only - " + good);
+        Strip bad = strip(history(now, 260, 40, 0, 0), true);
+        assertTrue(bad.red > 100 && bad.green == 0 && bad.yellow == 0, "150 ms over the usual: red - " + bad);
+        assertTrue(bad.redY < good.greenY - 10, "a longer ping stands higher: " + bad.redY + " over " + good.greenY);
+        Strip noUsual = strip(history(now, 100, -1, 0, 0), true);
+        assertTrue(noUsual.yellow > 100 && noUsual.red == 0, "no usual yet: over 80 ms yellow - " + noUsual);
+        // frames lost every 2 s, damaged every 3 s: red and yellow marks under a green line
+        Strip marked = strip(history(now, 50, 40, 30, 20), true);
+        assertTrue(marked.red > 0 && marked.yellow > 0, "marks for the frames lost and damaged: " + marked);
+        assertTrue(marked.redY > marked.greenY, "under the line: " + marked.redY + " under " + marked.greenY);
+        assertNull(strip(history(now, 50, 40, 0, 0), false).bounds, "off: not drawn");
+        assertNull(strip(null, true).bounds, "nothing to draw from (an observation tile): not drawn");
+    }
+
+    /** I-011: turned on beside the standard OSD, nothing stands where it is drawn. */
+    @Test
+    void theLinkHistoryHasItsOwnPlace() {
+        OsdLayout on = OsdLayout.defaults()
+                .with(OsdElement.LINK_HISTORY, new OsdLayout.Placement(true, OsdElement.LINK_HISTORY.defaultX, OsdElement.LINK_HISTORY.defaultY))
+                .with(OsdElement.G2G, new OsdLayout.Placement(true, OsdElement.G2G.defaultX, OsdElement.G2G.defaultY));
+        Map<OsdElement, Rectangle2D> all = new EnumMap<>(OsdElement.class);
+        BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        new OsdRenderer().paint(g, 0, 0, 1280, 720, new OsdPreview().data(), on, all);
+        g.dispose();
+        Rectangle2D strip = all.get(OsdElement.LINK_HISTORY);
+        assertNotNull(strip, "the editor's sample draws it");
+        assertTrue(strip.getWidth() > 140 && strip.getHeight() > 25 && strip.getMaxX() <= 1280 - 10, "a thin strip at the right edge: " + strip);
+        for (Map.Entry<OsdElement, Rectangle2D> e : all.entrySet()) {
+            if (e.getKey() == OsdElement.LINK_HISTORY || !e.getKey().movable || e.getKey() == OsdElement.WARNINGS) continue;
+            assertFalse(e.getValue().intersects(strip), e.getKey() + " under the link history: " + e.getValue());
+        }
+    }
+
+    /** 30 s of ticks at one ping; frames lost every lostEvery ticks and damaged every damagedEvery (0: none). */
+    private static LinkHistory history(long now, int ping, int baseline, int damagedEvery, int lostEvery) {
+        LinkHistory h = new LinkHistory();
+        long damaged = 0, lost = 0;
+        for (int i = 0; i < 300; i++) {
+            if (damagedEvery > 0 && i % damagedEvery == damagedEvery - 1) damaged++;
+            if (lostEvery > 0 && i % lostEvery == lostEvery - 1) lost++;
+            h.add(now - (299 - i) * 100L, ping, baseline, damaged, lost, false);
+        }
+        return h;
+    }
+
+    /** What the element drew at 1080p with nothing else on: its bounds, and its pixels by the three colours. */
+    private record Strip(Rectangle2D bounds, int green, int yellow, int red, double greenY, double redY) {
+    }
+
+    private static Strip strip(LinkHistory h, boolean on) {
+        OsdLayout only = OsdLayout.defaults();
+        for (OsdElement e : OsdElement.values()) {
+            only = only.with(e, new OsdLayout.Placement(on && e == OsdElement.LINK_HISTORY, only.get(e).x(), only.get(e).y()));
+        }
+        OsdRenderer.Data d = new OsdRenderer.Data(true, true, 42, true, false, null, null, false, null, null, false, false, false, false, null,
+                false, null, false).withLinkHistory(h);
+        BufferedImage img = new BufferedImage(1920, 1080, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        Map<OsdElement, Rectangle2D> bounds = new EnumMap<>(OsdElement.class);
+        new OsdRenderer().paint(g, 0, 0, 1920, 1080, d, only, bounds);
+        g.dispose();
+        int green = 0, yellow = 0, red = 0;
+        double gy = 0, ry = 0;
+        int ok = Theme.OK.getRGB() & 0xffffff, warn = Theme.WARN.getRGB() & 0xffffff, bad = Theme.BAD.getRGB() & 0xffffff;
+        for (int y = 0; y < 1080; y++) {
+            for (int x = 0; x < 1920; x++) {
+                int rgb = img.getRGB(x, y) & 0xffffff;
+                if (rgb == ok) {
+                    green++;
+                    gy += y;
+                } else if (rgb == warn) {
+                    yellow++;
+                } else if (rgb == bad) {
+                    red++;
+                    ry += y;
+                }
+            }
+        }
+        return new Strip(bounds.get(OsdElement.LINK_HISTORY), green, yellow, red, green == 0 ? -1 : gy / green, red == 0 ? -1 : ry / red);
+    }
+
     /** The pilot: "Create a OSD element that is Mah/km". */
     @Test
     void mahPerKmIsTheCurrentOverTheSpeedSmoothedAndDashesWhenSlow() {

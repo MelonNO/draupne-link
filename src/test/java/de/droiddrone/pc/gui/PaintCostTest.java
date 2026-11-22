@@ -46,6 +46,49 @@ class PaintCostTest {
         assertTrue(ms < 27, "the OSD with every element: " + ms + " ms a picture");
     }
 
+    /**
+     * I-011: what LINK HISTORY adds to a 1080p OSD - the editor's sample (a link that goes bad: three colours, marks, a
+     * gap), and the worst a link can give it: every tick another colour and a mark. The strip's own cost is the paint
+     * with it less the paint without it, each the best of seven rounds taken in turn (a busy PC slows some rounds).
+     * Measured 2026-11-22 on a busy PC (a long test run beside it, this at low priority): 0.19 ms, the worst 0.38 ms.
+     */
+    @Test
+    void theLinkHistoryStripCostsWellUnderAMillisecond() {
+        OsdRenderer r = new OsdRenderer();
+        BufferedImage img = new BufferedImage(1920, 1080, BufferedImage.TYPE_INT_ARGB);
+        OsdLayout without = OsdLayout.defaults();
+        for (OsdElement e : OsdElement.values()) without = without.with(e, new OsdLayout.Placement(false, without.get(e).x(), without.get(e).y()));
+        OsdLayout with = without.with(OsdElement.LINK_HISTORY, new OsdLayout.Placement(true, OsdElement.LINK_HISTORY.defaultX, OsdElement.LINK_HISTORY.defaultY));
+        double[] ms = {Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE};
+        OsdLayout[] layouts = {without, with, with};
+        for (int round = 0; round < 7; round++) {
+            for (int i = 0; i < 3; i++) {
+                // stamped up to now before each run: the moment a run takes leaves the window as full
+                LinkHistory h = new LinkHistory();
+                long now = de.droiddrone.pc.MonoClock.ms();
+                if (i < 2) {
+                    OsdPreview.sampleHistory(h, now, 38);
+                } else {
+                    for (int k = 0; k < LinkHistory.SIZE; k++) {
+                        h.add(now - (LinkHistory.SIZE - 1 - k) * 100L, k % 3 == 0 ? 50 : k % 3 == 1 ? 140 : 260, 38, k, k / 2, false);
+                    }
+                }
+                OsdRenderer.Data d = new OsdRenderer.Data(true, true, 42, true, false, null, null, false, null, null, false, false, false, false, null,
+                        false, null, false).withLinkHistory(h);
+                OsdLayout layout = layouts[i];
+                ms[i] = Math.min(ms[i], mean(() -> {
+                    Graphics2D g = img.createGraphics();
+                    r.paint(g, 0, 0, 1920, 1080, d, layout);
+                    g.dispose();
+                }, round == 0 ? 300 : 20, 200));
+            }
+        }
+        double strip = ms[1] - ms[0], worstStrip = ms[2] - ms[0];
+        System.out.printf(java.util.Locale.ROOT, "LINK HISTORY at 1080p: %.3f ms (a link that goes bad), %.3f ms (every tick another colour)%n", strip, worstStrip);
+        assertTrue(strip < 1, "the strip: " + strip + " ms a picture");
+        assertTrue(worstStrip < 2, "its worst: " + worstStrip + " ms a picture");
+    }
+
     @Test
     void theMapWithAnHourLongTrackStaysCheap(@TempDir Path dir) {
         MapView map = new MapView(new TileCache(dir, "test", false));

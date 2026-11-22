@@ -30,8 +30,29 @@ final class OsdPreview {
     /** The sample, refreshed so it never goes stale (and the fly time runs while the editor is open). */
     OsdRenderer.Data data() {
         telemetry.parse(new DataReader(packet, true), BETAFLIGHT);
+        sampleHistory(history, de.droiddrone.pc.MonoClock.ms(), VIDEO.pingBaselineMs());
         return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true, false, false, false, null, false, null, false,
-                12, false, "LINK BACK - ARMED - STICKS LIVE", false).withPins(PINS);
+                12, false, "LINK BACK - ARMED - STICKS LIVE", false).withPins(PINS).withLinkHistory(history);
+    }
+
+    private final LinkHistory history = new LinkHistory();
+
+    /**
+     * I-011: 30 s of a link that goes bad and comes back, up to now: a steady ping, a queue building (yellow), a spike
+     * (red), frames damaged and lost, the link gone for half a second.
+     */
+    static void sampleHistory(LinkHistory h, long now, int baselineMs) {
+        h.clear();
+        long damaged = 0, lost = 0;
+        for (int i = 0; i < 300; i++) {
+            int ping = (int) Math.round(44 + 6 * Math.sin(i / 9.0));
+            if (i >= 170 && i < 205) ping += (i - 170) * 3;
+            if (i >= 205 && i < 214) ping = 230;
+            if (i == 186 || i == 196) damaged++;
+            if (i == 208 || i == 211) lost++;
+            boolean down = i >= 214 && i < 219;
+            h.add(now - (299 - i) * 100L, ping, baselineMs, damaged, lost, down);
+        }
     }
 
     /** The pins on the video: one in sight, one behind a hill, one to the right of the picture. */

@@ -49,12 +49,25 @@ final class OsdRenderer {
      *                    LINK LOST, no red frame; null otherwise
      * @param tierTag     1.0.64: the video tier while it is under the normal picture ("ROBUST", "SURVIVAL"); null otherwise
      * @param pins        1.0.70: the pins on the video ({@link VideoPins}), or null
+     * @param linkHistory I-011: the link's last 30 s for the LINK HISTORY strip (the same ring every paint), or null
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
                 String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
-                boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag, List<VideoPins.Mark> pins) {
+                boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag, List<VideoPins.Mark> pins,
+                LinkHistory linkHistory) {
+        /** Up to 1.0.71: no link history. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
+             boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag, List<VideoPins.Mark> pins) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview, linkStalled,
+                    videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown, banner,
+                    spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, pins, null);
+        }
+
         /** Up to 1.0.66: no pins on the video. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -63,14 +76,21 @@ final class OsdRenderer {
              boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag) {
             this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview, linkStalled,
                     videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown, banner,
-                    spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, null);
+                    spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, null, null);
         }
 
         /** The same with the pins on the video. */
         Data withPins(List<VideoPins.Mark> marks) {
             return new Data(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
                     linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
-                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, marks);
+                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, marks, linkHistory);
+        }
+
+        /** The same with the link's last 30 s (the OSD editor's sample). */
+        Data withLinkHistory(LinkHistory history) {
+            return new Data(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
+                    linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
+                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, pins, history);
         }
 
         /** Up to 1.0.63: no waking line, no tier tag. */
@@ -368,6 +388,9 @@ final class OsdRenderer {
             element(OsdElement.STICKS_RIGHT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 0, 1));
             element(OsdElement.G2G, (ex, ey, a) -> {
                 if (!observer) pictureDelay(ex, ey, a, d.video());
+            });
+            element(OsdElement.LINK_HISTORY, (ex, ey, a) -> {
+                if (!observer && d.linkHistory() != null) linkHistory(ex, ey, a, d.linkHistory(), now);
             });
 
             if (d.recording()) recordingMark(now);
@@ -742,6 +765,100 @@ final class OsdRenderer {
         long ms = v.g2gMs() + Math.round(displayMs);
         g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
         put("G2G ~" + ms + "MS", x, y, ms > 2 * G2G_WARN_MS ? RED : ms > G2G_WARN_MS ? YELLOW : WHITE, a);
+    }
+
+    /** I-011: the LINK HISTORY strip's fixed scale: a ping of this or more stands at its top. */
+    static final int HISTORY_SCALE_MS = 300;
+    /** Two samples further apart than this are not joined (the link log's tick stopped): a gap in the line. */
+    private static final long HISTORY_JOIN_MS = 1000;
+    private static final BasicStroke HAIRLINE = new BasicStroke(1f);
+    /** The ping line's green, yellow and red parts, kept from paint to paint: the strip allocates nothing while flying. */
+    private final Path2D.Float[] historyPaths = {new Path2D.Float(Path2D.WIND_NON_ZERO, 2 * LinkHistory.SIZE),
+            new Path2D.Float(Path2D.WIND_NON_ZERO, 2 * LinkHistory.SIZE), new Path2D.Float(Path2D.WIND_NON_ZERO, 2 * LinkHistory.SIZE)};
+    private BasicStroke historyStroke;
+    private float historyStrokeUnit;
+
+    /**
+     * I-011, LINK HISTORY: the link's last 30 s, newest at the right, as a thin strip on a dark ground in the battery
+     * bar's way - the ping as a line on a fixed scale (0 - {@link #HISTORY_SCALE_MS}) coloured as the LINK figure is
+     * ({@link #pingColor}: by how far it is over the link's usual), and under it a small mark for each tick that lost
+     * video frames (red), damaged some (yellow) or had no link (red, and the line has a gap). The figures stay where
+     * they are (LINK, VID); x is the strip's edge as the layout aligns it, y its label's baseline.
+     */
+    private void linkHistory(float x, float y, OsdLayout.Align a, LinkHistory history, long now) {
+        label("LINK 30 S", x, y, a);
+        float sw = 150 * unit, sh = 24 * unit, top = y + 6 * unit, left = startX(x, sw, a), right = left + sw;
+        float markH = 4 * unit, markY = top + sh - markH - unit, lineTop = top + 2.5f * unit, lineBottom = markY - 2 * unit;
+        g.setColor(OUTLINE);
+        g.fillRect(Math.round(left), Math.round(top), Math.round(sw), Math.round(sh));
+        g.setColor(WHITE);
+        g.setStroke(HAIRLINE);
+        g.drawRect(Math.round(left), Math.round(top), Math.round(sw), Math.round(sh));
+        mark(left, top, sw, sh);
+        int written = history.written(), n = history.within(written, now);
+        if (n == 0) return;
+        float perMs = sw / LinkHistory.WINDOW_MS;
+        // the marks, newest to oldest; marks side by side are one rectangle, red when any of them is
+        int markW = Math.max(1, Math.round(2 * unit)), my = Math.round(markY), mh = Math.round(markH);
+        int runFrom = 0, runTo = 0;
+        byte runKind = LinkHistory.NONE;
+        for (int k = 0; k <= n; k++) {
+            byte m = k < n ? history.mark(written, k) : LinkHistory.NONE;
+            byte kind = m == LinkHistory.DOWN ? LinkHistory.LOST : m; // both red
+            int mx = k < n ? Math.round(right - Math.max(0, now - history.at(written, k)) * perMs) - markW / 2 : 0;
+            if (kind != LinkHistory.NONE && runKind != LinkHistory.NONE && runFrom - mx <= markW) {
+                runFrom = mx;
+                if (kind == LinkHistory.LOST) runKind = LinkHistory.LOST;
+                continue;
+            }
+            if (runKind != LinkHistory.NONE) {
+                g.setColor(runKind == LinkHistory.DAMAGED ? YELLOW : RED);
+                g.fillRect(runFrom, my, runTo - runFrom, mh);
+            }
+            runKind = kind;
+            runFrom = mx;
+            runTo = mx + markW;
+        }
+        // oldest to newest; a segment takes its newer end's colour - one path a colour, so three draws at most
+        for (Path2D.Float p : historyPaths) p.reset();
+        int lastColour = -1, used = 0;
+        long lastAt = 0;
+        float lastX = 0, lastY = 0, height = lineBottom - lineTop;
+        for (int k = n - 1; k >= 0; k--) {
+            int p = history.ping(written, k);
+            long at = history.at(written, k);
+            if (p < 0) {
+                lastColour = -1;
+                continue;
+            }
+            float px = right - Math.max(0, now - at) * perMs, py = lineBottom - Math.min(1f, p / (float) HISTORY_SCALE_MS) * height;
+            Color c = pingColor(p, history.baseline(written, k));
+            int colour = c == GREEN ? 0 : c == YELLOW ? 1 : 2;
+            Path2D.Float path = historyPaths[colour];
+            if (lastColour < 0 || at - lastAt > HISTORY_JOIN_MS) {
+                path.moveTo(px, py); // a sample alone is a dot
+                path.lineTo(px, py);
+            } else {
+                if (colour != lastColour) path.moveTo(lastX, lastY);
+                path.lineTo(px, py);
+            }
+            lastColour = colour;
+            used |= 1 << colour;
+            lastAt = at;
+            lastX = px;
+            lastY = py;
+        }
+        if (historyStroke == null || historyStrokeUnit != unit) {
+            // square ends and bevelled corners: a sample alone still shows, and round ones cost more than the rest of it
+            historyStroke = new BasicStroke(Math.max(1f, 1.6f * unit), BasicStroke.CAP_SQUARE, BasicStroke.JOIN_BEVEL);
+            historyStrokeUnit = unit;
+        }
+        g.setStroke(historyStroke);
+        for (int i = 0; i < historyPaths.length; i++) {
+            if ((used & 1 << i) == 0) continue;
+            g.setColor(i == 0 ? GREEN : i == 1 ? YELLOW : RED);
+            g.draw(historyPaths[i]);
+        }
     }
 
     /** "LTE 82%" and four signal bars after it. */

@@ -181,6 +181,8 @@ public class MainWindow extends JFrame {
     /** The connection's timeline (10 rows a second) for finding the cause of failsafes; null when not connected. */
     private LinkLog linkLog;
     private final Timer linkLogTimer = new Timer(100, e -> sampleLinkLog());
+    /** I-011: the OSD's LINK HISTORY, fed at the link log's tick (sampleLinkLog). */
+    private final LinkHistory linkHistory = new LinkHistory();
     private VideoPipeline video;
     private final VideoView videoView = new VideoView();
     /** The map in its own window (MENU > MAP > Map window, F3), for a second screen: where the drone is and has been. */
@@ -2047,6 +2049,7 @@ public class MainWindow extends JFrame {
         lastArmedAt = 0;
         lostDroneShow.reset();
         modeAsked = ControlLink.POWER_NORMAL;
+        linkHistory.clear(); // I-011: the strip is this connection's
         linkLogTimer.start();
         updateFlightLayout();
         standbyPhones.remove(target.ip()); // a Connect wakes a standby phone
@@ -2238,11 +2241,21 @@ public class MainWindow extends JFrame {
                 }
             }
         }
-        if (l == null || c == null) return;
-        RcSession s = session;
+        if (c == null) return;
         VideoPipeline v = video;
+        VideoPipeline.Stats vs = v == null ? null : v.stats();
+        // I-011: the OSD's LINK HISTORY - this tick's ping and the video's lost and damaged frames, as the log row has them
+        ControlLink link = c.getLink();
+        ControlLink.State state = link.getState();
+        boolean up = state == ControlLink.State.READY || state == ControlLink.State.SPECTATING;
+        // a red mark only for a link that was up and is lost (F-019: no alarm before the first link, none for a sleeper
+        // waited for); before that the line just has no ping
+        boolean lost = link.wasEverReady() && !power.awaitingWake && (!up || link.isLinkStalled());
+        linkHistory.add(MonoClock.ms(), up ? link.getPing() : -1, vs == null ? -1 : vs.pingBaselineMs(), vs == null ? -1 : vs.damaged(),
+                vs == null ? -1 : vs.lost(), lost);
+        if (l == null) return;
+        RcSession s = session;
         try {
-            VideoPipeline.Stats vs = v == null ? null : v.stats();
             l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
                     vs == null ? 0 : vs.shownFps(), s == null ? null : s.getLastChannels(), phonePath, vs, service.getPollMaxMs());
         } catch (IOException e) {
@@ -3996,7 +4009,7 @@ public class MainWindow extends JFrame {
                 // 1.0.64: waiting for a sleeper is WAKING - m:ss, not LINK LOST; and the tier under normal is tagged
                 !spectator && power.awaitingWake, spectator ? -1 : wakeInMs(), spectator ? null : l.getTier(),
                 // F-019: CONNECTING until this connection's first link, LINK LOST only after one was up
-                !spectator && !l.wasEverReady()));
+                !spectator && !l.wasEverReady(), linkHistory));
         if (!videoView.getOsdLayout().isOn(OsdElement.PINS) || miniMap == null) return d;
         // the pins the maps show (watching: the pilot PC's), from the pose of when the picture was taken
         FcTelemetry t = l.getTelemetry();
