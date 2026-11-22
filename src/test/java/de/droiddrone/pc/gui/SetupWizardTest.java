@@ -91,6 +91,40 @@ class SetupWizardTest {
         assertEquals(80, DroneSetup.BetaflightPage.brief("x".repeat(200)).length());
     }
 
+    /**
+     * I-005 (the bench's guide-first-start, 1.0.71): a step that only waits showed red - Betaflight settings while no
+     * flight controller was there, the Connect step's phone before one was seen. Grey while waiting, red for what failed
+     * or wants the pilot (CONFIRM, the pilot's 1.0.40 rule, once the board is read).
+     */
+    @Test
+    void aStepThatOnlyWaitsIsGreyNotRed() {
+        assertEquals(CheckRow.State.PENDING, DroneSetup.BetaflightPage.confirmLight(false, false, false), "no FC yet: it waits");
+        assertEquals(CheckRow.State.BAD, DroneSetup.BetaflightPage.confirmLight(false, false, true), "read, not confirmed: red until CONFIRM");
+        assertEquals(CheckRow.State.PENDING, DroneSetup.BetaflightPage.confirmLight(false, true, true), "CONFIRM's write runs");
+        assertNull(DroneSetup.BetaflightPage.confirmLight(true, false, true), "confirmed: the settings' own lights");
+        assertNull(DroneSetup.BetaflightPage.confirmLight(true, false, false));
+    }
+
+    /** I-005: "App not ready: GitHub answered HTTP 404" - the server's words; short now, RETRY beside it. */
+    @Test
+    void aDownloadThatFailedSaysSoShort() {
+        assertEquals("No download (404). Internet?", PhoneGuideWizard.FlightAppPage.notReadyText(new java.io.IOException("GitHub answered HTTP 404")));
+        assertEquals("No download. Internet?", PhoneGuideWizard.FlightAppPage.notReadyText(new java.net.UnknownHostException("github.com")));
+        assertEquals("No download. Internet?", PhoneGuideWizard.FlightAppPage.notReadyText(new java.net.http.HttpTimeoutException("the download stood still for 60 s")));
+        assertEquals("Download damaged (SHA-256).", PhoneGuideWizard.FlightAppPage.notReadyText(new java.io.IOException("Download failed its SHA-256 check (00)")));
+        assertEquals("App not ready: Address already in use", PhoneGuideWizard.FlightAppPage.notReadyText(new java.net.BindException("Address already in use")),
+                "not the download's: as it was");
+    }
+
+    /** I-005: CLOSE before the end left SETUP's row as if all was done. */
+    @Test
+    void setupsRowSaysNotFinishedUntilFinishedOnce() throws Exception {
+        de.droiddrone.pc.PcConfig config = de.droiddrone.pc.PcConfig.defaults();
+        assertEquals("Not finished", SetupWizard.menuLine(SetupWizard.finishedOnce(config)));
+        config.set(SetupWizard.DONE_KEY, "true");
+        assertEquals("Everything, step by step", SetupWizard.menuLine(SetupWizard.finishedOnce(config)));
+    }
+
     /** 1.0.56, the pilot: users thought the FC wasn't connecting - it takes a while. */
     @Test
     void anFcNotFoundYetIsStillLookingForAWhileThenAWarning() {

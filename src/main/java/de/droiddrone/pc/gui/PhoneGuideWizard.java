@@ -197,6 +197,8 @@ final class PhoneGuideWizard {
         private final DefaultComboBoxModel<String> urls = new DefaultComboBoxModel<>();
         private final JComboBox<String> urlChoice = new JComboBox<>(urls);
         private ApkShare share;
+        /** I-005: shown when the download failed. */
+        private javax.swing.JButton retry;
         /** This step is on screen: a download that finishes after it was left must not start the server. */
         private boolean showing;
         private boolean preparing;
@@ -240,6 +242,10 @@ final class PhoneGuideWizard {
             WizardDialog.addRow(col, firewall);
             page.add(col, BorderLayout.CENTER);
             file.set(State.PENDING, "Preparing...");
+            retry = file.addAction("Retry", () -> {
+                if (!preparing && share == null) download();
+            });
+            retry.setVisible(false);
             firewall.set(State.PENDING, "Checking...");
             // F-043: no empty box and no empty address list while there is no code to show
             qr.showNone("Preparing...");
@@ -257,7 +263,13 @@ final class PhoneGuideWizard {
             });
             showing = true;
             if (share != null || preparing) return;
+            download();
+        }
+
+        /** The app fetched (once; then from the PC's copy) and served; RETRY runs it again after a failure (I-005). */
+        private void download() {
             preparing = true;
+            if (retry != null) retry.setVisible(false);
             file.set(State.PENDING, "Downloading (about 7 MB)...");
             qr.showNone("Downloading...");
             background(() -> {
@@ -268,7 +280,8 @@ final class PhoneGuideWizard {
                     return s;
                 } catch (Exception e) {
                     SwingUtilities.invokeLater(() -> {
-                        file.set(State.BAD, "App not ready: " + e.getMessage());
+                        file.set(State.BAD, notReadyText(e));
+                        if (retry != null) retry.setVisible(true);
                         qr.showNone("App not ready"); // the reason in the row beside it
                         urlChoice.setVisible(false);
                     });
@@ -291,6 +304,19 @@ final class PhoneGuideWizard {
                 urlChoice.setVisible(!list.isEmpty()); // the list once there are addresses in it
                 showQr();
             });
+        }
+
+        /**
+         * I-005: why the app is not ready, short - "App not ready: GitHub answered HTTP 404" was the server's words.
+         * The download's own failures ask for the internet (RETRY beside it); anything else as it was.
+         */
+        static String notReadyText(Throwable e) {
+            String m = e.getMessage() == null ? e.toString() : e.getMessage();
+            java.util.regex.Matcher http = java.util.regex.Pattern.compile("HTTP (\\d{3})").matcher(m);
+            if (http.find()) return "No download (" + http.group(1) + "). Internet?";
+            if (m.contains("SHA-256")) return "Download damaged (SHA-256).";
+            if (e instanceof java.io.IOException && !(e instanceof java.net.BindException)) return "No download. Internet?";
+            return "App not ready: " + m;
         }
 
         private void showQr() {
@@ -591,7 +617,7 @@ final class PhoneGuideWizard {
             }
             PcConfig config = main.config();
             if (config.getIp().isEmpty()) {
-                setLink(State.BAD, "No phone yet: open DRAUPNE Flight on it.");
+                setLink(State.PENDING, "No phone yet: open DRAUPNE Flight on it."); // I-005: it waits - grey, not red
                 nextStart = System.currentTimeMillis() + 2000;
                 return;
             }

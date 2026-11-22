@@ -838,7 +838,7 @@ public class MainWindow extends JFrame {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        addMenuItem(menu, "First-time setup", "Everything, step by step", () -> SetupWizard.open(this));
+        addMenuItem(menu, "First-time setup", SetupWizard.menuLine(SetupWizard.finishedOnce(config)), () -> SetupWizard.open(this));
         addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));

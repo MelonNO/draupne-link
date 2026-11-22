@@ -101,6 +101,7 @@ class GuidesScenario {
             ui.shot("the main window after the guide");
             MenusScenario.open(ui, "SETUP");
             rig.check(MenusScenario.rowShowing(ui, "FIRST-TIME SETUP"), "SETUP > FIRST-TIME SETUP offers it again");
+            rig.check(ui.sees("Not finished"), "and says it is not finished (closed before FINISH)"); // I-005
             ui.key(java.awt.event.KeyEvent.VK_ESCAPE);
         });
     }

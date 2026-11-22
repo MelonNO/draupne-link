@@ -1259,10 +1259,18 @@ final class DroneSetup {
             showConfirmState();
         }
 
-        /** The settings' lights: red until CONFIRM, busy while its write runs, then the settings' own (green when all is set). */
+        /**
+         * The settings' lights: red until CONFIRM, busy while its write runs, then the settings' own (green when all is set).
+         * I-005: grey while the page only waits for the flight controller - red is for what failed or wants the pilot.
+         */
         private void showConfirmState() {
-            settings.override = confirm.confirmed() ? null : confirm.armed() ? State.PENDING : State.BAD;
+            settings.override = confirmLight(confirm.confirmed(), confirm.armed(), found && !failed);
             settings.refresh();
+        }
+
+        /** The settings' light by CONFIRM and the board: null = the settings' own. */
+        static State confirmLight(boolean confirmed, boolean armed, boolean boardRead) {
+            return confirmed ? null : armed || !boardRead ? State.PENDING : State.BAD;
         }
 
         /** OK once the page is confirmed; until then a setting that is right still shows as to do. */
@@ -1331,6 +1339,7 @@ final class DroneSetup {
                 calibrateCompass.setEnabled(false);
                 usb.set(busy ? State.PENDING : State.INFO, busy ? "Finishing read, then freeing the port..." : PAUSED_TEXT);
                 for (Part p : new Part[]{receiver, stickDelay, battery}) p.set(State.PENDING, "");
+                showConfirmState(); // I-005: the board let go - the settings wait, grey
             } else {
                 abandoned = false;
                 applies = 0;
@@ -1629,6 +1638,7 @@ final class DroneSetup {
             readEscs.setEnabled(found && !failed && !escBusy && escWanted == 0);
             beaconOff.setEnabled(readEscs.isEnabled());
             confirmButton.setEnabled(found && !failed && r.boardId() != null); // CONFIRM is for a board known by its id
+            if (r == null || r.error() != null) showConfirmState(); // I-005: nothing read - the settings wait, grey
             if (r == null) {
                 nextTry = now + 1500;
                 String[] said = notFound(now, restartedAt, lookingSince);

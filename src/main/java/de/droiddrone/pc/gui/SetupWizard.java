@@ -22,6 +22,15 @@ final class SetupWizard {
     private SetupWizard() {
     }
 
+    /** I-005: SETUP's row for it - "Not finished" until FINISH was pressed once (CLOSE before the end left no sign). */
+    static String menuLine(boolean finishedOnce) {
+        return finishedOnce ? "Everything, step by step" : "Not finished";
+    }
+
+    static boolean finishedOnce(de.droiddrone.pc.PcConfig config) {
+        return "true".equalsIgnoreCase(config.getString(DONE_KEY));
+    }
+
     static void open(MainWindow main) {
         boolean firstTime = !"true".equalsIgnoreCase(main.config().getString(DONE_KEY));
         List<Page> pages = firstTimePages(PcSetupWizard.pages(main), DroneSetup.pages(main), PhoneGuideWizard.pages(main), new WelcomePage());
