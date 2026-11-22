@@ -364,7 +364,7 @@ public final class AppRig implements AutoCloseable {
                     public int clamped() {
                         return radio.clamped();
                     }
-                }, Sandbox.runRoot().resolve(HwGuard.STOP_FILE), film::remark).start();
+                }, Sandbox.runRoot().resolve(HwGuard.STOP_FILE), film::remark).named(name).start();
                 film.remark("The hardware guard is up: it beats to the keeper on 127.0.0.1:" + hardware.keeperPort() + " twenty times a second.");
             } else {
                 radio.handsOffForGood("this bench has no keeper (no keeper.port in the hardware file): nothing is armed in its runs");

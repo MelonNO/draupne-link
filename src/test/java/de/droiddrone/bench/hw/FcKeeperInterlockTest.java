@@ -174,6 +174,19 @@ class FcKeeperInterlockTest {
     }
 
     @Test
+    void aBoardIn3dModeGetsNoWindowAndIsStoppedAtItsMiddle() throws Exception {
+        board.features(board.featureMask() | Msp.FEATURE_3D); // there 1000 is full reverse and 1500 is stop
+        BetaflightUsb.use(board.usb());
+        try (BetaflightUsb fc = BetaflightUsb.open(board.port())) {
+            fc.msp(Msp.SET_MOTOR, Msp.allMotors(1000));
+        }
+        bench.start().beat();
+        assertArrayEquals(new int[]{1500, 1500, 1500, 1500}, board.motors(), "taking the board stops its motors where stop is");
+        assertTrue(bench.ask("OPEN 5").startsWith("NO the board has 3D mode on"), bench.ask("STATE"));
+        assertTrue(bench.ask("END").startsWith("OK safe=1 locked=1 armed=0 atRest=1 motors=[1500,1500,1500,1500]"));
+    }
+
+    @Test
     void aRigThatStopsBeatingLosesItsWindow() throws Exception {
         bench.start().beat();
         phone = bench.phone().sticks(1000, 1000).startSticks();

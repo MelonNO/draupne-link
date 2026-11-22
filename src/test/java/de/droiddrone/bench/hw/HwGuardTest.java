@@ -76,7 +76,7 @@ class HwGuardTest {
         guard.stepMs = 20;
         guard.silentMs = 300;
         guard.disagreeMs = disagreeMs;
-        HwGuard started = guard.start();
+        HwGuard started = guard.named("guard test").start();
         Waits.waitFor(() -> started.keeperState() != null || started.tripped() != null, 3000, "the guard's first beat", film);
         return started;
     }
@@ -103,13 +103,14 @@ class HwGuardTest {
     @Test
     void aHealthyRunIsLeftAloneAndItsWindowsGoThroughTheGuard() throws Exception {
         bench.start();
-        guard();
+        guard(2000); // (the app's word and the board's are changed one after the other here: no two seconds apart)
         phone = bench.phone().sticks(1000, 1000).startSticks();
         appArmed = false;
         Thread.sleep(500);
         assertNull(guard.tripped());
         assertNull(HwGuard.stopped(dir));
         assertTrue(radio.isHandsOff(), "hands off until a window is open");
+        Waits.waitFor(() -> bench.state().get("scenario").equals("guard-test"), 3000, "the keeper to be told the scenario's name, for its frame log", bench.said);
 
         guard.openWindow(10); // the guard's own beat is the heartbeat the keeper asks for
         assertFalse(radio.isHandsOff(), "the keeper said yes: the hands are on");
@@ -122,8 +123,14 @@ class HwGuardTest {
         assertTrue(radio.isHandsOff() && board.armingLocked() && !board.armed());
         appArmed = false;
         assertNull(guard.tripped(), "armed in a window, both saying so, is what a run is for");
+        // something the keeper finds meanwhile (here: a request the phone app never sends) is in the scenario's film at its end
+        phone.request(Msp.SET_MOTOR, Msp.allMotors(1200));
+        Waits.waitFor(() -> bench.keeper.findings().containsKey("strict-" + Msp.SET_MOTOR), 3000, "the keeper's finding", bench.said);
         String word = guard.finish();
         assertTrue(word.startsWith("OK safe=1 locked=1 armed=0 atRest=1"), word);
+        assertTrue(film.stream().anyMatch(l -> l.startsWith("THE KEEPER, during this scenario - FINDING: From the phone's side, not passed on: MSP v2 < 214")), film.toString());
+        assertTrue(film.stream().noneMatch(l -> l.contains("INFO")), "what the keeper merely did is in its own log: " + film);
+        assertEquals("-", bench.state().get("scenario"), "and the keeper's frame log of it is closed");
         assertNull(HwGuard.stopped(dir));
     }
 

@@ -60,8 +60,7 @@ class BoardChainScenario {
         AppRig.scenario("hw-board-chain").hardware(bench).run(rig -> {
             Ui ui = rig.ui;
             Pilot pilot = new Pilot(rig);
-            try (KeeperClient keeper = rig.guard.keeper()) {
-                keeper.order("SCENARIO hw-board-chain");
+            try (KeeperClient keeper = rig.guard.keeper()) { // (the rig's guard has told the keeper the scenario's name: its frames are in frames-hw-board-chain.log)
                 rig.film.remark("The keeper at the start: " + atStart);
                 rig.check(rig.radio.isHandsOff() && rig.radio.ceiling() == Hardware.THROTTLE_CEILING, "the radio starts hands off, its throttle ceiling at " + Hardware.THROTTLE_CEILING);
 
@@ -118,10 +117,6 @@ class BoardChainScenario {
                     rig.film.remark("The phone app is left with debug.draupne.fc=tcp:" + phonePort + " (gone with the phone's next restart; adb shell setprop debug.draupne.fc usb puts USB back).");
                 } finally {
                     rig.radio.handsOff();
-                    try {
-                        keeper.ask("SCENARIO -");
-                    } catch (IOException ignored) {
-                    }
                 }
             }
         });

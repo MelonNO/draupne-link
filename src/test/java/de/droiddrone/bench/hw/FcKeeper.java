@@ -996,7 +996,10 @@ public final class FcKeeper implements AutoCloseable {
                     s.fromBoard(buf, n, in);
                     continue;
                 }
+                long before = frames.skipped();
                 for (MspTap.Frame f : frames.feed(buf, n)) fromBoard(f, in);
+                long junk = frames.skipped() - before;
+                if (junk > 0) finding("board-bytes", junk + " byte(s) from the board that are part of no MSP frame: dropped (is something else of it talking - its CLI?)");
             }
         } catch (IOException e) {
             why = "its port failed (" + e.getMessage() + ")";
@@ -1174,6 +1177,7 @@ public final class FcKeeper implements AutoCloseable {
         if (lockBit < 0) return "the arming lock does not show in this board's status, so it cannot be seen to hold";
         if (!lockedNow()) return "the arming lock is not set";
         if (statusKnown && armed) return "the board is armed";
+        if (stopValue == Msp.STOP_3D) return "the board has 3D mode on: there the throttle's minimum is full reverse, and the rig's ceiling means nothing";
         if (!beaten || since(beatNs, now, config.heartbeatMs)) return "no heartbeat: BEAT first, and go on beating";
         if (config.cells <= 0 || config.cellFloor <= 0) return "no battery floor is known (cells, floor)";
         if (!voltsKnown || since(voltsNs, now, config.voltsStaleMs)) return "the battery's voltage is not known";
@@ -1791,7 +1795,7 @@ public final class FcKeeper implements AutoCloseable {
                     synchronized (noise) {
                         for (int i = 0; i < count; i++) {
                             do junk[i] = (byte) noise.nextInt(256);
-                            while (junk[i] == '#' || junk[i] == 'R' || junk[i] == MspFrames.START); // noise, not orders
+                            while (junk[i] == '#' || junk[i] == 'R' || junk[i] == 2 || junk[i] == MspFrames.START); // noise, not orders (CLI, bootloader)
                         }
                     }
                     if (w[2].equalsIgnoreCase("phone")) {
@@ -1901,7 +1905,14 @@ public final class FcKeeper implements AutoCloseable {
             for (String line = in.readLine(); line != null; line = in.readLine()) {
                 if (line.isBlank()) continue;
                 boolean end = line.trim().toUpperCase(Locale.ROOT).startsWith("END");
-                String answer = command(line.trim());
+                String answer;
+                try {
+                    answer = command(line.trim());
+                } catch (RuntimeException e) {
+                    // an order the keeper stumbled over: the rig is told no, and - whatever state that left - the window is shut and the lock set
+                    trip("order", "THE KEEPER STUMBLED OVER AN ORDER (" + line.trim() + "): " + e);
+                    answer = "NO the keeper stumbled over that (" + e + "): its window is closed and the lock set";
+                }
                 out.write((answer + "\n").getBytes(StandardCharsets.UTF_8));
                 out.flush();
                 if (end) {

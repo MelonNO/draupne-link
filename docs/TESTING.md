@@ -175,8 +175,10 @@ that board is restarted: name the port when another one is plugged in (`bench.ps
 - **The arm lock.** Betaflight's arming block "MSP" (MSP_ARMING_DISABLE; the app shows it as the blocker MSP) is set
   the moment the board is taken and stays set, except inside a window the rig opens: `OPEN n`, 60 s at most, never
   made longer without being closed first. Where the block shows in the board's status is measured on each board; a
-  board on which it does not show gets no window. The lock is in the board's memory only: a restart clears it, and
-  the keeper sets it again before anybody gets a lease.
+  board on which it does not show gets no window, nor does one with 3D mode on (there the throttle's minimum is
+  full reverse). The lock is in the board's memory only: a restart clears it, and the keeper sets it again before
+  anybody gets a lease. A switch that was already up when the window opens does not arm: Betaflight wants it down
+  once first - so a scenario opens the window, then PREARM (if the board has one), then ARM.
 - **What ends a window** (closed, locked, STOP, said loudly; no window after it until `CLEAR`): a stick frame with
   more throttle than 1100 (not passed on); the battery under `battery.cellFloor` for 2 s (and no window opens under
   it; a line a minute, always); the window's own time with the board still armed; the hour's armed seconds used up

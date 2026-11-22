@@ -57,6 +57,9 @@ public final class HwGuard implements AutoCloseable {
     /** The guard's pace and patience (a test shortens them): twenty looks a second, a keeper silent for a second, two words on "armed" that differ for five. */
     public long stepMs = 50, silentMs = 1000, disagreeMs = 5000;
     private volatile KeeperClient.State state;
+    /** The scenario's name, for the keeper's frame log; and the number of the keeper's first event that is this scenario's (-1: not heard yet). */
+    private volatile String scenario;
+    private volatile int eventsFrom = -1;
     private volatile String tripped;
     private volatile boolean running;
     private Thread thread;
@@ -86,6 +89,12 @@ public final class HwGuard implements AutoCloseable {
         }
     }
 
+    /** The scenario this guard watches: the keeper files every frame of it under this name (frames-&lt;name&gt;.log). Before {@link #start}. */
+    public HwGuard named(String scenarioName) {
+        scenario = scenarioName == null || scenarioName.isBlank() ? null : scenarioName.replaceAll("\\s+", "-");
+        return this;
+    }
+
     /** The guard from now on, twenty times a second. A keeper that does not answer at all stops the run within the second. */
     public HwGuard start() {
         running = true;
@@ -108,6 +117,10 @@ public final class HwGuard implements AutoCloseable {
             try {
                 if (beat == null) beat = new KeeperClient(keeperPort, (int) Math.max(200, silentMs / 2));
                 s = beat.beat();
+                if (eventsFrom < 0) { // the first answer: from here on the keeper's events and frames are this scenario's
+                    eventsFrom = Math.max(0, s.number("events"));
+                    if (scenario != null) beat.ask("SCENARIO " + scenario); // (on the beat's own connection: this thread waits for nothing longer than a beat)
+                }
                 state = s;
                 lastAnswer = System.nanoTime();
             } catch (IOException e) {
@@ -119,7 +132,7 @@ public final class HwGuard implements AutoCloseable {
                 }
             }
             if (s != null) {
-                if (s.tripped() != null) trip("the keeper stopped it: " + s.tripped());
+                if (s.tripped() != null) trip("the keeper stopped it: " + s.tripped(), false);
                 if (s.get("ending").equals("1")) trip("the keeper is ending");
                 if (round % 5 == 0) app = eyes.appArmed(); // the link log's newest row: read four times a second
                 Boolean board = s.fresh() ? s.armed() : null;
@@ -148,16 +161,22 @@ public final class HwGuard implements AutoCloseable {
         if (beat != null) beat.close();
     }
 
-    /** Once: hands off for good, the keeper told, the stop file written. */
-    private synchronized void trip(String why) {
+    private void trip(String why) {
+        trip(why, true);
+    }
+
+    /** Once: hands off for good, the keeper told (unless the stop is its own), the stop file written. */
+    private synchronized void trip(String why, boolean tellKeeper) {
         if (tripped != null) return;
         tripped = why;
         radio.handsOffForGood("the hardware guard: " + why);
-        String keeper;
-        try (KeeperClient k = new KeeperClient(keeperPort, 3000)) {
-            keeper = k.ask("TRIP the rig's guard: " + why).startsWith("OK") ? "The keeper has closed its window and opens none." : "The keeper did not take the stop.";
-        } catch (IOException e) {
-            keeper = "The keeper could not be told (" + e.getMessage() + "): without the rig's beat it closes its window by itself.";
+        String keeper = "The keeper's window is closed, and it opens none.";
+        if (tellKeeper) {
+            try (KeeperClient k = new KeeperClient(keeperPort, 3000)) {
+                keeper = k.ask("TRIP the rig's guard: " + why).startsWith("OK") ? "The keeper has closed its window and opens none." : "The keeper did not take the stop.";
+            } catch (IOException e) {
+                keeper = "The keeper could not be told (" + e.getMessage() + "): without the rig's beat it closes its window by itself.";
+            }
         }
         try {
             Files.createDirectories(stopFile.getParent());
@@ -234,6 +253,17 @@ public final class HwGuard implements AutoCloseable {
         String word;
         try (KeeperClient k = keeper()) {
             word = k.ask("SAFE");
+            try { // what the keeper found or stopped while this scenario ran goes into its film
+                int said = 0;
+                for (String event : eventsFrom < 0 ? java.util.List.<String>of() : k.events(eventsFrom)) {
+                    if (event.startsWith("INFO ") || ++said > 40) continue;
+                    say.accept("THE KEEPER, during this scenario - " + event.replaceFirst("^(\\w+) \\d+ ", "$1: "));
+                }
+                if (said > 40) say.accept("... and " + (said - 40) + " more of the keeper's findings: its log has them all.");
+                if (scenario != null) k.ask("SCENARIO -");
+            } catch (IOException | RuntimeException e) {
+                say.accept("The keeper's events could not be read (" + e.getMessage() + "): its log has them.");
+            }
         } catch (IOException e) {
             word = "NO the keeper does not answer (" + e.getMessage() + ")";
         }
