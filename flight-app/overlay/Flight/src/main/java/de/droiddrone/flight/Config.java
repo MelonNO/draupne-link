@@ -16,6 +16,8 @@
  *
  *  Modified for DRAUPNE Link (pc.37): upstream's Config with setObserveVideo - the picture an OBSERVATION asks for
  *  (Observe), set on the phone itself while no pilot is connected; the pilot's next Config replaces it as usual.
+ *  The serial port's choice and path and the MAVLink UDP bridge are the phone's own (PhoneOwnConfig): a Config from the
+ *  network is read past them and changes none of them.
  */
 
 package de.droiddrone.flight;
@@ -26,6 +28,7 @@ import android.content.SharedPreferences;
 import androidx.preference.PreferenceManager;
 
 import de.droiddrone.common.DataReader;
+import de.droiddrone.common.PhoneOwnConfig;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.UdpCommon;
@@ -314,6 +317,9 @@ public class Config {
         return connectOnStartup;
     }
 
+    /** A Config asked for other values of the phone's own settings (PhoneOwnConfig): said once while the app runs. */
+    private boolean ownLeftSaid;
+
     public int processReceivedConfig(DataReader buffer){
         try {
             int version = buffer.readShort();
@@ -395,15 +401,12 @@ public class Config {
             this.rcRefreshRate = rcRefreshRate;
             int serialBaudRate = buffer.readInt();
             int usbSerialPortIndex = buffer.readByte();
+            // DRAUPNE Link: the serial port's choice and path are the phone's own (PhoneOwnConfig) - read past, not taken
             boolean useNativeSerialPort = buffer.readBoolean();
-            if (serialBaudRate != this.serialBaudRate || usbSerialPortIndex != this.usbSerialPortIndex
-                    || useNativeSerialPort != this.useNativeSerialPort) fcConfigChanged = true;
+            if (serialBaudRate != this.serialBaudRate || usbSerialPortIndex != this.usbSerialPortIndex) fcConfigChanged = true;
             this.serialBaudRate = serialBaudRate;
             this.usbSerialPortIndex = usbSerialPortIndex;
-            this.useNativeSerialPort = useNativeSerialPort;
             String nativeSerialPort = buffer.readUTF();
-            if (nativeSerialPort != null && !nativeSerialPort.equals(this.nativeSerialPort)) fcConfigChanged = true;
-            this.nativeSerialPort = nativeSerialPort;
             int fcProtocol = buffer.readByte();
             if (fcProtocol != this.fcProtocol) fcConfigChanged = true;
             this.fcProtocol = fcProtocol;
@@ -412,17 +415,14 @@ public class Config {
             if (mavlinkTargetSysId != this.mavlinkTargetSysId || mavlinkGcsSysId != this.mavlinkGcsSysId) fcConfigChanged = true;
             this.mavlinkTargetSysId = mavlinkTargetSysId;
             this.mavlinkGcsSysId = mavlinkGcsSysId;
+            // DRAUPNE Link: the MAVLink UDP bridge too (its mode, address and port) - read past, not taken
             int mavlinkUdpBridge = buffer.readUnsignedByteAsInt();
             String mavlinkUdpBridgeIp = buffer.readUTF();
             int mavlinkUdpBridgePort = buffer.readUnsignedShortAsInt();
-            if (mavlinkUdpBridge != this.mavlinkUdpBridge
-                    || mavlinkUdpBridgeIp != null && !mavlinkUdpBridgeIp.equals(this.mavlinkUdpBridgeIp)
-                    || mavlinkUdpBridgePort != this.mavlinkUdpBridgePort) {
-                mavlinkUdpBridgeConfigChanged = true;
-            }
-            this.mavlinkUdpBridge = mavlinkUdpBridge;
-            this.mavlinkUdpBridgeIp = mavlinkUdpBridgeIp;
-            this.mavlinkUdpBridgePort = mavlinkUdpBridgePort;
+            String left = new PhoneOwnConfig(this.useNativeSerialPort, this.nativeSerialPort, this.mavlinkUdpBridge, this.mavlinkUdpBridgeIp,
+                    this.mavlinkUdpBridgePort).notTaken(new PhoneOwnConfig(useNativeSerialPort, nativeSerialPort, mavlinkUdpBridge, mavlinkUdpBridgeIp, mavlinkUdpBridgePort));
+            if (left != null && !ownLeftSaid) log("A Config from the PC asked for other values of " + left + ": left as set on the phone");
+            ownLeftSaid |= left != null;
             if (!updateConfig()) return -2;
             return 0;
         }catch (Exception e){
