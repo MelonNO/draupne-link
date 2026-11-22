@@ -146,6 +146,11 @@ public final class FcKeeper implements AutoCloseable {
         /** The pack: its cells, and the volts per cell under which nothing is armed. 0: not known - no window ever opens. */
         public int cells;
         public double cellFloor;
+        /**
+         * Betaflight as a program (SITL): it has no battery to read (its voltage reads 0), so the battery's rules - no
+         * window under the floor, a window ended under it - are left out. Refused for a real board.
+         */
+        public boolean noBattery;
         /** No stick frame with more throttle than this is passed on. */
         public int ceiling = Hardware.THROTTLE_CEILING;
         /** The switch the rig believes arms the board (AUX 1 ..); the board's own word is read and a difference said. */
@@ -613,6 +618,7 @@ public final class FcKeeper implements AutoCloseable {
         this.adb = adb;
         if (side.real() && !config.strict) throw new IllegalArgumentException("Strict mode is not switched off for a real board");
         if (config.windowMaxS < 1 || config.windowMaxS > 60) throw new IllegalArgumentException("An arm window is 60 s at most: " + config.windowMaxS);
+        if (side.real() && config.noBattery) throw new IllegalArgumentException("A real board's battery is always read: noBattery is for Betaflight as a program only");
         // >>> second round: what a real board's keeper is never without
         if (side.real() && !config.failsafeEndsWindow && !config.failsafeSeenOnSitl) {
             throw new IllegalArgumentException("On a real board the keeper ends an arm window itself when the sticks stop, before the board's own failsafe can run; "
@@ -665,7 +671,8 @@ public final class FcKeeper implements AutoCloseable {
         beatNs = lastRowNs = lastVoltageLineNs = clock();
         event(Kind.INFO, "THE KEEPER IS UP: board " + side.name() + (side.real() ? "" : " (not a real board)") + ", control 127.0.0.1:" + controlPort()
                 + ", the phone's lease on 127.0.0.1:" + phonePort() + ", Drone setup's on 127.0.0.1:" + setupPort() + ", " + (config.strict ? "strict" : "NOT strict")
-                + ", throttle ceiling " + config.ceiling + ", " + (config.cells > 0 && config.cellFloor > 0 ? config.cells + " cells, floor " + config.cellFloor + " V a cell"
+                + ", throttle ceiling " + config.ceiling + ", " + (config.noBattery ? "no battery (Betaflight as a program): the battery's rules are left out"
+                : config.cells > 0 && config.cellFloor > 0 ? config.cells + " cells, floor " + config.cellFloor + " V a cell"
                 : "no battery floor known: no arm window will open") + ", windows of " + config.windowMaxS + " s at most, " + config.budgetS
                 + " armed seconds an hour (" + budgetUsedMs(System.currentTimeMillis()) / 1000 + " used)." + secondRoundWords());
         thread("keeperWatch", this::watch);
@@ -1599,11 +1606,13 @@ public final class FcKeeper implements AutoCloseable {
         if (statusKnown && armed) return "the board is armed";
         if (stopValue == Msp.STOP_3D) return "the board has 3D mode on: there the throttle's minimum is full reverse, and the rig's ceiling means nothing";
         if (!beaten || since(beatNs, now, config.heartbeatMs)) return "no heartbeat: BEAT first, and go on beating";
-        if (config.cells <= 0 || config.cellFloor <= 0) return "no battery floor is known (cells, floor)";
-        if (!voltsKnown || since(voltsNs, now, config.voltsStaleMs)) return "the battery's voltage is not known";
-        double cell = volts / config.cells;
-        if (cell < config.cellFloor) {
-            return String.format(Locale.ROOT, "the battery is at %.2f V a cell (%.2f V, %d cells), under the floor of %.2f", cell, volts, config.cells, config.cellFloor);
+        if (!config.noBattery) {
+            if (config.cells <= 0 || config.cellFloor <= 0) return "no battery floor is known (cells, floor)";
+            if (!voltsKnown || since(voltsNs, now, config.voltsStaleMs)) return "the battery's voltage is not known";
+            double cell = volts / config.cells;
+            if (cell < config.cellFloor) {
+                return String.format(Locale.ROOT, "the battery is at %.2f V a cell (%.2f V, %d cells), under the floor of %.2f", cell, volts, config.cells, config.cellFloor);
+            }
         }
         // >>> second round
         // the throttle layer that holds whatever makes the throttle: the board's own output limit, in every PID profile
@@ -1736,7 +1745,7 @@ public final class FcKeeper implements AutoCloseable {
                 }
             }
             // <<< second round
-            boolean lowNow = !voltsKnown || since(voltsNs, now, config.voltsStaleMs) || volts / config.cells < config.cellFloor;
+            boolean lowNow = !config.noBattery && (!voltsKnown || since(voltsNs, now, config.voltsStaleMs) || volts / config.cells < config.cellFloor);
             if (!lowNow) {
                 low = false;
             } else if (!low) {
@@ -1763,6 +1772,7 @@ public final class FcKeeper implements AutoCloseable {
     }
 
     private String voltageWords() {
+        if (config.noBattery) return "no battery (Betaflight as a program)";
         if (!voltsKnown) return "the battery's voltage is not known";
         if (config.cells <= 0) return String.format(Locale.ROOT, "%.2f V", volts);
         double cell = volts / config.cells;
@@ -2629,7 +2639,7 @@ public final class FcKeeper implements AutoCloseable {
      * No arguments: this bench's keeper, everything from the hardware file. "end" / "state": said to the keeper that
      * runs. Else name=value, for Betaflight as a program and for the tests: board=tcp:127.0.0.1:5761 (never a serial
      * port: a real board's keeper is the hardware file's), control= phone= setup= (ports), folder= lock= cells= floor=
-     * budget= window= heartbeat= ceiling= strict=false.
+     * battery=none (Betaflight as a program: no battery to read) budget= window= heartbeat= ceiling= strict=false.
      */
     public static void main(String[] args) {
         int code;
@@ -2689,6 +2699,7 @@ public final class FcKeeper implements AutoCloseable {
         if (said.containsKey("folder")) config.folder = Path.of(said.get("folder"));
         if (said.containsKey("lock")) config.lockFile = Path.of(said.get("lock"));
         if (said.containsKey("armedFile")) config.budgetFile = Path.of(said.get("armedFile"));
+        if (said.containsKey("battery") && board != null) config.noBattery = said.get("battery").equalsIgnoreCase("none"); // Betaflight as a program: battery=none
         if (said.containsKey("cells")) config.cells = number(said, "cells", 0);
         if (said.containsKey("floor")) config.cellFloor = Double.parseDouble(said.get("floor"));
         if (said.containsKey("budget")) config.budgetS = number(said, "budget", 600);

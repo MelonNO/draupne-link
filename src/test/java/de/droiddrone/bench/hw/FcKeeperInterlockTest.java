@@ -56,6 +56,28 @@ class FcKeeperInterlockTest {
         // (naming a port opens none: the keeper opens its board when it is started, and this one never is)
         assertThrows(IllegalArgumentException.class, () -> new FcKeeper(loose, FcKeeper.serial("NO-SUCH-PORT"), null), "strict mode stays on for a real board");
         assertThrows(IllegalArgumentException.class, () -> FcKeeper.tcp("192.0.2.1", 1), "a board over TCP is on this PC's loopback only");
+        FcKeeper.Config noBattery = new FcKeeper.Config();
+        noBattery.noBattery = true;
+        noBattery.failsafeEndsWindow = true;
+        noBattery.readSettings = true;
+        noBattery.outputLimitMax = 15;
+        assertThrows(IllegalArgumentException.class, () -> new FcKeeper(noBattery, FcKeeper.serial("NO-SUCH-PORT"), null), "a real board's battery is always read");
+    }
+
+    @Test
+    void betaflightAsAProgramHasNoBatteryAndItsWindowOpensWithoutOne() throws Exception {
+        bench.config.battery(0, 0);
+        bench.config.noBattery = true; // what the SITL scenarios tell the keeper: the board reads 0 V, there is no pack
+        board.battery(0, 0);
+        bench.start().beat();
+        assertTrue(bench.saidOf("no battery (Betaflight as a program): the battery's rules are left out"), bench.said.toString());
+        phone = bench.phone().sticks(1000, 1000).startSticks();
+        assertEquals("OK window=5000", bench.ask("OPEN 5"));
+        bench.arm(phone);
+        Thread.sleep(400); // longer than a low battery is let be in a window (0.3 s here): no battery is no low battery
+        assertTrue(board.armed());
+        assertNull(bench.state().tripped());
+        assertTrue(bench.ask("CLOSE").startsWith("OK safe=1"));
     }
 
     @Test

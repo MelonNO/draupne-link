@@ -14,12 +14,12 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * A plain TCP client where the phone app would be, for the keeper's tests: it connects to the keeper's phone port as
+ * A plain TCP client where the phone app would be, for the keeper's tests and its scenario on Betaflight as a program (bench/sitl): it connects to the keeper's phone port as
  * the bench build's BenchFc does and sends real MSP frames as DRAUPNE Flight frames them (MSP v2) - the sticks 250
  * times a second, a status question twice a second - and reads what comes back with the phone's own reader
  * (common.MspFrames).
  */
-final class StandInPhone implements AutoCloseable {
+public final class StandInPhone implements AutoCloseable {
     /** A stick frame's period: 250 a second. */
     static final long PERIOD_NS = 4_000_000;
 
@@ -29,9 +29,20 @@ final class StandInPhone implements AutoCloseable {
     private final AtomicLong sticksSent = new AtomicLong(), bytesIn = new AtomicLong(), framedIn = new AtomicLong();
     private volatile boolean ended, sending, statusToo = true, closed;
     private volatile int throttle = 1000, arm = 1000, prearm = 1000;
+    private volatile long periodNs = PERIOD_NS;
     private Thread sticks;
 
-    StandInPhone(int phonePort) throws IOException {
+    /**
+     * Stick frames this many ms apart instead of 4 (the status question still twice a second). For Betaflight itself
+     * (bench/sitl): it takes one MSP request per run of its serial task, 100 runs a second, and 250 stick frames a
+     * second leave nothing for anybody else's questions.
+     */
+    public StandInPhone every(long ms) {
+        periodNs = Math.max(1, ms) * 1_000_000L;
+        return this;
+    }
+
+    public StandInPhone(int phonePort) throws IOException {
         socket.setTcpNoDelay(true);
         socket.connect(new InetSocketAddress(InetAddress.getLoopbackAddress(), phonePort), 2000);
         out = socket.getOutputStream();
@@ -75,7 +86,7 @@ final class StandInPhone implements AutoCloseable {
     }
 
     /** What the sticks say from the next frame on. */
-    StandInPhone sticks(int throttle, int arm) {
+    public StandInPhone sticks(int throttle, int arm) {
         this.throttle = throttle;
         this.arm = arm;
         return this;
@@ -87,20 +98,20 @@ final class StandInPhone implements AutoCloseable {
         return this;
     }
 
-    /** Stick frames from now on, 250 a second, with a status question every half second - until {@link #stopSticks} or the connection ends. */
-    StandInPhone startSticks() {
+    /** Stick frames from now on, 250 a second ({@link #every}), with a status question every half second - until {@link #stopSticks} or the connection ends. */
+    public StandInPhone startSticks() {
         sending = true;
         sticks = new Thread(() -> {
-            long next = System.nanoTime(), count = 0;
+            long next = System.nanoTime(), count = 0, period = periodNs, statusEvery = Math.max(1, 500_000_000L / period);
             while (sending && !ended && !closed) {
                 try {
                     send(stickFrame(throttle, arm, prearm));
                     sticksSent.incrementAndGet();
-                    if (statusToo && count++ % 125 == 0) send(MspFrames.v2Request(Msp.STATUS, null));
+                    if (statusToo && count++ % statusEvery == 0) send(MspFrames.v2Request(Msp.STATUS, null));
                 } catch (IOException e) {
                     return;
                 }
-                next += PERIOD_NS;
+                next += period;
                 long wait = next - System.nanoTime();
                 if (wait > 0) LockSupport.parkNanos(wait);
                 else if (wait < -50_000_000) next = System.nanoTime(); // far behind (a loaded PC): no burst to catch up
@@ -111,7 +122,7 @@ final class StandInPhone implements AutoCloseable {
         return this;
     }
 
-    StandInPhone stopSticks() throws InterruptedException {
+    public StandInPhone stopSticks() throws InterruptedException {
         sending = false;
         if (sticks != null) sticks.join(2000);
         return this;
@@ -123,7 +134,7 @@ final class StandInPhone implements AutoCloseable {
         return this;
     }
 
-    long sticksSent() {
+    public long sticksSent() {
         return sticksSent.get();
     }
 
@@ -168,7 +179,7 @@ final class StandInPhone implements AutoCloseable {
     }
 
     /** The keeper (or the board behind it) ended the connection. */
-    boolean ended() {
+    public boolean ended() {
         return ended;
     }
 
