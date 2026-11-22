@@ -419,7 +419,11 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   before (answers to requests left in its queue), cut where its buffer ran over - a "diff all" read with that in
   front is not whole. One question is asked and all that comes is thrown away until 150 ms pass with nothing.
 - **The keeper against it** (`SitlKeeperScenario`): as a real board's in every rule but the battery
-  (`noBattery`, `battery=none` by hand - refused for a real board).
+  (`noBattery`, `battery=none` by hand - refused for a real board). **Only 4.4 and older can be locked as SITL:**
+  Betaflight 4.5 on leaves MSP's arming block out of its SITL build (msp.c, `#ifndef SIMULATOR_BUILD`). On 4.5.5 the
+  keeper saw that its lock does not show and opened no window - but sticks that asked for ARM armed the board all the
+  same, outside any window, and the keeper could only trip and say NOT SAFE. The scenario checks there only that no
+  window opens, and sends no sticks.
 
 ## For whoever adds a scenario
 

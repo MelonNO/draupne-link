@@ -150,7 +150,11 @@ class SitlFailsafeScenario {
                         runUpTo = l.s();
                     }
                     if (rxLoss == null && (l.flags() >> Msp.ARMING_DISABLED_RXLOSS_BIT & 1) != 0) rxLoss = l.s();
-                    boolean inStage2 = l.rescue() || l.phase().equals("GPS_RESCUE") || l.phase().equals("LANDED") || l.phase().equals("RX_LOSS_MONITORING") || !l.armed();
+                    // stage 2 by Betaflight's word, or by the motors leaving the held throttle once failsafe_delay is nearly up
+                    // (4.5.5 drops them to idle one look before its GPS RESCUE mode shows)
+                    boolean moved = Arrays.stream(l.motors()).anyMatch(m -> Math.abs(m - held) > 3);
+                    boolean inStage2 = l.rescue() || l.phase().equals("GPS_RESCUE") || l.phase().equals("LANDED") || l.phase().equals("RX_LOSS_MONITORING") || !l.armed()
+                            || moved && l.s() >= 19.5;
                     if (stage2 == null && inStage2) stage2 = l.s();
                     if (stage2 == null) {
                         armedThroughStage1 &= l.armed();
