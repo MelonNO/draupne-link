@@ -96,6 +96,23 @@ class PhoneRigGuardTest {
             new String[]{"shell", "reboot"},
             new String[]{"reboot"},
             new String[]{"shell", "svc power shutdown"},
+            new String[]{"shell", "svc power reboot"},
+            new String[]{"shell", "svc power stayon true"},
+            new String[]{"shell", "svc power stayon false"},
+            // nothing the bench sends can enter a PIN, or change the lock: no text, no key but WAKEUP, BACK and HOME
+            new String[]{"shell", "input text 1234"},
+            new String[]{"shell", "input keyevent KEYCODE_1"},
+            new String[]{"shell", "input keyevent 8"},
+            new String[]{"shell", "input keyevent KEYCODE_ENTER"},
+            new String[]{"shell", "input keyevent KEYCODE_WAKEUP KEYCODE_1"},
+            new String[]{"shell", "input keyboard text 1234"},
+            new String[]{"shell", "settings put secure lockscreen.disabled 1"},
+            new String[]{"shell", "settings put global stay_on_while_plugged_in 99"},
+            new String[]{"shell", "settings put system stay_on_while_plugged_in 2"},
+            new String[]{"shell", "settings put global draupne_bench_stay_on_was 2 3"},
+            new String[]{"shell", "settings delete global airplane_mode_on"},
+            new String[]{"shell", "settings delete secure lock_screen_lock_after_timeout"},
+            new String[]{"shell", "dumpsys lock_settings --reset"},
             new String[]{"shell", "svc usb setFunctions"},
             new String[]{"shell", "dumpsys battery set level 5"},
             new String[]{"shell", "cmd battery set status 3"},
@@ -266,8 +283,8 @@ class PhoneRigGuardTest {
         rig.shell("svc data enable"); // put back by the scenario itself: not again
         int before = adb.count();
         rig.close();
-        assertEquals(List.of("shell dumpsys deviceidle unforce", "shell dumpsys battery reset", "shell cmd connectivity airplane-mode disable", "shell svc wifi enable"),
-                adb.since(before));
+        assertEquals(List.of("shell dumpsys deviceidle unforce", "shell dumpsys battery reset", "shell settings get global draupne_bench_stay_on_was",
+                "shell cmd connectivity airplane-mode disable", "shell svc wifi enable"), adb.since(before));
     }
 
     /** A scenario's "try again" must not swallow a refusal: several of them catch RuntimeException around a phone command. */
@@ -361,6 +378,19 @@ class PhoneRigGuardTest {
                 new String[]{"shell", "cmd connectivity airplane-mode disable"},
                 new String[]{"shell", "svc wifi disable"},
                 new String[]{"shell", "svc wifi enable"},
+                // the lock screen looked at (read, never changed); an unlocked phone kept awake on USB, its own setting back exactly
+                new String[]{"shell", "dumpsys window"},
+                new String[]{"shell", "dumpsys lock_settings"},
+                new String[]{"shell", "input keyevent KEYCODE_HOME"},
+                new String[]{"shell", "settings get global draupne_bench_stay_on_was"},
+                new String[]{"shell", "settings get global stay_on_while_plugged_in"},
+                new String[]{"shell", "settings put global draupne_bench_stay_on_was 0"},
+                new String[]{"shell", "settings put global draupne_bench_stay_on_was unset"},
+                new String[]{"shell", "svc power stayon usb"},
+                new String[]{"shell", "settings put global stay_on_while_plugged_in 0"},
+                new String[]{"shell", "settings put global stay_on_while_plugged_in 15"},
+                new String[]{"shell", "settings delete global stay_on_while_plugged_in"},
+                new String[]{"shell", "settings delete global draupne_bench_stay_on_was"},
                 new String[]{"reverse", "tcp:8123", "tcp:8123"},
                 new String[]{"reverse", "--remove", "tcp:8123"},
                 new String[]{"reverse", "--list"},

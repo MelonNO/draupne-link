@@ -3,6 +3,7 @@ package de.droiddrone.bench.phone;
 import de.droiddrone.bench.AppRig;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.pc.fleet.VirtualFleet;
@@ -36,6 +37,10 @@ import java.nio.file.Files;
  * <p>
  * On a real phone too (the task benchHwPhone) - and there it is a real camera that is closed under the change, not the
  * emulator's made-up one. Without root the crash guard's count is forgotten by the bench build's receiver.
+ * <p>
+ * Behind a real phone's secure lock screen nothing of it is lost: every check here is the PC's own, the phone's
+ * process number or the phone's log. Only START is not pressed - the service has to have started by itself, which is
+ * asked of Android and the app's log.
  */
 @Tag("emulator")
 @Tag("hwphone")
@@ -90,7 +95,7 @@ class PhoneCameraRaceScenario {
             phone.grantPermissions();
             phone.stopForgettingRestarts(); // closed, the crash guard's file gone (a real phone: the bench receiver forgets it)
             phone.launch();
-            if (phone.texts().contains("START")) phone.tap("START");
+            phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
             java.net.InetSocketAddress at = phone.linkAddress();
             try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                 wire.rule(BadLink.clean(53));
@@ -146,11 +151,11 @@ class PhoneCameraRaceScenario {
                 }
                 String log = said(phone, from);
                 Files.writeString(rig.film.dir().resolve("phone-log.txt"), log, StandardCharsets.UTF_8);
-                int met = count(log, "the camera was closed meanwhile");
+                int met = count(log, PhoneWords.CAMERA_CLOSED_MEANWHILE);
                 rig.film.remark(done + " of " + rounds + " rounds done; the camera was closed under a size change " + met + " time(s) by the phone's own log; the app was ended "
                         + ended + " time(s)." + (met == 0 && ended == 0 ? " This run never met the moment: nothing is proven by it." : ""));
                 rig.check(ended == 0, "the phone app was never ended: the same process all the way");
-                rig.check(!log.contains("FATAL"), "no error that ends the app in the phone's log");
+                rig.check(!log.contains(PhoneWords.ANY_FATAL), "no error that ends the app in the phone's log");
                 rig.check(pilot.linkUp(), "and the link is up at the end");
                 ui.shot("after " + rounds + " size changes, each followed by STANDBY");
                 // as found: AUTO again

@@ -3,6 +3,7 @@ package de.droiddrone.bench.phone;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.Film;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Sandbox;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.pc.ControlLink;
@@ -36,6 +37,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  * This scenario starts no Windows app and so has no fence up: nothing is sealed here but the PC's link itself, which
  * speaks to the wire on loopback. The wire's way to a real phone is open only in a hardware run's JVM all the same
  * ({@code PhoneRig.linkAddress} asks the fence's own rule).
+ * <p>
+ * Behind a real phone's secure lock screen (as the phones on the drones are; nobody enters its PIN) it still proves:
+ * the app up after its data was cleared (its process), its service started by itself and listening (Android's list of
+ * living services, the app's log), the PC's link READY, the real camera's picture arriving from behind the lock
+ * screen, the weak link held, the cut and the way back, STANDBY taken (the app's log), no crash. Skipped there, as on
+ * every real phone: the first start's questions. The words the film keeps of the phone's screen are the lock screen's.
  */
 @Tag("emulator")
 @Tag("hwphone")
@@ -82,23 +89,29 @@ class PhoneScenario {
             if (phone.device()) phone.grantPermissions(); // a real phone's questions are its maker's: granted as adb grants, not tapped
             phone.launch();
             phone.shot("phone: the very first start");
-            List<String> asked = new ArrayList<>();
-            for (int i = 0; i < 8; i++) {
-                List<String> texts = phone.texts();
-                String yes = texts.stream().filter(t -> t.equals("While using the app") || t.equals("Allow") || t.equals("Only this time")).findFirst().orElse(null);
-                if (yes == null) break;
-                asked.add(texts.stream().filter(t -> t.startsWith("Allow ")).findFirst().orElse("?"));
-                phone.tap(yes);
+            if (phone.device()) {
+                // a real phone's questions are its maker's, and no finger of the bench goes on them: granted by adb above
+                phone.skip("the first start asks for the camera and what else it needs: on a real phone the questions are its maker's and no finger of the bench "
+                        + "goes on them - what they ask for was granted by adb instead");
+            } else {
+                List<String> asked = new ArrayList<>();
+                for (int i = 0; i < 8; i++) {
+                    List<String> texts = phone.texts();
+                    String yes = texts.stream().filter(t -> t.equals("While using the app") || t.equals("Allow") || t.equals("Only this time")).findFirst().orElse(null);
+                    if (yes == null) break;
+                    asked.add(texts.stream().filter(t -> t.startsWith("Allow ")).findFirst().orElse("?"));
+                    phone.tap(yes);
+                }
+                film.remark("The app asked: " + asked);
+                check(!asked.isEmpty(), "the first start asks for the camera (and what else it needs)");
             }
-            film.remark("The app asked: " + asked);
-            if (!phone.device()) check(!asked.isEmpty(), "the first start asks for the camera (and what else it needs)");
-            phone.untilSees("for DRAUPNE Link", 15_000);
-            if (phone.texts().contains("START")) phone.tap("START");
+            phone.untilAppIsUp(15_000); // its screen's "for DRAUPNE Link"; behind a real phone's lock screen: its process
+            phone.startIfAsked();       // START, where it shows; behind a lock screen the service has to have started by itself
             Ui.pause(2000);
             phone.shot("phone: its screen after the first start");
             // (a real phone's USB is adb's cable - but over the network it may have a flight controller: said, not checked)
-            if (phone.device()) film.remark("About its flight controller the phone says: " + phone.texts().stream().filter(t -> t.toLowerCase().contains("flight controller")).toList());
-            else check(phone.sees("No flight controller on USB"), "it says there is no flight controller on USB");
+            if (phone.device()) film.remark("About its flight controller the phone says: " + phone.flightControllerWord());
+            else check(phone.sees(PhoneWords.SCREEN_NO_FC), "it says there is no flight controller on USB");
             check(phone.serviceRunning(), "its service runs (it listens for a PC)");
             Files.writeString(film.dir().resolve("phone-screen-first-start.txt"), String.join("\n", phone.texts()), StandardCharsets.UTF_8);
 
@@ -163,7 +176,7 @@ class PhoneScenario {
             // ---- STANDBY from the PC, and wake by connecting again
             link.sendPowerMode(ControlLink.POWER_STANDBY, 0);
             Ui.pause(4000);
-            check(phone.log().contains("Power: Standby"), "the phone's log says it took STANDBY from the PC");
+            check(phone.log().contains(PhoneWords.STANDBY), "the phone's log says it took STANDBY from the PC");
             phone.shot("phone: STANDBY asked by the PC");
             // the STANDBY screen animates without end, and Android then gives no description of it: the picture above is for the eyes
             link.close();
@@ -172,7 +185,7 @@ class PhoneScenario {
             Files.writeString(film.dir().resolve("phone-log.txt"), phone.log(), StandardCharsets.UTF_8);
             Files.writeString(film.dir().resolve("pc-log.txt"), String.join("\n", pcLog), StandardCharsets.UTF_8);
             String log = phone.log();
-            check(!log.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
+            check(!log.contains(PhoneWords.ANDROID_FATAL), "no crash in the phone app's log");
         } catch (Throwable t) {
             wrong.add("the scenario stopped: " + t);
             try {

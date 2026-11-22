@@ -29,7 +29,10 @@ final class RecordingAdb implements PhoneAdb {
     private final Map<String, Deque<String>> answers = new LinkedHashMap<>();
     private final List<String> failing = new ArrayList<>();
 
-    /** A phone that is there and well: on adb, started through, a cool battery at 80 %, the app installed, the bench receiver answering. */
+    /**
+     * A phone that is there and well: on adb, started through, a cool battery at 80 %, the app installed, the bench
+     * receiver answering - and unlocked, the bench build's main screen in front, "stay awake" never set.
+     */
     static RecordingAdb aPhone() {
         return new RecordingAdb()
                 .says("get-state", "device")
@@ -38,7 +41,46 @@ final class RecordingAdb implements PhoneAdb {
                 .says("shell pm path", "package:/data/app/x/base.apk")
                 .says("shell wm size", "Physical size: 1080x2400")
                 .says("shell am broadcast", "Broadcasting: Intent { }\nBroadcast completed: result=1, data=\"DRAUPNE-BENCH-FC control: done\"")
-                .says("install", "Performing Streamed Install\nSuccess");
+                .says("install", "Performing Streamed Install\nSuccess")
+                .says("shell dumpsys window", window(false, null, BenchControl.PACKAGE + "/de.droiddrone.flight.MainActivity"))
+                .says("shell dumpsys lock_settings", LOCK_SETTINGS_PIN)
+                .says("shell settings get global", "null")
+                .says("exec-out uiautomator", screen(BenchControl.PACKAGE, "DRAUPNE Flight BENCH", "2.3.0-pc.55-bench · for DRAUPNE Link", "No flight controller on USB"));
+    }
+
+    /** The same phone with its secure lock screen showing and the app behind it: as the bench's phone was on its first run. */
+    static RecordingAdb aLockedPhone() {
+        return aPhone().says("shell dumpsys window", WINDOW_SECURE_LOCK).says("exec-out uiautomator", LOCK_SCREEN);
+    }
+
+    /**
+     * {@code dumpsys window}, the lines of it the rig reads. With a secure lock screen showing the first run on the
+     * phone had "isKeyguardShowing=true" and "mDreamingLockscreen=true" in it, and the focus on the NotificationShade.
+     */
+    static String window(boolean lockScreenShowing, Boolean occluded, String focus) {
+        return "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n    mShowingDream=false mDreamingLockscreen=" + lockScreenShowing + " mDreamingSleepToken=null\n"
+                + "    isKeyguardShowing=" + lockScreenShowing + "\n" + (occluded == null ? "" : "    mKeyguardOccluded=" + occluded + " mKeyguardOccludedChanged=false\n")
+                + "WINDOW MANAGER WINDOWS (dumpsys window windows)\n  Window #7 Window{9c1e0aa u0 NotificationShade}:\n"
+                + "  mCurrentFocus=Window{4d2f1a7 u0 " + focus + "}\n  mFocusedApp=ActivityRecord{71b9c3e u0 " + BenchControl.PACKAGE + "/de.droiddrone.flight.MainActivity t412}\n";
+    }
+
+    static final String WINDOW_SECURE_LOCK = window(true, false, "NotificationShade");
+    /** {@code dumpsys lock_settings}: what kind of lock the phone has. (Nothing else of it is kept by the rig.) */
+    static final String LOCK_SETTINGS_PIN = "Current lock settings service state:\n\nUser State:\n  User 0\n    SP Handle: 4f1a2b3c4d5e6f70\n    Quality: 0\n"
+            + "    CredentialType: PIN\n    SeparateChallenge: true\n    Metrics: known\n";
+    static final String LOCK_SETTINGS_NONE = "Current lock settings service state:\n\nUser State:\n  User 0\n    Quality: 0\n    CredentialType: NONE\n";
+    /** What Android describes of a lock screen: the clock and the date, the system's own window. */
+    static final String LOCK_SCREEN = screen("com.android.systemui", "00", "51", "Sunday 22 November");
+
+    /** {@code uiautomator dump}: a screen of that package with these words on it, one under the other. */
+    static String screen(String app, String... words) {
+        StringBuilder xml = new StringBuilder("<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation=\"0\">");
+        for (int i = 0; i < words.length; i++) {
+            xml.append("<node index=\"").append(i).append("\" text=\"").append(words[i]).append("\" resource-id=\"").append(app).append(":id/t").append(i)
+                    .append("\" class=\"android.widget.TextView\" package=\"").append(app).append("\" content-desc=\"\" clickable=\"true\" enabled=\"true\" bounds=\"[60,")
+                    .append(200 + 100 * i).append("][660,").append(280 + 100 * i).append("]\" />");
+        }
+        return xml.append("</hierarchy>").toString();
     }
 
     /** What {@code dumpsys battery} prints. */

@@ -215,6 +215,35 @@ class PhoneRigEmulatorTest {
         rig.checkBattery();      // a real phone's only
         assertTrue(!rig.sleepsOnBattery());
         assertEquals(List.of(), sent());
+
+        // what the scenarios read off the screen, since a real phone may have a lock screen over it (2026-11-22): on the
+        // emulator each is the same look at the screen it always was, with the same words - and nothing else is asked
+        adb.says("exec-out uiautomator", RecordingAdb.screen(APP, "START", "2.3.0-pc.55 · for DRAUPNE Link", "Connected to PC"));
+        rig.untilAppIsUp(15_000); // was: phone.untilSees("for DRAUPNE Link", 15_000)
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty"), sent());
+        pauses.clear();
+        rig.startIfAsked();       // was: if (phone.texts().contains("START")) phone.tap("START")
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty", "exec-out uiautomator dump /dev/tty", "shell input tap 360 240", "exec-out screencap -p"), sent());
+        assertEquals(List.of(900L), pauses);
+        List<String> checks = new ArrayList<>();
+        rig.checkConnectedToPc((ok, what) -> checks.add(ok + " " + what), "the phone's screen says: Connected to PC"); // was: rig.check(phone.sees("Connected to PC"), ...)
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty"), sent());
+        assertEquals(List.of("true the phone's screen says: Connected to PC"), checks);
+        adb.says("exec-out uiautomator", RecordingAdb.screen(APP, "2.3.0-pc.55 · for DRAUPNE Link", "Waiting for a PC"));
+        rig.startIfAsked();       // no START showing: looked, nothing pressed
+        rig.checkConnectedToPc((ok, what) -> checks.add(ok + " " + what), "again");
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty", "exec-out uiautomator dump /dev/tty"), sent());
+        assertEquals("false again", checks.get(1));
+        // and what is a real phone's alone asks nothing of the emulator
+        rig.lookOverTheLock("never on the emulator");
+        assertTrue(rig.screenIsTheApps());
+        assertEquals(PhoneRig.Lock.UNLOCKED, rig.lock());
+        assertEquals(List.of(), sent());
+        assertEquals(List.of(), rig.skipped());
+        assertEquals(List.of(), rig.otherWays());
+        assertEquals("for DRAUPNE Link", PhoneWords.SCREEN_TITLE);
+        assertEquals("START", PhoneWords.SCREEN_START);
+        assertEquals("Connected to PC", PhoneWords.SCREEN_CONNECTED);
     }
 
     @Test

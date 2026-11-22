@@ -8,7 +8,9 @@ import java.util.function.Consumer;
 
 /**
  * After a phone run that was killed or failed (its {@link PhoneRig#close} may never have run): what the bench may
- * have left pretended on the real phone is taken back - doze no longer forced, the battery as it really is. Then the
+ * have left pretended on the real phone is taken back - doze no longer forced, the battery as it really is, and the
+ * phone's own "stay awake while plugged in" where a run kept an unlocked phone awake (by the note that run left on
+ * the phone; without a note it is not touched). Then the
  * phone's state is read and printed, so that anything else left behind is seen (airplane mode on, a port still led
  * back to this PC); that is only said, not changed - it may be the pilot's own setting, or the bench build's flight
  * controller, which comes down such a port.
@@ -84,6 +86,22 @@ public final class PhoneReset {
                 out.accept("FAILED  " + String.join(" ", order) + "   -> " + e.getMessage());
             }
         }
+        // "stay awake while plugged in": a run that found the phone unlocked set it for USB and noted the phone's own
+        // value on the phone. If the note is still there, that value goes back, exactly, and the note goes
+        try {
+            String noted = said(adb, List.of("shell", "settings get global " + PhoneGuard.STAY_ON_NOTE));
+            List<List<String>> back = PhoneRig.stayOnBack(noted);
+            for (List<String> order : back) {
+                String said = said(adb, order);
+                boolean failed = said.toLowerCase().contains("error") || said.toLowerCase().contains("exception");
+                ok &= !failed;
+                out.accept((failed ? "FAILED  " : "done    ") + String.join(" ", order) + (said.isBlank() ? "" : "   -> " + said.lines().findFirst().orElse("")));
+            }
+            if (back.isEmpty()) out.accept("stay awake while plugged in: the bench has no note of having changed it - left as it is");
+        } catch (RuntimeException e) {
+            ok = false;
+            out.accept("FAILED  stay awake while plugged in: its note could not be read or its value put back   -> " + e.getMessage());
+        }
         // read only, from here on
         List<String> seen = new ArrayList<>();
         try {
@@ -97,6 +115,9 @@ public final class PhoneReset {
             seen.add("airplane mode: " + (airplane.isBlank() ? "not readable" : airplane) + (airplane.contains("enabled") ? "   <- ON: switch it off by hand if the bench left it" : ""));
             String idle = said(adb, List.of("shell", "dumpsys deviceidle get deep"));
             seen.add("deep doze: " + (idle.isBlank() ? "not readable" : idle));
+            String stayOn = said(adb, List.of("shell", "settings get global " + PhoneGuard.STAY_ON));
+            seen.add("stay awake while plugged in: " + (stayOn.isBlank() ? "not readable" : stayOn.equals("null") ? "unset" : stayOn)
+                    + "   (0 or unset: never; 2: on USB; 3, 7, 15: on a charger of any kind - the phone's own, as far as the bench knows)");
             String reversed = said(adb, List.of("reverse", "--list"));
             seen.add("ports led back to this PC (adb reverse): " + (reversed.isBlank() ? "none" : reversed.replace("\n", "; ")
                     + "   <- left as they are: the bench build's flight controller comes down one; a scenario's own would be gone with a finished run"));

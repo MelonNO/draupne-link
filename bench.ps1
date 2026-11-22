@@ -315,7 +315,7 @@ function Invoke-PhoneReset {
     $code = Invoke-Gradle @('--offline', '--console=plain', '-q', 'phoneReset') $log
     $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
     [void]$results.Add("phoneReset`t$mins min`t`t`texit $code")
-    if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match '^(done|FAILED|battery|airplane|deep doze|ports led|STILL|Nothing done|What the bench|NOT everything)' } | ForEach-Object { Write-Host "          $_" } }
+    if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match '^(done|FAILED|battery|airplane|deep doze|stay awake|ports led|STILL|Nothing done|What the bench|NOT everything)' } | ForEach-Object { Write-Host "          $_" } }
     if ($code -ne 0) { Write-Host "          phoneReset ended with exit code $code - LOOK AT THE PHONE (logs\phoneReset.log); with it back on adb: .\gradlew phoneReset" }
 }
 # <<< R5 --------------------------------------------------------------------------------------------------------------

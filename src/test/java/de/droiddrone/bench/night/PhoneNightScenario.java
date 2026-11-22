@@ -3,6 +3,7 @@ package de.droiddrone.bench.night;
 import de.droiddrone.bench.AppRig;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.bench.Watch;
@@ -35,6 +36,12 @@ import java.util.regex.Pattern;
  * therefore spent pretended off the cable and forced into deep doze ({@code PhoneRig.onBattery} - what that does not
  * prove is written there), taken back once PILOT UAV has it again. Its battery is looked at before every round: hotter
  * than the bench's limit the scenario waits there, with the camera off; too low it stops.
+ * <p>
+ * Behind a real phone's secure lock screen (and a phone that starts unlocked is locked by the app at its first deep
+ * sleep) every round still proves: the link good again after the poor minutes and the cut, the sleep taken, the
+ * phone's own checks (its log), the wake within its interval, its memory, its sessions, no crash, the service alive.
+ * "Connected to PC" comes from the bench build (STATS) instead of the screen; with the released app it is skipped and
+ * listed. How the woken app shows in front of the lock screen is filed for the first three rounds (TO LOOK AT).
  */
 @Tag("night")
 @Tag("hwphone")
@@ -84,7 +91,7 @@ class PhoneNightScenario {
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();
-            if (phone.texts().contains("START")) phone.tap("START");
+            phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
             phone.shell("logcat -G 16M"); // the night's lines are read round by round, by time; the buffer holds hours all the same
             java.net.InetSocketAddress link = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its address
             BadLink clean = BadLink.clean(21);
@@ -132,7 +139,7 @@ class PhoneNightScenario {
                         wire.rule(clean);
                         int at = round + 1;
                         ui.until("round " + at + ": the link good again on a good network", 60_000, () -> pilot.linkUp());
-                        rig.check(phone.sees("Connected to PC"), "round " + at + ": the phone's screen says Connected to PC after five poor minutes and a cut");
+                        phone.checkConnectedToPc(rig::check, "round " + at + ": the phone's screen says Connected to PC after five poor minutes and a cut");
 
                         // ---- DEEP SLEEP, a check every minute; left through a check of its own; woken by PILOT UAV
                         // as a pilot presses it: a press the app does not take (its notice says why - WAIT while the
@@ -164,7 +171,7 @@ class PhoneNightScenario {
                         ui.until("round " + at + ": the link ended, the phone asleep", 120_000, () -> ui.has("PILOT UAV"));
                         if (phone.sleepsOnBattery()) phone.onBattery(); // a real phone on its cable would not doze: pretended off it
                         Ui.pause(100_000 + random.nextInt(40_000));
-                        long alarms = count(phone.logSince(roundFrom), "Sleep check alarm fired");
+                        long alarms = count(phone.logSince(roundFrom), PhoneWords.SLEEP_CHECK);
                         rig.check(alarms >= 1, "round " + at + ": asleep for two minutes the phone woke itself to check at least once (" + alarms + " time(s))");
                         long pressed = System.currentTimeMillis();
                         ui.click("PILOT UAV");
@@ -172,6 +179,8 @@ class PhoneNightScenario {
                         wokeS = (System.currentTimeMillis() - pressed) / 1000;
                         slowestWake = Math.max(slowestWake, wokeS);
                         rig.check(wokeS <= 95, "round " + at + ": PILOT UAV had the sleeping phone back after " + wokeS + " s (it checks every minute)");
+                        // a real phone: woken, the app puts itself in front of the lock screen - what adb can see of that, for the first rounds' film
+                        if (round < 3) phone.lookOverTheLock("round " + at + ": woken from its deep sleep by PILOT UAV");
                         if (phone.sleepsOnBattery()) phone.plugged();
                         Ui.pause(5000);
                         pilot.standby();
@@ -219,19 +228,19 @@ class PhoneNightScenario {
                     long mb = phoneMb(phone);
                     if (firstMb < 0) firstMb = mb;
                     lastMb = mb;
-                    long sessions = count(log, "a new session") + count(log, "New session from");
-                    long anew = count(log, "Link socket:");
+                    long sessions = count(log, PhoneWords.NEW_SESSION_SAME_PC) + count(log, PhoneWords.NEW_SESSION);
+                    long anew = count(log, PhoneWords.LINK_SOCKET);
                     reopened += anew;
                     table.row((System.currentTimeMillis() - t0) / 60_000.0, round, mb, Watch.usedMb(), rig.watch.threads(), wokeS,
-                            count(log, "Sleep check alarm fired"), sessions, anew);
+                            count(log, PhoneWords.SLEEP_CHECK), sessions, anew);
                     if (anew > 0) {
                         rig.film.remark("Round " + round + ": the phone opened its link socket anew " + anew + " time(s) - nothing had left it for seconds though it heard the PC.");
                     }
                     // a cut one way gives a new session a second (F-001); hundreds mean the phone answers into nothing
                     rig.check(sessions <= 60, "round " + round + ": the phone began " + sessions + " new sessions (60 at most: a session a second for minutes means its answers reach nobody)");
-                    rig.check(!log.contains("FATAL EXCEPTION"), "round " + round + ": no crash in the phone app's log");
+                    rig.check(!log.contains(PhoneWords.ANDROID_FATAL), "round " + round + ": no crash in the phone app's log");
                     rig.check(phone.serviceRunning(), "round " + round + ": the phone app's service is running");
-                    if (log.contains("FATAL EXCEPTION")) break;
+                    if (log.contains(PhoneWords.ANDROID_FATAL)) break;
                     // two rounds wrong in a row: the app is started again, as its pilot would - said, and counted
                     failedInARow = roundFailed ? failedInARow + 1 : 0;
                     if (failedInARow >= 2) {
@@ -241,7 +250,7 @@ class PhoneNightScenario {
                         phone.forceStop();
                         phone.launch();
                         Ui.pause(3000);
-                        if (phone.texts().contains("START")) phone.tap("START");
+                        phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
                         Ui.pause(15_000);
                     }
                 }

@@ -58,7 +58,9 @@ class PhoneRigDeviceTest {
         return s;
     }
 
-    private static final List<String> RESETS = List.of("shell dumpsys deviceidle unforce", "shell dumpsys battery reset");
+    /** What close always sends to a real phone: the two that take the battery's pretence back, and the question whether "stay awake" has a note to go back by. */
+    private static final List<String> RESETS = List.of("shell dumpsys deviceidle unforce", "shell dumpsys battery reset",
+            "shell settings get global draupne_bench_stay_on_was");
 
     // ------------------------------------------------------------------ what is always put back
 
@@ -127,7 +129,8 @@ class PhoneRigDeviceTest {
         rig.reverseAgain();   // after the cable was out
         assertEquals(List.of("reverse tcp:8123 tcp:8123", "reverse tcp:8124 tcp:8124"), sent());
         rig.close();
-        assertEquals(List.of("shell dumpsys deviceidle unforce", "shell dumpsys battery reset", "reverse --remove tcp:8123", "reverse --remove tcp:8124"), sent());
+        assertEquals(List.of("shell dumpsys deviceidle unforce", "shell dumpsys battery reset", "shell settings get global draupne_bench_stay_on_was",
+                "reverse --remove tcp:8123", "reverse --remove tcp:8124"), sent());
         rig.close();
         assertEquals(RESETS, sent(), "closed twice: the two again, the ports only once");
 
@@ -186,8 +189,10 @@ class PhoneRigDeviceTest {
                 "shell pm grant " + BENCH + " android.permission.ACCESS_COARSE_LOCATION",
                 "shell pm grant " + BENCH + " android.permission.POST_NOTIFICATIONS",
                 "shell dpm set-active-admin --user 0 " + BENCH + "/de.droiddrone.flight.PowerAdminReceiver"), sent());
-        rig.launch();
-        assertEquals(List.of("shell input keyevent KEYCODE_WAKEUP", "shell wm dismiss-keyguard", "shell am start -n " + BENCH + "/de.droiddrone.flight.MainActivity"), sent());
+        rig.launch(); // the phone's clock for the log, the screen woken, its lock looked at (unlocked here: nothing sent to it), the app opened
+        assertEquals(List.of("shell date '+%m-%d %H:%M:%S.000'", "shell input keyevent KEYCODE_WAKEUP", "shell dumpsys window", "shell dumpsys lock_settings",
+                "shell am start -n " + BENCH + "/de.droiddrone.flight.MainActivity"), sent());
+        assertEquals(PhoneRig.Lock.UNLOCKED, rig.lock());
         assertEquals(BENCH, rig.app());
         rig.pid();
         rig.forceStop();
@@ -202,8 +207,8 @@ class PhoneRigDeviceTest {
         assertEquals(List.of(), sent());
         released.launch(); // opening it is a hand's work, and reading it is reading
         released.version();
-        assertEquals(List.of("shell input keyevent KEYCODE_WAKEUP", "shell wm dismiss-keyguard", "shell am start -n " + PhoneRig.APP + "/de.droiddrone.flight.MainActivity",
-                "shell dumpsys package " + PhoneRig.APP), sent());
+        assertEquals(List.of("shell date '+%m-%d %H:%M:%S.000'", "shell input keyevent KEYCODE_WAKEUP", "shell dumpsys window", "shell dumpsys lock_settings",
+                "shell am start -n " + PhoneRig.APP + "/de.droiddrone.flight.MainActivity", "shell dumpsys package " + PhoneRig.APP), sent());
     }
 
     @Test
@@ -247,21 +252,22 @@ class PhoneRigDeviceTest {
     void fixedPlacesAreScaledToARealPhonesScreenAndWordsAreFoundWhereTheyAre() {
         adb.says("shell wm size", "Physical size: 720x1600");
         PhoneRig rig = rig();
+        // (a finger at a fixed place goes down only while the screen is the app's: looked at first)
         rig.scrollDown();
-        assertEquals(List.of("shell wm size", "shell dumpsys window displays", "shell input swipe 360 1133 360 467 300"), sent());
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty", "shell wm size", "shell dumpsys window displays", "shell input swipe 360 1133 360 467 300"), sent());
         rig.tapAt(540, 1200);
-        assertEquals(List.of("shell wm size", "shell dumpsys window displays", "shell input tap 360 800"), sent());
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty", "shell wm size", "shell dumpsys window displays", "shell input tap 360 800"), sent());
         assertEquals(new Point(360, 800), rig.place(540, 1200));
         sent();
 
         // turned on its side between two presses: asked each time
         adb.says("shell dumpsys window displays", "init=720x1600 320dpi cur=1600x720 app=1600x660");
         rig.tapAt(540, 1200);
-        assertEquals(List.of("shell wm size", "shell dumpsys window displays", "shell input tap 800 360"), sent());
+        assertEquals(List.of("exec-out uiautomator dump /dev/tty", "shell wm size", "shell dumpsys window displays", "shell input tap 800 360"), sent());
 
         // a control found by its words is pressed where the phone itself says it is: no scaling, no size asked
-        adb.says("exec-out uiautomator", "<hierarchy rotation=\"0\"><node text=\"START\" resource-id=\"x:id/start\" content-desc=\"\" clickable=\"true\" enabled=\"true\" "
-                + "bounds=\"[60,1400][660,1500]\" /></hierarchy>");
+        adb.says("exec-out uiautomator", "<hierarchy rotation=\"0\"><node text=\"START\" resource-id=\"x:id/start\" package=\"" + BENCH + "\" content-desc=\"\" "
+                + "clickable=\"true\" enabled=\"true\" bounds=\"[60,1400][660,1500]\" /></hierarchy>");
         rig.tap("START");
         assertEquals(List.of("exec-out uiautomator dump /dev/tty", "shell input tap 360 1450", "exec-out screencap -p"), sent());
 
@@ -403,9 +409,12 @@ class PhoneRigDeviceTest {
 
     @Test
     void aRealPhoneIsNotStartedButFoundAndItsLogFollowedFromThen(@TempDir Path run) throws Exception {
+        adb.says("shell dumpsys window", RecordingAdb.WINDOW_SECURE_LOCK); // as the phones on the drones are: a lock screen over everything
         PhoneRig rig = rig(PhoneRigGuardTest.phone(CABLE, BENCH, false), run);
         rig.ensureRunning();
-        assertEquals(List.of("get-state", "shell getprop sys.boot_completed", "shell dumpsys battery"), sent());
+        assertEquals(List.of("get-state", "shell getprop sys.boot_completed", "shell dumpsys battery",
+                "shell input keyevent KEYCODE_WAKEUP", "shell dumpsys window", "shell dumpsys lock_settings"), sent(), "found, its battery read, its lock screen looked at");
+        assertEquals(PhoneRig.Lock.SECURE, rig.lock());
         assertEquals(List.of(), adb.emulatorStarts, "no emulator is started for a real phone");
         assertEquals(List.of("logcat -v threadtime -s DDLog:I DD:I AndroidRuntime:E ActivityManager:I"), adb.followed);
         assertEquals(List.of(run.resolve("phone-logcat.txt")), adb.followedInto, "into the run's folder");

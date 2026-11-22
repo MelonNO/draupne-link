@@ -23,7 +23,9 @@ class PhoneRigResetTest {
         assertTrue(PhoneReset.run(adb, said::add));
         assertEquals(List.of("get-state",
                 "shell dumpsys deviceidle unforce", "shell dumpsys battery reset",
-                "shell dumpsys battery", "shell cmd connectivity airplane-mode", "shell dumpsys deviceidle get deep", "reverse --list"), adb.sent);
+                "shell settings get global draupne_bench_stay_on_was", // a note of a run that kept the phone awake? None here: nothing put back
+                "shell dumpsys battery", "shell cmd connectivity airplane-mode", "shell dumpsys deviceidle get deep",
+                "shell settings get global stay_on_while_plugged_in", "reverse --list"), adb.sent);
         assertEquals(List.of(List.of("shell", "dumpsys deviceidle unforce"), List.of("shell", "dumpsys battery reset")), PhoneReset.ORDERS,
                 "the two PhoneRig.close always sends, in its order - and nothing else is changed");
         assertTrue(said.get(0).startsWith("done    shell dumpsys deviceidle unforce"), said.toString());

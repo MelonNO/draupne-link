@@ -14,18 +14,22 @@ import java.util.function.Function;
  * answer to "what can a hardware run do to my phone".
  * <ul>
  * <li><b>Read</b>: getprop, pidof, ps, ss, date '+...', wm size / density, uiautomator dump, screencap -p, logcat (read
- * or followed), dumpsys of battery, deviceidle, package, activity, meminfo, window and the other services named in
- * {@link #DUMPS}, pm path / list, appops get, settings get, cat of /sys and /proc, the airplane switch asked.</li>
- * <li><b>A hand's work</b>: input tap / swipe / keyevent / text, wm dismiss-keyguard, am start of the run's own app.</li>
+ * or followed), dumpsys of battery, deviceidle, package, activity, meminfo, window, lock_settings (which kind of lock
+ * the phone has - read, never changed) and the other services named in {@link #DUMPS}, pm path / list, appops get,
+ * settings get, cat of /sys and /proc, the airplane switch asked.</li>
+ * <li><b>A hand's work</b>: input tap / swipe, the keys WAKEUP, BACK and HOME, wm dismiss-keyguard, am start of the
+ * run's own app. No text and no other key is ever typed: nothing the bench sends can enter a PIN.</li>
  * <li><b>Changes to the app</b> - pm clear / grant / revoke, appops set, dpm set-active-admin / remove-active-admin,
  * am force-stop / kill / crash, install, uninstall, a broadcast to the bench receiver: only on the bench build
  * ({@link BenchControl#PACKAGE}); on the released app ({@link PhoneRig#APP}) only when the run was started with
  * "the released app may be changed"; on any other app never.</li>
  * <li><b>Changes to the phone</b>, each put back when the rig closes: dumpsys battery unplug / reset, dumpsys
  * deviceidle force-idle / unforce, adb reverse, logcat -G, setprop debug.draupne.fc tcp:&lt;port&gt; | usb (the bench
- * build's way to its flight controller; gone with the phone's next restart); and the network switched off (airplane mode on, svc wifi
- * disable, svc data disable) - that only while adb comes over the cable: over the network it would cut the bench's
- * own way to the phone, with nobody there to switch it on again.</li>
+ * build's way to its flight controller; gone with the phone's next restart); the screen kept on while on USB (svc power
+ * stayon usb - and to put the phone's own value back exactly: settings put / delete global {@link #STAY_ON}, with the
+ * bench's note of that value kept on the phone meanwhile, {@link #STAY_ON_NOTE}); and the network switched off (airplane
+ * mode on, svc wifi disable, svc data disable) - that only while adb comes over the cable: over the network it would cut
+ * the bench's own way to the phone, with nobody there to switch it on again.</li>
  * <li><b>Never</b>: adb root / su, locksettings, install -d (a version down), kill and rm (root's; the bench receiver
  * does that work), a file written on the phone, the clock set, and everything not named above.</li>
  * </ul>
@@ -66,7 +70,18 @@ final class PhoneGuard {
 
     /** The services whose dumpsys is read as it is (none of them takes an order this way). */
     static final Set<String> DUMPS = Set.of("package", "activity", "meminfo", "window", "power", "alarm", "connectivity", "input", "display",
-            "thermalservice", "device_policy", "usb", "cpuinfo", "telephony.registry", "wifi", "netstats");
+            "thermalservice", "device_policy", "usb", "cpuinfo", "telephony.registry", "wifi", "netstats", "lock_settings");
+
+    /** Android's own setting for "stay awake while plugged in" (a sum: 1 mains, 2 USB, 4 wireless, 8 dock; unset on a phone that never had it). */
+    static final String STAY_ON = "stay_on_while_plugged_in";
+    /**
+     * The bench's note of what {@link #STAY_ON} was before it kept an unlocked phone awake: kept on the phone itself, in
+     * the same table, so that it is found after a run that was killed - from any PC, after a restart of the phone too.
+     * A number, or "unset". Gone again once the phone's own value is back.
+     */
+    static final String STAY_ON_NOTE = "draupne_bench_stay_on_was";
+    /** The keys a hand's work needs. Not a digit among them. */
+    private static final Set<String> KEYS = Set.of("KEYCODE_WAKEUP", "KEYCODE_BACK", "KEYCODE_HOME");
 
     /** R3: the bench build's own property (BenchFc.PROPERTY) - how its flight controller is reached. */
     static final String FC_PROPERTY = "debug.draupne.fc";
@@ -293,7 +308,10 @@ final class PhoneGuard {
                 if (a.equals(List.of("dismiss-keyguard"))) return Verdict.ok(Kind.HAND);
                 return Verdict.no("wm " + String.join(" ", a) + " would change the phone's screen: the bench only asks its size");
             case "input":
-                return !a.isEmpty() && Set.of("tap", "swipe", "keyevent", "text").contains(a.get(0)) ? Verdict.ok(Kind.HAND) : unknown(w);
+                if (!a.isEmpty() && (a.get(0).equals("tap") || a.get(0).equals("swipe"))) return Verdict.ok(Kind.HAND);
+                if (a.size() == 2 && a.get(0).equals("keyevent") && KEYS.contains(a.get(1))) return Verdict.ok(Kind.HAND);
+                return Verdict.no("input " + String.join(" ", a) + ": the bench taps and swipes and presses " + new java.util.TreeSet<>(KEYS)
+                        + " - it types no text and no other key, so nothing it sends can enter a PIN");
             case "am":
                 return am(t, a, w);
             case "pm":
@@ -335,10 +353,25 @@ final class PhoneGuard {
                     if (a.get(1).equals("enable")) return new Verdict(Kind.PHONE, null, Set.of(), Set.of(u), false);
                     if (a.get(1).equals("disable")) return networkOff(t, a.get(0).equals("wifi") ? "Wi-Fi off" : "mobile data off", u);
                 }
-                return Verdict.no("svc " + String.join(" ", a) + ": the bench switches Wi-Fi and mobile data, nothing else of svc");
+                // an unlocked phone kept awake on its cable for a run: its own setting is noted first and put back at the end
+                if (a.equals(List.of("power", "stayon", "usb"))) return Verdict.ok(Kind.PHONE);
+                return Verdict.no("svc " + String.join(" ", a) + ": the bench switches Wi-Fi and mobile data and keeps the screen on while on USB "
+                        + "(svc power stayon usb), nothing else of svc");
             }
-            case "settings":
-                return !a.isEmpty() && a.get(0).equals("get") ? Verdict.ok(Kind.READ) : Verdict.no("settings " + (a.isEmpty() ? "" : a.get(0)) + ": the bench only reads the phone's settings");
+            case "settings": {
+                if (!a.isEmpty() && a.get(0).equals("get")) return Verdict.ok(Kind.READ);
+                // one setting of the phone's is ever written: "stay awake while plugged in", back to exactly what it was -
+                // and the bench's own note of that value, beside it
+                if (a.size() == 4 && a.get(0).equals("put") && a.get(1).equals("global")) {
+                    if (a.get(2).equals(STAY_ON) && a.get(3).matches("\\d{1,2}") && Integer.parseInt(a.get(3)) <= 15) return Verdict.ok(Kind.PHONE);
+                    if (a.get(2).equals(STAY_ON_NOTE) && (a.get(3).equals("unset") || a.get(3).matches("\\d{1,2}"))) return Verdict.ok(Kind.PHONE);
+                }
+                if (a.size() == 3 && a.get(0).equals("delete") && a.get(1).equals("global") && (a.get(2).equals(STAY_ON) || a.get(2).equals(STAY_ON_NOTE))) {
+                    return Verdict.ok(Kind.PHONE);
+                }
+                return Verdict.no("settings " + String.join(" ", a) + ": the bench reads the phone's settings and writes one - " + STAY_ON
+                        + ", back to what it was (with its own note of that, " + STAY_ON_NOTE + ")");
+            }
             case "kill", "killall", "pkill":
                 return Verdict.no(c + ": " + ROOTS);
             case "rm", "mv", "cp", "dd", "chmod", "chown", "touch", "mkdir", "ln":

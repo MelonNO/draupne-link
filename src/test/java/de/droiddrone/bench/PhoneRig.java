@@ -51,6 +51,16 @@ import java.util.stream.Stream;
  * so what ended the app is never lost; the bench pauses while its battery is hotter than {@value #HOT_C} degrees and
  * stops below {@value #LOW_PERCENT} per cent.</li>
  * </ul>
+ * <b>A real phone's lock screen</b> ({@link Lock}, since the first run on the phone, 2026-11-22). The phones on the
+ * drones have a PIN, and the app flies, sleeps and wakes behind that lock screen: a run behind it is the realistic
+ * one. The rig never enters a PIN and never changes the lock; nothing it may send could (no text, no key but WAKEUP,
+ * BACK and HOME, a finger only on the app's own controls). At each launch it says in the film which state the phone
+ * is in. Behind a secure lock screen, what a scenario would read off the screen is taken the other way there is -
+ * the app's own log, Android's word that its service lives, the bench build's answer ({@link PhoneWords}) - and the
+ * film says so; what only the screen could show is skipped by name ({@link #skip}) and listed when the rig closes,
+ * never passed over and never counted as passed. When the app itself comes in front of the lock screen (woken by a PC, opened again after an error) the
+ * screen is the app's again and is read as ever. A phone found unlocked is kept awake on its cable for the run
+ * ({@code svc power stayon usb}), its own setting put back exactly when the rig closes or by {@link PhoneReset}.
  * <b>Sleep on a cable</b> ({@link #onBattery}, {@link #plugged}). Android does not doze while it charges, and a
  * phone on adb's cable charges. {@code dumpsys battery unplug} makes Android believe the cable is gone (the app sees
  * "not charging"; the level and temperature Android reports stand still from then on) and
@@ -336,11 +346,81 @@ public final class PhoneRig implements AutoCloseable {
         }
     }
 
-    /** One thing on the phone's screen. */
-    public record Node(String text, String id, String description, Rectangle bounds, boolean clickable, boolean enabled) {
+    /**
+     * One thing on the phone's screen.
+     *
+     * @param app the package whose window it is in (the lock screen's and the system's own are not the app's)
+     */
+    public record Node(String text, String id, String description, Rectangle bounds, boolean clickable, boolean enabled, String app) {
         public String shortId() {
             return id.contains("/") ? id.substring(id.indexOf('/') + 1) : id;
         }
+    }
+
+    /** How a real phone's screen stands when the bench comes to it. */
+    public enum Lock {
+        /** No lock screen showing: the screen is whatever app is in front. */
+        UNLOCKED,
+        /** A lock screen with nothing to enter (a swipe): adb sends it away as a hand's swipe does. */
+        SWIPE,
+        /** A secure lock screen - a PIN, a pattern, a password. Nobody enters it for the bench; the run goes on behind it. */
+        SECURE,
+        /** What the phone says of its lock screen was not understood: taken by what its screen then shows. */
+        NOT_KNOWN
+    }
+
+    /**
+     * What Android says of the lock screen at one moment.
+     *
+     * @param occluded an app has put itself in front of the lock screen (the app does, when a PC wakes it); null: not said
+     * @param focus    the window that has the keys, as Android names it; "" when not said
+     */
+    public record Keyguard(Lock lock, Boolean occluded, String focus) {
+        /**
+         * From {@code dumpsys window} (whether a lock screen shows, whether something is in front of it, which window
+         * has the focus) and {@code dumpsys lock_settings} (whether the phone has anything to enter: "CredentialType").
+         * Android's versions and the phone makers word it differently, so each fact is looked for under every name it
+         * is known by. A lock screen of which it is not known whether it is secure is taken as secure: nothing is
+         * sent to it.
+         */
+        public static Keyguard read(String window, String lockSettings) {
+            String w = window == null ? "" : window, l = lockSettings == null ? "" : lockSettings;
+            Boolean showing = said(w, "\\bisKeyguardShowing=", "\\bmKeyguardShowing=", "(?m)^\\s*showing=", "\\bmShowingLockscreen=");
+            Boolean occluded = said(w, "\\bmKeyguardOccluded=", "\\bisKeyguardOccluded=", "(?m)^\\s*occluded=");
+            Matcher f = Pattern.compile("mCurrentFocus=Window\\{\\S+ \\S+ ([^}]+)}").matcher(w);
+            String focus = f.find() ? f.group(1).trim() : "";
+            if (showing == null && Boolean.TRUE.equals(said(w, "\\bmDreamingLockscreen=")) && focus.contains("NotificationShade")) showing = true;
+            if (showing == null) return new Keyguard(Lock.NOT_KNOWN, occluded, focus);
+            if (!showing) return new Keyguard(Lock.UNLOCKED, occluded, focus);
+            Matcher c = Pattern.compile("(?i)CredentialType:\\s*(\\w+)").matcher(l);
+            Boolean secure = c.find() ? Boolean.valueOf(!c.group(1).equalsIgnoreCase("NONE")) : said(w, "(?m)^\\s*secure=", "\\bisKeyguardSecure=");
+            return new Keyguard(Boolean.FALSE.equals(secure) ? Lock.SWIPE : Lock.SECURE, occluded, focus);
+        }
+
+        /** The first of these names the text has with =true or =false after it; null when it has none. */
+        private static Boolean said(String text, String... names) {
+            for (String name : names) {
+                Matcher m = Pattern.compile(name + "(true|false)\\b").matcher(text);
+                if (m.find()) return Boolean.valueOf(m.group(1));
+            }
+            return null;
+        }
+
+        @Override
+        public String toString() {
+            String state = switch (lock) {
+                case UNLOCKED -> "unlocked";
+                case SWIPE -> "a lock screen with nothing to enter (a swipe)";
+                case SECURE -> "A SECURE LOCK SCREEN (a PIN, a pattern or a password)";
+                case NOT_KNOWN -> "not known (the phone's own words about its lock screen were not understood)";
+            };
+            return state + (Boolean.TRUE.equals(occluded) ? ", an app in front of it" : "") + (focus.isEmpty() ? "" : "; the window in front: " + focus);
+        }
+    }
+
+    /** A scenario's own way of noting a check that goes on ({@code rig::check}). */
+    public interface Checks {
+        void check(boolean ok, String what);
     }
 
     private final Target target;
@@ -353,7 +433,14 @@ public final class PhoneRig implements AutoCloseable {
     private final List<Integer> reversed = new ArrayList<>();
     private final Set<PhoneGuard.Undo> switchedOff = EnumSet.noneOf(PhoneGuard.Undo.class);
     private final List<String> refusals = new ArrayList<>();
-    private boolean pretending, standingStillSaid, linkSaid;
+    /** Checks that need the screen and were not made behind a lock screen; facts taken another way than the screen there. */
+    private final List<String> skipped = new ArrayList<>(), otherWays = new ArrayList<>();
+    private boolean pretending, standingStillSaid, linkSaid, closedOnce;
+    /** A real phone's lock screen as last looked at; the kind of lock it has (asked once: the bench never changes it). */
+    private Keyguard keyguard;
+    private String lockSettings;
+    /** The phone's clock at the last launch: what the app says in its log from then on is this start's. */
+    private String launchedAt;
     private LogTap tap;
     private long batteryCheckedMs;
     private String stopped;
@@ -491,6 +578,11 @@ public final class PhoneRig implements AutoCloseable {
             Battery b = checkBattery();
             say("A real phone on adb (" + (target.overTcp() ? "over the network" : "on its cable") + "), held to PhoneGuard's list; the app flown: " + target.app()
                     + (target.releasedAppMayBeChanged() ? "; THE RELEASED APP MAY BE CHANGED by this run" : "") + (b == null ? "" : "; battery " + b));
+            Keyguard found = lookAtTheLock();
+            say("The phone's screen as the run finds it: " + found + "." + (found.lock() == Lock.SECURE
+                    ? " The run goes on behind the lock screen: what its screen would show is taken from the app's log, Android and the bench build where they "
+                    + "know it, and what only the screen could show is skipped and listed at the end." : ""));
+            if (found.lock() == Lock.UNLOCKED) keepAwake();
             return;
         }
         if (running()) return;
@@ -589,17 +681,309 @@ public final class PhoneRig implements AutoCloseable {
         else shell("locksettings set-disabled false");
     }
 
-    /** The screen on and its lock swiped away, as a pilot picking the phone up does. */
+    /**
+     * The screen on and its lock swiped away, as a pilot picking the phone up does. On a real phone the lock is looked
+     * at first ({@link #lookAtTheLock}): only one with nothing to enter is sent away.
+     */
     public void unlock() {
+        if (device()) {
+            lookAtTheLock();
+            return;
+        }
         shell("input keyevent KEYCODE_WAKEUP");
         shell("wm dismiss-keyguard");
         pause.accept(500);
     }
 
+    /**
+     * The app opened, as a tap on its icon does. A real phone's lock screen is looked at first and the film told
+     * which state it is in; behind a secure one the app starts all the same - there it is not in front, as on a drone.
+     */
     public void launch() {
+        if (device()) {
+            launchedAt = now();
+            Keyguard k = lookAtTheLock();
+            shell("am start -n " + target.app() + "/de.droiddrone.flight.MainActivity");
+            pause.accept(2500);
+            say("The app opened; the phone's screen at this launch: " + k + (k.lock() == Lock.SECURE ? " - the app is behind it." : "."));
+            return;
+        }
         unlock();
         shell("am start -n " + target.app() + "/de.droiddrone.flight.MainActivity");
         pause.accept(2500);
+    }
+
+    // ------------------------------------------------------------------ a real phone's lock screen
+
+    /**
+     * The screen woken and the lock screen looked at: unlocked, one that a swipe sends away (and adb then does), or a
+     * secure one - to which nothing is sent: no PIN is ever entered and the lock is never changed. Its kind is asked of
+     * the phone once ({@code dumpsys lock_settings}; only the word for the kind is kept).
+     */
+    public Keyguard lookAtTheLock() {
+        if (!device()) return new Keyguard(Lock.UNLOCKED, null, "");
+        shell("input keyevent KEYCODE_WAKEUP");
+        pause.accept(500);
+        Keyguard k = keyguardNow();
+        if (k.lock() == Lock.SWIPE) {
+            shell("wm dismiss-keyguard");
+            pause.accept(500);
+            Keyguard after = keyguardNow();
+            if (after.lock() == Lock.UNLOCKED) say("A lock screen with nothing to enter was showing: swiped away, as a hand does.");
+            k = after;
+        }
+        keyguard = k;
+        return k;
+    }
+
+    private Keyguard keyguardNow() {
+        String window = shell("dumpsys window");
+        if (lockSettings == null) {
+            // which kind of lock: the one line of it. The rest of what the phone says there stays on the phone
+            Matcher kind = Pattern.compile("(?i)CredentialType:\\s*\\w+").matcher(shell("dumpsys lock_settings"));
+            lockSettings = kind.find() ? kind.group() : "";
+        }
+        return Keyguard.read(window, lockSettings);
+    }
+
+    /** The lock screen as last looked at ({@link #launch}, {@link #lookAtTheLock}); unlocked on the emulator and before any look. */
+    public Lock lock() {
+        return keyguard == null ? Lock.UNLOCKED : keyguard.lock();
+    }
+
+    /**
+     * Whether what Android describes of the screen is something other than the app with a lock screen in front: then
+     * nothing a scenario looks for is on it, and nothing on it is the bench's to touch. Asked of the screen itself each
+     * time, not remembered - the app locks the screen when it goes to deep sleep, and comes in front of the lock screen
+     * by itself when a PC wakes it. Never on the emulator.
+     */
+    private boolean lockedAway(List<Node> nodes) {
+        if (!device()) return false;
+        for (Node n : nodes) if (target.app().equals(n.app())) return false; // the app's own screen: without a lock, or in front of it
+        Keyguard k = keyguardNow();
+        if (k.lock() == Lock.SWIPE) { // locked again meanwhile, with nothing to enter: away with it, and the screen is whatever is behind
+            shell("wm dismiss-keyguard");
+            pause.accept(500);
+            k = keyguardNow();
+        }
+        keyguard = k;
+        return k.lock() != Lock.UNLOCKED; // (not known: taken as locked away, and the film's line at the launch says that it was not known)
+    }
+
+    /** The app's screen can be read and pressed now: always on the emulator; on a real phone unless a lock screen is in front of the app. */
+    public boolean screenIsTheApps() {
+        return !device() || !lockedAway(screen());
+    }
+
+    /**
+     * A check this run on a real phone does not make - it needs the screen and a lock screen is over the app, or it is
+     * one for the emulator alone: said in the film now, and listed with the others when the rig closes. Never passed
+     * over in silence, never counted as passed.
+     */
+    public void skip(String check) {
+        skipped.add(check);
+        say("SKIPPED in this run: " + check);
+    }
+
+    private void otherWay(String fact, String how) {
+        otherWays.add(fact + " [" + how + "]");
+        say("Behind the lock screen: " + fact + " - known by " + how + ", not by the screen's words.");
+    }
+
+    /** The checks skipped so far because a lock screen was over the app. */
+    public List<String> skipped() {
+        return List.copyOf(skipped);
+    }
+
+    /** The facts taken another way than from the screen so far, each with the way. */
+    public List<String> otherWays() {
+        return List.copyOf(otherWays);
+    }
+
+    /** What the app (whichever of its processes) said in its log since that moment of the phone's clock ({@link #now}). */
+    public String appSaidSince(String stamp) {
+        return shell("logcat -d -v time -T '" + stamp + "' -s " + BenchControl.LOG_TAG + ":I");
+    }
+
+    /** What the app said in its log since it was last opened by {@link #launch}. */
+    public String appSaidSinceLaunch() {
+        return launchedAt == null || launchedAt.isBlank() ? "" : appSaidSince(launchedAt);
+    }
+
+    /**
+     * The app's main screen is up ({@link PhoneWords#SCREEN_TITLE} on it) - or, behind a real phone's lock screen,
+     * the app runs: its process is there.
+     */
+    public void untilAppIsUp(long ms) {
+        if (!device()) {
+            untilSees(PhoneWords.SCREEN_TITLE, ms);
+            return;
+        }
+        long end = clock.getAsLong() + ms;
+        while (true) {
+            List<Node> nodes = screen();
+            for (Node n : nodes) if (n.text().toLowerCase().contains(PhoneWords.SCREEN_TITLE.toLowerCase())) return;
+            if (lockedAway(nodes) && !pid().isEmpty()) {
+                otherWay("the app is up", "its process in Android's list");
+                return;
+            }
+            if (clock.getAsLong() > end) {
+                shot("phone: TIMED OUT after " + ms + " ms waiting for \"" + PhoneWords.SCREEN_TITLE + "\"");
+                throw new AssertionError("Timed out after " + ms + " ms waiting for the phone's app to be up (\"" + PhoneWords.SCREEN_TITLE + "\" on its screen, or behind "
+                        + "a lock screen its process). The lock screen: " + keyguard + ". On the screen: " + texts());
+            }
+            pause.accept(500);
+        }
+    }
+
+    /**
+     * START pressed if the app shows it (a start without everything allowed waits for it). Behind a real phone's lock
+     * screen nobody can look for the button or press it: there the service has to have started by itself, as it does
+     * on a phone that is set up - known by Android's word that it lives and by the app's own log; if it has not, the
+     * scenario stops here and says why.
+     */
+    public void startIfAsked() {
+        if (!device()) {
+            if (texts().contains(PhoneWords.SCREEN_START)) tap(PhoneWords.SCREEN_START);
+            return;
+        }
+        List<Node> nodes = screen();
+        if (!lockedAway(nodes)) {
+            for (Node n : nodes) {
+                if (n.text().equals(PhoneWords.SCREEN_START) && target.app().equals(n.app())) {
+                    tap(PhoneWords.SCREEN_START);
+                    return;
+                }
+            }
+            return;
+        }
+        long end = clock.getAsLong() + 20_000;
+        boolean runs = serviceRunning();
+        while (!runs && clock.getAsLong() < end) {
+            pause.accept(1000);
+            runs = serviceRunning();
+        }
+        String log = appSaidSinceLaunch();
+        if (log.contains(PhoneWords.LINK_PORT_TAKEN)) {
+            throw new AssertionError("The phone app could not have its link port (its log: \"" + PhoneWords.LINK_PORT_TAKEN + "\"): is the other DRAUPNE Flight "
+                    + "running on this phone? One of the two at a time - both want the same port.");
+        }
+        if (!runs) {
+            throw new AssertionError("Behind the lock screen START cannot be looked for or pressed, and the app's service has not started by itself within 20 s "
+                    + "(it does when the camera is allowed and the app was started once before). The lock screen: " + keyguard);
+        }
+        otherWay("the service runs and listens for a PC (no START to press)", "Android's list of living services"
+                + (log.contains(PhoneWords.RECEIVER_STARTED) ? " and the app's log: \"" + PhoneWords.RECEIVER_STARTED + "\"" : ""));
+    }
+
+    /**
+     * The phone says a PC is connected: on its screen ({@link PhoneWords#SCREEN_CONNECTED}); behind a real phone's
+     * lock screen by the bench build's own word ({@link PhoneWords#STATS_PC_CONNECTED}). With neither to be had (the
+     * released app behind a lock screen) the check is skipped by name.
+     */
+    public void checkConnectedToPc(Checks checks, String what) {
+        if (!device()) {
+            checks.check(sees(PhoneWords.SCREEN_CONNECTED), what);
+            return;
+        }
+        List<Node> nodes = screen();
+        if (!lockedAway(nodes)) {
+            boolean on = false;
+            for (Node n : nodes) on |= n.text().toLowerCase().contains(PhoneWords.SCREEN_CONNECTED.toLowerCase());
+            checks.check(on, what);
+        } else if (target.benchBuild()) {
+            String stats = benchControl(BenchControl.STATS);
+            otherWay("a PC is connected", "the bench build's own word (" + PhoneWords.STATS_PC_CONNECTED + ")");
+            checks.check(stats.contains(PhoneWords.STATS_PC_CONNECTED), what + " - behind the lock screen, by the bench build's own word");
+        } else {
+            skip(what + " (a lock screen is over the app, and the released app has no bench receiver to ask instead)");
+        }
+    }
+
+    /** What the phone says of its flight controller, for the film: its screen's line; behind a lock screen the bench build's serial status. */
+    public String flightControllerWord() {
+        List<Node> nodes = screen();
+        if (!lockedAway(nodes)) {
+            List<String> lines = new ArrayList<>();
+            for (Node n : nodes) if (n.text().toLowerCase().contains("flight controller")) lines.add(n.text());
+            return lines.toString();
+        }
+        if (!target.benchBuild()) return "(not known: behind the lock screen, and the released app has no bench receiver)";
+        Matcher m = Pattern.compile(PhoneWords.STATS_SERIAL + "(\\S+)").matcher(benchControl(BenchControl.STATS));
+        return m.find() ? "(behind the lock screen, the bench build's serial status) " + m.group(1) + (m.group(1).equals("1") ? " = no flight controller" : "")
+                : "(behind the lock screen: the bench build did not say)";
+    }
+
+    /**
+     * For the film, never a failure: what can be seen of the app when it should have put itself in front of the lock
+     * screen by itself (a PC woke it; it opened again after it was ended) - its own log's word, what Android says of
+     * the lock screen and of the window in front, and whether the screen's description is the app's. Whether a phone
+     * of this make and Android shows all of that to adb is not known until it is looked at: so this reports.
+     */
+    public void lookOverTheLock(String when) {
+        if (!device()) return;
+        List<Node> nodes = screen();
+        boolean apps = false;
+        List<String> words = new ArrayList<>();
+        for (Node n : nodes) {
+            apps |= target.app().equals(n.app());
+            if (!n.text().isBlank() && words.size() < 6) words.add(n.text());
+        }
+        Keyguard k = keyguardNow();
+        keyguard = k;
+        String said = appSaidSinceLaunch();
+        say("TO LOOK AT - the app in front of the lock screen, " + when + ": its log " + (said.contains(PhoneWords.OPENED_OVER_LOCK) ? "says" : "does not say")
+                + " \"" + PhoneWords.OPENED_OVER_LOCK + "\" since its last launch" + (said.contains(PhoneWords.SLEEP_LOCKED_SCREEN)
+                ? " (and \"" + PhoneWords.SLEEP_LOCKED_SCREEN + "\": going to sleep the app locked the screen itself)" : "") + "; the lock screen: " + k
+                + "; the screen as Android describes it is " + (apps ? "the app's" : nodes.isEmpty() ? "not described (off, or moving)" : "not the app's") + " " + words + ".");
+        shot("phone: " + when + " - what is in front of the lock screen");
+    }
+
+    // ------------------------------------------------------------------ a real phone kept awake (found unlocked)
+
+    /**
+     * A phone found unlocked stays so for the run: Android's "stay awake while plugged in" for USB, so that its screen
+     * timeout does not lock it in the middle. It is a setting of the phone's: its own value is noted first - on the
+     * phone itself ({@link PhoneGuard#STAY_ON_NOTE}), where {@link PhoneReset} finds it after a run that was killed -
+     * and put back exactly at {@link #close}. A note still there from a killed run is the phone's own value: kept.
+     * (It holds while the phone believes it is on its cable: not through {@link #onBattery}, and not past the app's own
+     * lock of the screen at a deep sleep.)
+     */
+    private void keepAwake() {
+        String noted = shell("settings get global " + PhoneGuard.STAY_ON_NOTE).trim();
+        boolean hadNote = noted.equals("unset") || noted.matches("\\d{1,2}");
+        String was;
+        if (hadNote) {
+            was = noted;
+        } else {
+            String now = shell("settings get global " + PhoneGuard.STAY_ON).trim();
+            if (!now.equals("null") && !now.matches("\\d{1,2}")) { // not a value and not "never set": what would have to be put back is not known
+                say("Found unlocked, but what the phone's \"stay awake while plugged in\" is set to could not be read (\"" + now + "\"): left alone - the screen's "
+                        + "own timeout may lock the phone in the middle of the run.");
+                return;
+            }
+            was = now.equals("null") ? "unset" : now;
+            if (!was.equals("unset") && (Integer.parseInt(was) & 2) != 0) {
+                say("Found unlocked, and the phone stays awake on USB already (its own setting: " + was + "): left as it is.");
+                return;
+            }
+            shell("settings put global " + PhoneGuard.STAY_ON_NOTE + " " + was);
+        }
+        shell("svc power stayon usb");
+        say("Found unlocked: kept awake while on USB for this run (svc power stayon usb). The phone's own setting (" + was + ") is put back when the run ends"
+                + (hadNote ? " - noted by a run before this one, which did not get to put it back." : "."));
+    }
+
+    /** The orders that put the phone's own "stay awake while plugged in" back, from the bench's note of it; none when there is no note. */
+    static List<List<String>> stayOnBack(String noted) {
+        String n = noted == null ? "" : noted.trim();
+        if (n.equals("unset")) {
+            return List.of(List.of("shell", "settings delete global " + PhoneGuard.STAY_ON), List.of("shell", "settings delete global " + PhoneGuard.STAY_ON_NOTE));
+        }
+        if (n.matches("\\d{1,2}") && Integer.parseInt(n) <= 15) {
+            return List.of(List.of("shell", "settings put global " + PhoneGuard.STAY_ON + " " + n), List.of("shell", "settings delete global " + PhoneGuard.STAY_ON_NOTE));
+        }
+        return List.of();
     }
 
     /** The app's process number; "" when it has none. */
@@ -818,9 +1202,31 @@ public final class PhoneRig implements AutoCloseable {
             int x1 = Integer.parseInt(b.group(1)), y1 = Integer.parseInt(b.group(2));
             nodes.add(new Node(attr(n, "text"), attr(n, "resource-id"), attr(n, "content-desc"),
                     new Rectangle(x1, y1, Integer.parseInt(b.group(3)) - x1, Integer.parseInt(b.group(4)) - y1),
-                    attr(n, "clickable").equals("true"), attr(n, "enabled").equals("true")));
+                    attr(n, "clickable").equals("true"), attr(n, "enabled").equals("true"), attr(n, "package")));
         }
         return nodes;
+    }
+
+    /**
+     * On a real phone a finger goes on the app's own controls and nowhere else: not on a phone maker's dialog, not on
+     * the lock screen - whose number pad is made of buttons like any other. (The emulator is the bench's own.)
+     */
+    private void onlyOnTheApp(Node n, String words) {
+        if (!device() || target.app().equals(n.app())) return;
+        String text = "\"" + words + "\" on the phone's screen is not the app's own (it belongs to " + (n.app().isEmpty() ? "another window" : n.app())
+                + "): on a real phone the bench presses nothing but the app's controls.";
+        refusals.add(text);
+        say("REFUSED: " + text);
+        throw new Refused(text);
+    }
+
+    /** A finger at a fixed place only while the screen is the app's: never onto a lock screen. */
+    private void onlyOnTheAppsScreen(String what) {
+        if (!device() || screenIsTheApps()) return;
+        String text = what + ": the phone's screen is not the app's now (the lock screen: " + keyguard + ") - on a real phone the bench touches nothing else.";
+        refusals.add(text);
+        say("REFUSED: " + text);
+        throw new Refused(text);
     }
 
     /** The words on the screen. */
@@ -849,6 +1255,7 @@ public final class PhoneRig implements AutoCloseable {
     /** A finger on the control with these words (or this id), in its middle: found on the screen as it is, so on any phone's. */
     public void tap(String words) {
         Node n = find(words);
+        onlyOnTheApp(n, words);
         if (!n.enabled()) {
             shot("NOT PRESSABLE on the phone: \"" + words + "\" is greyed");
             throw new AssertionError("\"" + words + "\" on the phone is greyed");
@@ -861,6 +1268,7 @@ public final class PhoneRig implements AutoCloseable {
     /** A finger held on it for so long. */
     public void hold(String words, int ms) {
         Node n = find(words);
+        onlyOnTheApp(n, words);
         int x = n.bounds().x + n.bounds().width / 2, y = n.bounds().y + n.bounds().height / 2;
         shell("input swipe " + x + " " + y + " " + x + " " + y + " " + ms);
         pause.accept(900);
@@ -887,6 +1295,7 @@ public final class PhoneRig implements AutoCloseable {
 
     /** A finger at a place written for the reference screen ({@link #REF_WIDTH} x {@link #REF_HEIGHT}). */
     public void tapAt(int x, int y) {
+        onlyOnTheAppsScreen("A finger at a fixed place");
         Point p = place(x, y);
         shell("input tap " + p.x + " " + p.y);
         pause.accept(900);
@@ -895,6 +1304,7 @@ public final class PhoneRig implements AutoCloseable {
     /** A finger drawn between two places written for the reference screen. */
     public void swipe(int x1, int y1, int x2, int y2, int ms) {
         if (device()) {
+            onlyOnTheAppsScreen("A finger drawn across the screen");
             Screen s = screenSize();
             Point a = s.scaled(x1, y1), b = s.scaled(x2, y2);
             shell("input swipe " + a.x + " " + a.y + " " + b.x + " " + b.y + " " + ms);
@@ -1144,12 +1554,23 @@ public final class PhoneRig implements AutoCloseable {
     /**
      * Everything given back. The emulator: its forwarded ports, as before. A real phone, whatever happened in the
      * scenario and whether this rig pretended or a killed run before it did: doze no longer forced and the battery as
-     * it is ({@code dumpsys deviceidle unforce}, {@code dumpsys battery reset} - always), the network switches this
-     * rig turned off turned on again, the reverse ports this rig asked adb for removed (no others: the bench build's
-     * flight controller comes down such a port too), the log tap ended.
+     * it is ({@code dumpsys deviceidle unforce}, {@code dumpsys battery reset} - always), the phone's own "stay awake
+     * while plugged in" back to what the bench's note on the phone says it was (this run's note or a killed run's),
+     * the network switches this rig turned off turned on again, the reverse ports this rig asked adb for removed (no
+     * others: the bench build's flight controller comes down such a port too), the log tap ended. And the film is told
+     * what a lock screen made of the run: the facts taken another way than the screen, the checks skipped.
      */
     @Override
     public void close() {
+        if (device() && !closedOnce) {
+            closedOnce = true;
+            if (!otherWays.isEmpty()) {
+                say("BEHIND THE LOCK SCREEN " + otherWays.size() + " fact(s) were taken another way than from the screen's words: " + String.join("; ", otherWays) + ".");
+            }
+            if (!skipped.isEmpty()) {
+                say("ON THE REAL PHONE " + skipped.size() + " CHECK(S) WERE SKIPPED in this run - not made, and not counted as passed: " + String.join("; ", skipped) + ".");
+            }
+        }
         for (int host : forwarded) {
             try {
                 own("emu", "redir", "del", "udp:" + host);
@@ -1161,6 +1582,14 @@ public final class PhoneRig implements AutoCloseable {
             quietly("shell", "dumpsys deviceidle unforce");
             quietly("shell", "dumpsys battery reset");
             pretending = false;
+        }
+        if (device()) {
+            try {
+                String noted = own("shell", "settings get global " + PhoneGuard.STAY_ON_NOTE);
+                for (List<String> order : stayOnBack(noted)) quietly(order.toArray(new String[0]));
+            } catch (RuntimeException e) {
+                say("Whether the phone's \"stay awake while plugged in\" has to be put back could not be asked (" + e.getMessage() + "): gradlew phoneReset does it.");
+            }
         }
         if (switchedOff.contains(PhoneGuard.Undo.AIRPLANE)) quietly("shell", "cmd connectivity airplane-mode disable");
         if (switchedOff.contains(PhoneGuard.Undo.WIFI)) quietly("shell", "svc wifi enable");

@@ -3,6 +3,7 @@ package de.droiddrone.bench.phone;
 import de.droiddrone.bench.AppRig;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.pc.fleet.VirtualFleet;
@@ -116,11 +117,11 @@ class PhoneSocketScenario {
                     lostSince = ready ? -1 : lostSince < 0 ? now : lostSince;
                     if (lostSince >= 0) lostLongest = Math.max(lostLongest, now - lostSince);
                     String log = phone.logSince(from);
-                    long anew = log.lines().filter(l -> l.contains("Link socket:")).count();
+                    long anew = log.lines().filter(l -> l.contains(PhoneWords.LINK_SOCKET)).count();
                     if (now >= nextLine || anew > anewSeen || !ready) {
                         nextLine = now + 5000;
                         timeline.append(String.format("%6.1f s  link %s  %6d B wait  wire: to the phone +%d, to the PC +%d  new sessions %d  socket opened anew %d%n", (now - t0) / 1000.0,
-                                ready ? "READY" : "lost ", queue, sum(wire, true) - toPhone0, sum(wire, false) - toPc0, log.lines().filter(l -> l.contains("a new session")).count(), anew));
+                                ready ? "READY" : "lost ", queue, sum(wire, true) - toPhone0, sum(wire, false) - toPc0, log.lines().filter(l -> l.contains(PhoneWords.NEW_SESSION_SAME_PC)).count(), anew));
                     }
                     if (anew > anewSeen) {
                         anewSeen = anew;
@@ -153,11 +154,11 @@ class PhoneSocketScenario {
                 String log = phone.logSince(from);
                 Files.writeString(rig.film.dir().resolve("phone-log.txt"), log, StandardCharsets.UTF_8);
                 Files.writeString(rig.film.dir().resolve("standstill.txt"), timeline.toString(), StandardCharsets.UTF_8);
-                log.lines().filter(l -> l.contains("Link socket:")).forEach(l -> rig.film.remark("The phone: " + l.substring(l.indexOf("Link socket:"))));
+                log.lines().filter(l -> l.contains(PhoneWords.LINK_SOCKET)).forEach(l -> rig.film.remark("The phone: " + l.substring(l.indexOf(PhoneWords.LINK_SOCKET))));
                 rig.film.remark("Flown for " + (System.currentTimeMillis() - t0) / 1000 + " s: the most that waited to leave the phone " + peakQueue + " bytes; the phone opened its socket anew "
                         + anewSeen + " time(s); the link came back by itself " + freed + " time(s), at the slowest " + worstBackMs / 1000.0 + " s after the PC lost it; the longest the PC was without its link "
                         + lostLongest / 1000.0 + " s; " + scans + " Wi-Fi scans asked for." + (anewSeen == 0 && !gaveUp ? " The emulator did not fill the socket this time: nothing is proven by this run." : ""));
-                rig.check(!log.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
+                rig.check(!log.contains(PhoneWords.ANDROID_FATAL), "no crash in the phone app's log");
                 if (pilot.linkUp()) pilot.standby();
             } finally {
                 phone.close();

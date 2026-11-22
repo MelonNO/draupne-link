@@ -3,6 +3,7 @@ package de.droiddrone.bench.phone;
 import de.droiddrone.bench.AppRig;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.pc.fleet.VirtualFleet;
@@ -22,6 +23,12 @@ import java.nio.file.Files;
  * <p>
  * On a real phone too (the task benchHwPhone), as it is: the app that is on the phone, the link to the phone's real
  * address with the bench's wire still between - so the bad link here comes on top of whatever the real network does.
+ * <p>
+ * Behind a real phone's secure lock screen both tests still prove all they prove on the PC's side (found and named,
+ * PILOT UAV, the camera's picture in the PC's window, version and battery, the one-bar link, the cut and the way back,
+ * the one-way cut's figures from the phone's log) and STANDBY and "no crash" from the phone's log. "Connected to PC"
+ * cannot be read off the screen: the bench build says it instead (its STATS: pc=connected); with the released app,
+ * which has nobody to ask, that one check is skipped and listed.
  */
 @Tag("emulator")
 @Tag("hwphone")
@@ -39,7 +46,7 @@ class PhoneAndWindowsScenario {
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();
-            if (phone.texts().contains("START")) phone.tap("START");
+            phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
             phone.shot("phone: waiting for a PC");
             java.net.InetSocketAddress at = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its address
             BadLink net = BadLink.clean(11);
@@ -62,7 +69,7 @@ class PhoneAndWindowsScenario {
                 Ui.pause(3000);
                 ui.shot("the PC's window with the phone's camera picture");
                 phone.shot("phone: flown by the PC");
-                rig.check(phone.sees("Connected to PC"), "the phone's screen says: Connected to PC");
+                phone.checkConnectedToPc(rig::check, "the phone's screen says: Connected to PC");
                 rig.check(ui.sees("2.3.0-pc."), "the PC shows the phone app's version: " + ui.texts().stream().filter(t -> t.contains("2.3.0-pc.")).findFirst().orElse("-"));
                 rig.check(ui.sees("PHONE BATTERY"), "the PC shows the phone's battery");
 
@@ -85,8 +92,8 @@ class PhoneAndWindowsScenario {
                 phone.shot("phone: after STANDBY MODE on the PC");
                 String log = phone.log();
                 Files.writeString(rig.film.dir().resolve("phone-log.txt"), log, StandardCharsets.UTF_8);
-                rig.check(log.contains("Power: Standby"), "the phone took STANDBY from the PC's STANDBY MODE");
-                rig.check(!log.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
+                rig.check(log.contains(PhoneWords.STANDBY), "the phone took STANDBY from the PC's STANDBY MODE");
+                rig.check(!log.contains(PhoneWords.ANDROID_FATAL), "no crash in the phone app's log");
             } finally {
                 phone.close();
             }
@@ -112,7 +119,7 @@ class PhoneAndWindowsScenario {
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();
-            if (phone.texts().contains("START")) phone.tap("START");
+            phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
             java.net.InetSocketAddress at = phone.linkAddress();
             BadLink net = BadLink.clean(12);
             try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
@@ -146,10 +153,10 @@ class PhoneAndWindowsScenario {
                 int from = lastBefore.isEmpty() ? -1 : after.lastIndexOf(lastBefore);
                 String during = from < 0 ? after : after.substring(from + lastBefore.length());
                 java.util.List<String> own = during.lines().filter(l -> l.contains("DDLog")).toList();
-                long sessions = own.stream().filter(l -> l.contains("a new session") || l.contains("New session from")).count();
-                long cameraClosed = own.stream().filter(l -> l.contains("Camera device closed")).count();
-                long cameraOpened = own.stream().filter(l -> l.toLowerCase().contains("onconfigured") || l.toLowerCase().contains("camera opened")).count();
-                long encoder = own.stream().filter(l -> l.contains("onOutputFormatChanged")).count();
+                long sessions = own.stream().filter(l -> l.contains(PhoneWords.NEW_SESSION_SAME_PC) || l.contains(PhoneWords.NEW_SESSION)).count();
+                long cameraClosed = own.stream().filter(l -> l.contains(PhoneWords.CAMERA_CLOSED)).count();
+                long cameraOpened = own.stream().filter(l -> l.contains(PhoneWords.CAMERA_CONFIGURED)).count();
+                long encoder = own.stream().filter(l -> l.contains(PhoneWords.ENCODER_STARTED)).count();
                 Files.writeString(rig.film.dir().resolve("phone-log-one-way-cut.txt"), String.join("\n", own), StandardCharsets.UTF_8);
                 java.util.List<String> all = rig.log(); // once: the log grows between two reads (an IndexOutOfBounds, 2026-11-21)
                 java.util.List<String> pc = all.subList(Math.min(pcLinesBefore, all.size()), all.size());
@@ -158,8 +165,8 @@ class PhoneAndWindowsScenario {
                         + sessions + " new session(s), closed its camera " + cameraClosed + " time(s), set a camera session up " + cameraOpened
                         + " time(s), its encoder started anew " + encoder + " time(s) (" + own.size() + " lines of its own log, in phone-log-one-way-cut.txt). "
                         + "LINK READY " + backMs + " ms after the PC heard it again; " + (System.currentTimeMillis() - cutAt) / 1000 + " s in all.");
-                rig.check(!after.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
-                rig.check(phone.sees("Connected to PC"), "the phone's screen says: Connected to PC");
+                rig.check(!after.contains(PhoneWords.ANDROID_FATAL), "no crash in the phone app's log");
+                phone.checkConnectedToPc(rig::check, "the phone's screen says: Connected to PC");
                 pilot.standby();
             } finally {
                 phone.close();

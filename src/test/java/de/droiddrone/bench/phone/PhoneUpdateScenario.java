@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer;
 import de.droiddrone.bench.AppRig;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.pc.fleet.VirtualFleet;
@@ -115,7 +116,7 @@ class PhoneUpdateScenario {
                 phone.shell("appops set " + APP + " REQUEST_INSTALL_PACKAGES default");
                 phone.grantPermissions();
                 phone.launch();
-                if (phone.texts().contains("START")) phone.tap("START");
+                phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
                 java.net.InetSocketAddress at = phone.linkAddress();
                 try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                     wire.rule(BadLink.clean(54));
@@ -206,7 +207,7 @@ class PhoneUpdateScenario {
                     phone.shot("the phone after the update");
                     String log = phone.logSince(from);
                     Files.writeString(rig.film.dir().resolve("phone-log.txt"), log, StandardCharsets.UTF_8);
-                    rig.check(!log.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
+                    rig.check(!log.contains(PhoneWords.ANDROID_FATAL), "no crash in the phone app's log");
                     if (pilot.linkUp()) pilot.standby();
                 } finally {
                     if (phone.device()) {

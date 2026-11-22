@@ -245,6 +245,19 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   else of a `hw` run is set up - no Tailscale answer, the radio as in every scenario - and the PHONE list has the
   phone as it has the emulator's, VIRTUAL. `PhoneScenario` starts no Windows app and has no fence up; its wire is
   held to the same rule all the same.
+- **The phone's lock screen** (since the first run on the phone, 2026-11-22: it has a PIN, as the phones on the
+  drones have, and the app flies, sleeps and wakes behind it). The rig never enters a PIN and never changes the lock;
+  nothing it may send could (no text, no key but WAKEUP, BACK and HOME, a finger only on the app's own controls). At
+  each launch the film says which state the phone is in: unlocked; a lock screen with nothing to enter, which adb
+  swipes away; or a secure one - and then the run goes on behind it. What a scenario would read off the screen is
+  taken the other way there is, and the film says so: the app's own log (`PhoneWords` has every line the bench relies
+  on, and `PhoneRigWordsTest` holds them to the app's sources), Android's word that the service lives, the bench
+  build's STATS (`pc=connected`). What only the screen could show is skipped by name and listed at the scenario's end
+  (ON THE REAL PHONE n CHECK(S) WERE SKIPPED) - never counted as passed. When the app puts itself in front of the lock
+  screen (woken by a PC, opened again after an error) its screen is read as ever, and what adb sees of that is filed
+  under TO LOOK AT. A phone found unlocked is kept awake on its cable for the run (`svc power stayon usb`; its own
+  setting is noted on the phone and put back exactly at the end, or by `gradlew phoneReset`) - until the app locks the
+  screen itself, which it does at a deep sleep and when it opens again after an error.
 - **Instead of root** the bench build's `BenchControlReceiver` forgets the crash guard's count, ends the app's
   process and throws an error on purpose (`BenchControl` has the names; `PhoneRigBenchControlTest` holds them to the
   build's sources). What waits in the phone's sockets cannot be read without root: a round that went wrong files the
@@ -255,7 +268,8 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   suspend with USB attached, not exact-alarm timing after suspend, not the modem or the network's NAT going idle,
   not the phone maker's own app killers: those need one attended night off the cable. It is taken back when the
   scenario ends, whatever happened, and once more by `gradlew phoneReset`, `bench.ps1 phone`'s last step however
-  the run went (it changes nothing else: airplane mode, or a port led back to this PC, are only said).
+  the run went (beside that it puts the phone's own "stay awake" back where a run left its note, and changes nothing
+  else: airplane mode, or a port led back to this PC, are only said).
 - **The phone's own good.** Its log is followed into the scenario's film folder from the start
   (`phone-logcat.txt`: the app's lines and Android's word on what ended it). Its battery is read once a minute:
   hotter than 42 degrees the scenario waits until it is 40 (half an hour at most), below 15 % it stops.

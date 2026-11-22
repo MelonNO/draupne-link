@@ -3,6 +3,7 @@ package de.droiddrone.bench.phone;
 import de.droiddrone.bench.AppRig;
 import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.common.CrashRestarts;
@@ -34,6 +35,13 @@ import java.nio.file.Files;
  * on adb's cable charges, which keeps Android from dozing: while it sleeps here it is pretended off the cable and
  * forced into deep doze ({@code PhoneRig.onBattery} - what that does not prove is written there), taken back when it
  * has been woken.
+ * <p>
+ * Behind a real phone's secure lock screen nothing of it is lost - and it is the way a drone's phone meets it: the
+ * new process, the link back, the picture, the app's log lines (what ended it, that it opens again, the sleep check's
+ * alarm, "Opened to wake the phone", the limit), PILOT UAV reaching it. The app then puts itself in front of the lock
+ * screen by itself; what adb can see of that - the window in front, whether the screen's description is the app's -
+ * is filed in the film under TO LOOK AT and not judged: whether a phone of this make shows it to adb has to be seen
+ * once. (A phone that starts unlocked is locked by the app itself at its first reopening or deep sleep.)
  */
 @Tag("emulator")
 @Tag("hwphone")
@@ -78,7 +86,7 @@ class PhoneCrashScenario {
             phone.grantPermissions();
             phone.stopForgettingRestarts(); // no restart of an earlier run counts
             phone.launch();
-            if (phone.texts().contains("START")) phone.tap("START");
+            phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
             java.net.InetSocketAddress at = phone.linkAddress();
             try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                 wire.rule(BadLink.clean(47));
@@ -142,8 +150,10 @@ class PhoneCrashScenario {
                 }
                 ui.shot("after the app was ended by an error");
                 String log1 = said(phone, from);
-                rig.check(log1.contains("FATAL on thread") && log1.contains("Opening again"), "the phone's log says what happened and that it opens again");
-                rig.check(log1.contains("The app was last ended by"), "and the new start says what ended the last one");
+                rig.check(log1.contains(PhoneWords.FATAL) && log1.contains(PhoneWords.OPENING_AGAIN), "the phone's log says what happened and that it opens again");
+                rig.check(log1.contains(PhoneWords.LAST_ENDED_BY), "and the new start says what ended the last one");
+                // a real phone: opened again, the app puts itself in front of the lock screen - what of that adb can see is filed, not judged
+                phone.lookOverTheLock("after the app was ended by an error and opened itself again");
 
                 // ---- 2. killed outright while asleep (a check every minute): back at its next check's alarm
                 if (back) {
@@ -171,14 +181,14 @@ class PhoneCrashScenario {
                     long until = System.currentTimeMillis() + 100_000;
                     while (!opened && System.currentTimeMillis() < until) {
                         Ui.pause(2000);
-                        opened = said(phone, asleepFrom).contains("Opened to wake the phone");
+                        opened = said(phone, asleepFrom).contains(PhoneWords.OPENED_OVER_LOCK);
                     }
                     long cameS = (System.currentTimeMillis() - killedAt) / 1000;
                     rig.check(opened, "within its check interval and a little the app is open again by itself" + (opened ? " (" + cameS + " s after it was killed)" : " - not within 100 s"));
                     // (by its own sleep check's alarm, or by Android starting the service it lost - whichever came
                     // first; in the night Android had planned that for 77 minutes later, here it took 39 s)
                     String log2 = said(phone, asleepFrom);
-                    rig.film.remark("Killed asleep, it came back " + (log2.contains("Sleep check alarm fired") ? "at its own sleep check's alarm" : "with Android's restart of its service") + ".");
+                    rig.film.remark("Killed asleep, it came back " + (log2.contains(PhoneWords.SLEEP_CHECK) ? "at its own sleep check's alarm" : "with Android's restart of its service") + ".");
                     Ui.pause(5000);
                     ui.click("PILOT UAV");
                     boolean reached = false;
@@ -189,6 +199,7 @@ class PhoneCrashScenario {
                         rig.film.remark("After the kill: " + t.getMessage());
                     }
                     rig.check(reached, "and PILOT UAV reaches it");
+                    phone.lookOverTheLock("after it was killed asleep, came back and was woken by PILOT UAV");
                     if (phone.sleepsOnBattery()) phone.plugged();
                     ui.shot("after the app was killed asleep");
                     if (pilot.linkUp()) pilot.standby();
@@ -221,7 +232,7 @@ class PhoneCrashScenario {
                     long until = System.currentTimeMillis() + 30_000;
                     while (!again && System.currentTimeMillis() < until) {
                         Ui.pause(1500);
-                        again = said(phone, stamp).contains("Opened to wake the phone");
+                        again = said(phone, stamp).contains(PhoneWords.OPENED_OVER_LOCK);
                     }
                     if (n <= CrashRestarts.MAX) {
                         rig.check(again, "ended by an error the " + n + ". time (" + (System.currentTimeMillis() - t0) / 1000 + " s after the first), it opens itself again");
@@ -229,14 +240,14 @@ class PhoneCrashScenario {
                     } else {
                         down = pid(phone);
                         rig.check(!again, "ended the " + n + ". time within ten minutes, it does not open itself again");
-                        rig.check(said(phone, stamp).contains("Not opened again"), "and its log says so");
+                        rig.check(said(phone, stamp).contains(PhoneWords.NOT_OPENED_AGAIN), "and its log says so");
                         rig.check(down.isEmpty() || down.equals(before) || !phone.serviceRunning(), "it stays down until a hand opens it");
                     }
                 }
                 rig.film.remark("Opened by itself " + opened + " time(s) after an error; the limit is " + CrashRestarts.MAX + " in ten minutes.");
                 rig.check(said(phone, loopFrom).length() > 0, "the phone's log was read to the end");
                 Files.writeString(rig.film.dir().resolve("phone-log.txt"), said(phone, from), StandardCharsets.UTF_8);
-                rig.check(!said(phone, from).contains("CameraDevice was already closed"), "no camera error among what ended it");
+                rig.check(!said(phone, from).contains(PhoneWords.ANDROID_CAMERA_CLOSED), "no camera error among what ended it");
                 // as found: the app open, nothing kept of this run's restarts
                 phone.stopForgettingRestarts();
                 phone.launch();
