@@ -98,10 +98,14 @@ if ($tools) {
     if (Test-Path $jar) {
         $certs = @()
         try { $certs = Invoke-Quiet { & $java -jar $jar verify --print-certs $file } } catch { $certs = @("$_") }
-        $dn = [string]($certs | Where-Object { $_ -like 'Signer #1 certificate DN:*' } | Select-Object -First 1)
-        if ($dn -match '^Signer #1 certificate DN: (.*)$') { $signerName = $Matches[1] }
-        $sha = [string]($certs | Where-Object { $_ -like 'Signer #1 certificate SHA-256 digest:*' } | Select-Object -First 1)
-        if ($sha -match '^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)') { $signerSha = $Matches[1].ToLower() }
+        # apksigner words its lines by version: "Signer #1 certificate DN: ..." (build-tools 34) or
+        # "V2 Signer: certificate DN: ..." (newer, as on the CI runner) - both are read, the first one found counts
+        $dnLine = '^(?:Signer #1|V\d+ Signer):? certificate DN: (.*)$'
+        $shaLine = '^(?:Signer #1|V\d+ Signer):? certificate SHA-256 digest: ([0-9a-fA-F]+)'
+        $dn = [string]($certs | Where-Object { $_ -match $dnLine } | Select-Object -First 1)
+        if ($dn -match $dnLine) { $signerName = $Matches[1] }
+        $sha = [string]($certs | Where-Object { $_ -match $shaLine } | Select-Object -First 1)
+        if ($sha -match $shaLine) { $signerSha = $Matches[1].ToLower() }
         if (-not $signerName -or -not $signerSha) { $remarks += "apksigner named no signer ($(($certs | Select-Object -First 1)))" }
     } else {
         $remarks += 'no apksigner.jar beside aapt'
