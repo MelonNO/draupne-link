@@ -1132,7 +1132,7 @@ final class MapWindow extends JFrame {
             }
             String done = line;
             SwingUtilities.invokeLater(() -> {
-                tools.coverageStatus.setText(status(done));
+                tools.coverageStatus.setText(status(AsText.html(done))); // a file's name or its reader's words in it: as text
                 coverageArea = null;
                 if (coverageOn) coverageView(map.visibleArea());
             });

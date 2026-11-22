@@ -208,7 +208,7 @@ public final class OpenCellId {
                 JsonObject c = e.getAsJsonObject();
                 String radio = str(c, "radio");
                 double lat = num(c, "lat"), lon = num(c, "lon");
-                if (radio == null || Double.isNaN(lat) || Double.isNaN(lon)) continue;
+                if (radio == null || !onGlobe(lat, lon)) continue;
                 cells.add(new Cell(radio.toUpperCase(Locale.ROOT), (int) num(c, "mcc"), (int) num(c, "mnc"), lat, lon,
                         (int) Math.max(0, num(c, "range")), (int) Math.max(0, num(c, "samples"))));
             }
@@ -241,9 +241,19 @@ public final class OpenCellId {
     /**
      * OpenCelliD's CSV: the download files' columns (radio,mcc,net,area,cell,unit,lon,lat,range,samples,...), with or
      * without their header line, or any header naming the columns (the API's csv answer: lat,lon,mcc,mnc,...,radio).
-     * 4G and 5G cells only (radios as {@link #RADIOS}); lines that don't read are skipped.
+     * 4G and 5G cells only (radios as {@link #RADIOS}) with a place on the globe; lines that don't read are skipped.
      */
     public static List<Cell> parseCsv(BufferedReader in) throws IOException {
+        return parseCsv(in, Integer.MAX_VALUE);
+    }
+
+    /** A latitude and longitude that are numbers on the globe: "NaN", "Infinity" and 1e308 read as numbers too. */
+    static boolean onGlobe(double lat, double lon) {
+        return Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+    }
+
+    /** @throws IOException also when the file has more than maxCells cells to keep: it stops there, with a short line */
+    static List<Cell> parseCsv(BufferedReader in, int maxCells) throws IOException {
         int radio = 0, mcc = 1, net = 2, lon = 6, lat = 7, range = 8, samples = 9;
         List<Cell> out = new ArrayList<>();
         boolean first = true;
@@ -265,16 +275,27 @@ public final class OpenCellId {
                     continue;
                 }
             }
+            Cell cell;
             try {
-                String r = f[radio].trim().toUpperCase(Locale.ROOT);
-                if (!RADIOS.contains(r)) continue;
-                out.add(new Cell(r, Integer.parseInt(f[mcc].trim()), Integer.parseInt(f[net].trim()), Double.parseDouble(f[lat].trim()),
-                        Double.parseDouble(f[lon].trim()), range >= 0 ? intOr(f[range]) : 0, samples >= 0 ? intOr(f[samples]) : 0));
+                int known = RADIOS.indexOf(f[radio].trim().toUpperCase(Locale.ROOT));
+                if (known < 0) continue;
+                double la = Double.parseDouble(f[lat].trim()), lo = Double.parseDouble(f[lon].trim());
+                if (!onGlobe(la, lo)) continue;
+                // the radio's name from RADIOS: one text for all the cells, not one each
+                cell = new Cell(RADIOS.get(known), Integer.parseInt(f[mcc].trim()), Integer.parseInt(f[net].trim()), la, lo,
+                        range >= 0 ? intOr(f[range]) : 0, samples >= 0 ? intOr(f[samples]) : 0);
             } catch (RuntimeException e) {
-                // a line that isn't a cell
+                continue; // a line that isn't a cell
             }
+            if (out.size() >= maxCells) throw new IOException("over " + count(maxCells) + " cells");
+            out.add(cell);
         }
         return out;
+    }
+
+    /** "1000", "2 million": a limit, as its line says it. */
+    private static String count(int n) {
+        return n >= 1_000_000 && n % 1_000_000 == 0 ? n / 1_000_000 + " million" : Integer.toString(n);
     }
 
     private static int intOr(String s) {
@@ -287,11 +308,15 @@ public final class OpenCellId {
 
     /** Cells in the download files' column order (so the importer reads its own files), with their header. */
     static String toCsv(List<Cell> cells) {
-        StringBuilder b = new StringBuilder("radio,mcc,net,area,cell,unit,lon,lat,range,samples\n");
-        for (Cell c : cells) {
-            b.append(String.format(Locale.ROOT, "%s,%d,%d,0,0,0,%.6f,%.6f,%d,%d%n", c.radio(), c.mcc(), c.net(), c.lon(), c.lat(), c.rangeM(), c.samples()));
-        }
+        StringBuilder b = new StringBuilder(CSV_HEAD);
+        for (Cell c : cells) b.append(csvRow(c));
         return b.toString();
+    }
+
+    private static final String CSV_HEAD = "radio,mcc,net,area,cell,unit,lon,lat,range,samples\n";
+
+    private static String csvRow(Cell c) {
+        return String.format(Locale.ROOT, "%s,%d,%d,0,0,0,%.6f,%.6f,%d,%d%n", c.radio(), c.mcc(), c.net(), c.lon(), c.lat(), c.rangeM(), c.samples());
     }
 
     /** A box fetched this long ago is still good. */
@@ -525,19 +550,95 @@ public final class OpenCellId {
      * inside the area they cover counts as known (no requests there). Replaces an earlier import. The cells kept.
      */
     public int importCsv(Path source) throws IOException {
+        return importCsv(source, MAX_IMPORT_UNPACKED_BYTES, MAX_IMPORT_CELLS);
+    }
+
+    /**
+     * What the import reads of one file, whatever its size packed. 1 GB unpacked: a row is some 75 bytes, Norway's
+     * file tens of MB, a large country's a few hundred - it is read as a stream, so this is time, some seconds, not
+     * memory. 2 million cells of 4G and 5G kept: several times what Norway's file has, and some 110 MB while they
+     * are held (56 bytes a cell). A line of 1 000 characters: no row is near it, and a file that is one endless line
+     * is no cell file. Over one of them the import stops with a short line and the import before it stays.
+     */
+    public static final long MAX_IMPORT_UNPACKED_BYTES = 1L << 30;
+    public static final int MAX_IMPORT_CELLS = 2_000_000, MAX_IMPORT_LINE = 1_000;
+
+    int importCsv(Path source, long maxUnpackedBytes, int maxCells) throws IOException {
         List<Cell> cells;
         try (InputStream raw = Files.newInputStream(source);
              InputStream in = source.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gz") ? new GZIPInputStream(raw, 1 << 16) : raw;
-             BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8), 1 << 16)) {
-            cells = parseCsv(reader);
+             BufferedReader reader = new BufferedReader(new LineLimit(new InputStreamReader(new SizeLimit(in, maxUnpackedBytes), StandardCharsets.UTF_8)), 1 << 16)) {
+            cells = parseCsv(reader, maxCells);
         }
         if (cells.isEmpty()) throw new IOException("No mobile cells in " + source.getFileName());
-        write(dir.resolve(IMPORTED), toCsv(cells).getBytes(StandardCharsets.UTF_8));
+        // row by row: the whole file as one text beside the cells was twice their memory again
+        Path target = dir.resolve(IMPORTED), tmp = target.resolveSibling(IMPORTED + ".part");
+        Files.createDirectories(dir);
+        try (java.io.BufferedWriter out = Files.newBufferedWriter(tmp, StandardCharsets.UTF_8)) {
+            out.write(CSV_HEAD);
+            for (Cell c : cells) out.write(csvRow(c));
+        }
+        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         synchronized (this) {
             importLoaded = false;
         }
         loadImported();
         return cells.size();
+    }
+
+    /** The unpacked bytes of an import, counted as they are read: over the limit the read ends with a short line. */
+    private static final class SizeLimit extends java.io.FilterInputStream {
+        private final long max;
+        private long read;
+
+        SizeLimit(InputStream in, long max) {
+            super(in);
+            this.max = max;
+        }
+
+        private int counted(int n) throws IOException {
+            if (n > 0 && (read += n) > max) {
+                throw new IOException("file over " + (max >= 1L << 30 ? (max >> 30) + " GB" : (max >> 20) + " MB") + " unpacked");
+            }
+            return n;
+        }
+
+        @Override
+        public int read() throws IOException {
+            int b = super.read();
+            if (b >= 0) counted(1);
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            return counted(super.read(b, off, len));
+        }
+    }
+
+    /** An import's text: a line longer than {@link #MAX_IMPORT_LINE} ends the read before it is ever held whole. */
+    private static final class LineLimit extends java.io.FilterReader {
+        private int line;
+
+        LineLimit(java.io.Reader in) {
+            super(in);
+        }
+
+        @Override
+        public int read() throws IOException {
+            char[] one = new char[1];
+            return read(one, 0, 1) < 0 ? -1 : one[0];
+        }
+
+        @Override
+        public int read(char[] c, int off, int len) throws IOException {
+            int n = super.read(c, off, len);
+            for (int i = off; i < off + n; i++) {
+                if (c[i] == '\n' || c[i] == '\r') line = 0;
+                else if (++line > MAX_IMPORT_LINE) throw new IOException("line over " + MAX_IMPORT_LINE + " characters: not a cell file");
+            }
+            return n;
+        }
     }
 
     /** The imported file, read once when first wanted (not on the window's thread: it can be large). */
