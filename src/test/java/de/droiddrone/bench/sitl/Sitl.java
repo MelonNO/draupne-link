@@ -101,9 +101,34 @@ public final class Sitl {
             @Override
             public BetaflightUsb.Wire open(BetaflightUsb.Port p) throws IOException {
                 if (!p.systemName().equals(BOARD.systemName())) throw new IOException(p.systemName() + " is not there");
-                return side.open();
+                BetaflightUsb.Wire wire = side.open();
+                try {
+                    clean(wire);
+                } catch (IOException e) {
+                    wire.close();
+                    throw e;
+                }
+                return wire;
             }
         };
+    }
+
+    /**
+     * SITL keeps what it had to say to the client before - the answers to requests still in its queue when that one
+     * went (it takes 100 a second) - and sends it to the next client with that one's first answer, cut where its ring
+     * buffer ran over: a "diff all" read with that in front is not whole (seen 2026-11-22 after the keeper's scenario).
+     * So one question is asked on a new connection and everything that comes until nothing has for 150 ms is thrown
+     * away. (A board on USB has its port's buffers emptied when it is opened.)
+     */
+    static void clean(BetaflightUsb.Wire wire) throws IOException {
+        wire.write(MspFrames.v1Request(Msp.API_VERSION, null));
+        byte[] buf = new byte[4096];
+        long end = System.currentTimeMillis() + 3000, quietSince = System.currentTimeMillis();
+        while (System.currentTimeMillis() < end && System.currentTimeMillis() - quietSince < 150) {
+            int n = wire.read(buf); // waits up to 100 ms for a first byte
+            if (n < 0) throw new IOException("SITL closed the connection");
+            if (n > 0) quietSince = System.currentTimeMillis();
+        }
     }
 
     /** The board, open and answering MSP - waited for while it restarts. {@link #usb()} is put in place first. */
