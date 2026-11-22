@@ -53,8 +53,12 @@ public final class ClipTransfer implements AutoCloseable {
     private long mismatches;
     private boolean checked, failed;
 
+    /** No clip is larger than the phone's whole clip folder may be (2 GB); the hub refuses one announced larger. */
+    public static final long MAX_BYTES = de.droiddrone.common.ClipStore.QUOTA_BYTES;
+
     /** Goes on from a .part file already there (cut back to whole chunks). */
     public ClipTransfer(Path part, Path done, long size, byte[] sha256) throws IOException {
+        if (size < 0 || size > MAX_BYTES) throw new IOException("a clip of " + size + " bytes: over " + MAX_BYTES);
         this.part = part;
         this.done = done;
         this.size = size;

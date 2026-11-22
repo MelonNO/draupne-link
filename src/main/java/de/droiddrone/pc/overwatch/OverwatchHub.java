@@ -50,6 +50,24 @@ public final class OverwatchHub implements AutoCloseable {
     static final int PICTURE_MAX_W = 640;
     private static final int QUEUE_MAX = 4000;
 
+    /**
+     * What this PC keeps of what a phone sends. A clip (a segment of an event; a whole event from a phone before
+     * pc.38) is fetched up to the size the phone's whole clip folder may have ({@link de.droiddrone.common.ClipStore#QUOTA_BYTES},
+     * 2 GB): a segment of 60 s is tens of MB. Of the pictures before an alert, an event keeps twice what the phone
+     * sends ({@link de.droiddrone.common.PreRoll}: 5 s of them, two a second, 256 KB in all): 20 pictures, 1 MB.
+     */
+    static final long MAX_CLIP_BYTES = ClipTransfer.MAX_BYTES;
+    static final int MAX_PRE_ROLL_PICTURES = 2 * (int) (de.droiddrone.common.PreRoll.KEEP_MS / de.droiddrone.common.PreRoll.EVERY_MS);
+    static final long MAX_PRE_ROLL_BYTES = 4L * de.droiddrone.common.PreRoll.MAX_BYTES;
+    /**
+     * With less free room than this on the clips' disk nothing of overwatch is written - no picture, no preview, no
+     * clip: what is left is the flight's (its recording and track; {@link de.droiddrone.pc.DiskSpace#LOW_BYTES}, where
+     * the pilot is told the disk is low).
+     */
+    static final long DISK_FLOOR_BYTES = de.droiddrone.pc.DiskSpace.LOW_BYTES;
+    /** Tests: the free room on the clips' disk, instead of the disk's own word. */
+    java.util.function.LongSupplier freeBytesOverride;
+
     /** A drone this PC put to overwatch: its token, and how it stood and looked then (null: not known). */
     public record Watched(String drone, int token, CameraFootprint.Pose pose) {}
 
@@ -434,6 +452,43 @@ public final class OverwatchHub implements AutoCloseable {
         return nowOverride >= 0 ? nowOverride : MonoClock.ms();
     }
 
+    // ------------------------------------------------------------------ the clips' disk
+
+    /** The disk is asked for its free room at most this often: between two asks a phone's uplink brings a few MB. */
+    static final long DISK_CHECK_MS = 1000;
+    private long diskCheckedAt = Long.MIN_VALUE / 2, diskFree = -1;
+    private boolean diskIsLow;
+
+    /** The free room on the clips' disk, as last asked; under 0: not known (then nothing is held back, as DiskSpace does). */
+    private long freeBytes(long now) {
+        if (now - diskCheckedAt < DISK_CHECK_MS && now >= diskCheckedAt) return diskFree;
+        diskCheckedAt = now;
+        java.util.function.LongSupplier made = freeBytesOverride;
+        if (made != null) return diskFree = made.getAsLong();
+        try {
+            Path p = index.root().toAbsolutePath();
+            while (p != null && !Files.exists(p)) p = p.getParent(); // no clip yet: the folder it will be in
+            return diskFree = p == null ? -1 : Files.getFileStore(p).getUsableSpace();
+        } catch (IOException | RuntimeException e) {
+            return diskFree = -1;
+        }
+    }
+
+    /**
+     * Less free room than {@link #DISK_FLOOR_BYTES}: nothing of overwatch is written. Said once when it begins and
+     * once when there is room again.
+     */
+    private boolean diskLow(long now) {
+        long free = freeBytes(now);
+        boolean low = free >= 0 && free < DISK_FLOOR_BYTES;
+        if (low != diskIsLow) {
+            diskIsLow = low;
+            log(low ? String.format(Locale.ROOT, "LOW DISK: %.1f GB free. Overwatch pictures and clips are not saved.", free / 1e9)
+                    : "Disk has room again: overwatch pictures and clips are saved.");
+        }
+        return low;
+    }
+
     private void handle(byte[] d, InetAddress from, int port) {
         int token = OverwatchProtocol.token(d);
         Watched known0 = byToken.get(token);
@@ -518,6 +573,10 @@ public final class OverwatchHub implements AutoCloseable {
             s.event = a.event;
             s.alert = a;
             s.preRollSaved = 0;
+            s.preRollBytes = 0;
+            s.preRollLimitSaid = false;
+            s.recordStopped = false;
+            s.clipNote = null;
             s.picture = null;
             s.boxes = null;
             s.boxesAt = Long.MIN_VALUE / 2;
@@ -590,7 +649,7 @@ public final class OverwatchHub implements AutoCloseable {
         }
         boolean picture = s.decoder.decode(frame, frame.length);
         int w = s.decoder.width(), h = s.decoder.height();
-        if (picture && w > 0 && h > 0 && s.recorder == null && key && s.id != null) {
+        if (picture && w > 0 && h > 0 && s.recorder == null && key && s.id != null && !s.recordStopped && !diskLow(now)) {
             try {
                 Path file = index.folder(s.filed()).resolve(s.id + "-preview.mkv");
                 s.recorder = new StreamRecorder(file, false, w, h, s.config);
@@ -633,9 +692,18 @@ public final class OverwatchHub implements AutoCloseable {
             if (s.id != null) { // an event that couldn't be stored: shown, not kept
                 Path dir = index.folder(s.filed());
                 Path f = dir.resolve(String.format(Locale.ROOT, "%s-pre-%013d.jpg", s.id, at));
-                if (!Files.exists(f)) {
+                if (Files.exists(f) || diskLow(now())) {
+                    // here already, or no room (said for the disk): shown below all the same
+                } else if (s.preRollSaved >= MAX_PRE_ROLL_PICTURES || s.preRollBytes + jpeg.length > MAX_PRE_ROLL_BYTES) {
+                    if (!s.preRollLimitSaid) {
+                        log(s.drone() + ": more pictures before the alert than an event keeps (" + MAX_PRE_ROLL_PICTURES + ", "
+                                + ClipIndex.sizeText(MAX_PRE_ROLL_BYTES) + "): the rest not kept.");
+                    }
+                    s.preRollLimitSaid = true;
+                } else {
                     Files.write(f, jpeg);
                     s.preRollSaved++;
+                    s.preRollBytes += jpeg.length;
                 }
             }
             if (!s.live) { // until the live preview comes, the card shows the latest picture before the alert
@@ -709,7 +777,33 @@ public final class OverwatchHub implements AutoCloseable {
                 send(s, OverwatchProtocol.clipDone(s.token, info.event, false, info.startedAt)); // given up on: not again
                 return;
             }
-            ClipTransfer ct = new ClipTransfer(dir.resolve(ClipIndex.partFile(id, part) + ".part"), done, info.size, info.sha256);
+            if (info.size > MAX_CLIP_BYTES) {
+                // larger than any clip can be: not a byte asked for; the phone is told, and goes on to its next clip
+                send(s, OverwatchProtocol.clipDone(s.token, info.event, false, info.startedAt));
+                s.clipNote = "Clip refused: over " + ClipIndex.sizeText(MAX_CLIP_BYTES);
+                if (s.refused.size() >= 64) s.refused.clear();
+                if (s.refused.add(hex)) { // announced again: told again, said once
+                    log(s.drone() + ": clip refused (" + ClipIndex.sizeText(info.size) + "): over " + ClipIndex.sizeText(MAX_CLIP_BYTES) + ".");
+                }
+                return;
+            }
+            Path partFile = dir.resolve(ClipIndex.partFile(id, part) + ".part");
+            long now = now(), free = freeBytes(now);
+            long toCome = info.size - (Files.isRegularFile(partFile) ? Math.min(info.size, Files.size(partFile)) : 0);
+            if (diskLow(now) || free >= 0 && free - toCome < DISK_FLOOR_BYTES) {
+                // no room for it above the floor: nothing begun and nothing said to the phone, which keeps its clip
+                // and announces it again - it is fetched when there is room
+                if (!diskIsLow && !hex.equals(s.waitSaid)) {
+                    log(s.drone() + ": clip (" + ClipIndex.sizeText(info.size) + ") waits: it would leave under "
+                            + ClipIndex.sizeText(DISK_FLOOR_BYTES) + " free.");
+                }
+                s.waitSaid = hex;
+                s.clipNote = "Clip waits: LOW DISK";
+                return;
+            }
+            s.waitSaid = null;
+            s.clipNote = null;
+            ClipTransfer ct = new ClipTransfer(partFile, done, info.size, info.sha256);
             s.transfer = new Transfer(info, id, ct);
             updateMeta(s, id, m -> {
                 m.setProperty("clipSize" + sfx, Long.toString(info.size));
@@ -730,6 +824,7 @@ public final class OverwatchHub implements AutoCloseable {
         if (t == null || t.info.event != event) return;
         try {
             if (t.clip.checked()) return; // in and checked: only its rename is left (the tick tries it)
+            if (diskLow(now())) return; // no room: a chunk still on its way is not written either; asked for again later
             t.clip.onChunk(OverwatchProtocol.chunkOffset(d), d, OverwatchProtocol.CHUNK_DATA_AT, d.length - OverwatchProtocol.CHUNK_DATA_AT, now());
             if (!t.clip.complete()) return;
         } catch (IOException e) {
@@ -840,6 +935,12 @@ public final class OverwatchHub implements AutoCloseable {
             if (s.card.ended(now) && (s.recorder != null || s.decoder != null)) s.closeMedia(); // lost: what came is kept
             if (s.live && now - s.liveAt > 3000) s.live = false;
             Transfer t = s.transfer;
+            // the clips' disk, looked at while something is written or waits for room (once a second at most)
+            boolean noRoom = (diskIsLow || t != null || s.recorder != null) && diskLow(now);
+            if (noRoom && s.recorder != null) { // the preview's recording ends where it is; what came is kept
+                s.closeRecorder();
+                s.recordStopped = true;
+            }
             // all of it in, checked or not (2026-11-20, a reader of this code): finished from here too. A clip whose
             // .part was already whole when it was announced (the PC restarted after its last chunk), or whose check
             // could not read it once (a virus scanner holding it), had nothing more to ask and no chunk to come - it
@@ -847,7 +948,7 @@ public final class OverwatchHub implements AutoCloseable {
             if (t != null && (t.clip.checked() || t.clip.complete()) && now - t.renameTriedAt >= RENAME_RETRY_MS) {
                 finishClip(s, t, now); // in and checked, its rename failed: again (1.0.49; it stuck forever)
             } else if (t != null) {
-                long[] ask = t.clip.next(now, flies);
+                long[] ask = t.clip.next(now, flies || noRoom);
                 if (ask != null) send(s, OverwatchProtocol.command(s.token, t.info.event, OverwatchProtocol.CMD_CLIP_GET, ask[0], (int) ask[1]));
             }
         }
@@ -865,7 +966,10 @@ public final class OverwatchHub implements AutoCloseable {
             String clipLine = null;
             Transfer t = s.transfer;
             if (t != null) {
-                clipLine = "Clip " + (flies ? "paused" : "coming") + ": " + ClipIndex.sizeText(t.clip.received()) + " of " + ClipIndex.sizeText(t.clip.size());
+                clipLine = "Clip " + (flies ? "paused" : diskIsLow ? "waits (LOW DISK)" : "coming") + ": " + ClipIndex.sizeText(t.clip.received())
+                        + " of " + ClipIndex.sizeText(t.clip.size());
+            } else if (s.clipNote != null) {
+                clipLine = s.clipNote; // refused, or waiting for room
             }
             long ended = s.card.endedAt(now);
             out.add(new View(s.drone(), s.card.shown(now), s.card.ended(now), s.card.alertAt() + wallOffset, ended < 0 ? -1 : ended + wallOffset,
@@ -1016,6 +1120,14 @@ public final class OverwatchHub implements AutoCloseable {
         float[][] boxes;
         long boxesAt = Long.MIN_VALUE / 2;
         int preRollSaved;
+        /** The event's kept pictures in bytes; whether their limit was said; the preview's recording ended for want of room. */
+        long preRollBytes;
+        boolean preRollLimitSaid, recordStopped;
+        /** The card's word on a clip that is not coming now (refused, waiting for room), or null. */
+        String clipNote;
+        /** The clip (its SHA-256) whose wait for room was said; the clips refused for their size. */
+        String waitSaid;
+        final java.util.Set<String> refused = new java.util.HashSet<>();
         boolean endedSaid, droppedSaid, blindSaid, storeFailedSaid;
         Transfer transfer;
         /** 1.0.64: DISMISS still to send again, for which event, and when the last went. */
