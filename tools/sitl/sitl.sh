@@ -189,6 +189,12 @@ run() {
         echo "$(now) [supervisor] start $n of Betaflight $v in $folder" >>sitl.log
         echo "$n" >starts.txt
         began=$SECONDS
+        # the feeder waits while Betaflight starts: a packet that comes before its sensors are set up ends it with a
+        # segmentation fault (SITL's updateState writes to the fake accelerometer it has not made yet)
+        if [ -n "$feeder" ]; then
+            kill -STOP "$feeder" 2>/dev/null
+            (sleep 1.5; kill -CONT "$feeder" 2>/dev/null) &
+        fi
         stdbuf -oL -eL "$elf" </dev/null 2>&1 | stamp >>sitl.log
         rc=${PIPESTATUS[0]}
         echo "$(now) [supervisor] Betaflight ended, exit code $rc" >>sitl.log
