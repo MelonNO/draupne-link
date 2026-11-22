@@ -52,6 +52,19 @@ The test week's first night (2026-11-21 evening to 22), with the phone app **DRA
 - **After a drone was lost armed the map's chip says until when** ("MAP PAUSED UNTIL 22:40 - A DRONE MAY BE FLYING"), and a click on it asks IT'S DOWN - RESUME as the main window does (`PossiblyFlying.untilNow`; `MapViewTest`, `PossiblyFlyingTest`; I-008).
 - **Wording and greying**: AIRSPACE KEY... and CELL KEY... (both said KEY...); NAME MAP's empty list says "No phones yet - open DRAUPNE Flight", and SCAN AGAIN; STANAG's "On a weak link it can delay the sticks" is on the STREAMS switch's text in LINK; REPORT and both EXPORTs end with Open folder or OK; FIND DRONE's buttons look off while off; no red ARMED block on the 3D radio in calibration (`Dialogs.saved`; `MapToolsTest`, `NameMapDialogTest`, `ControllerRenderTest`; I-009).
 
+### Small hardening (2026-11-22)
+
+- Text from other devices (a phone's device and version text, Tailscale host names, a release's tag, flight mode names) is always shown as plain text (`AsText`; `TextFromOtherMachinesTest`).
+- UPDATE opens only this project's own release pages (`UpdateCheckTest`).
+- Every Windows program the app starts is started by its full path (`Shell.withFullPath`; `ProgramsByFullPathTest`).
+- KML import no longer holds the map window: read in the background, up to 10 MB and 5 000 placemarks; the pins are saved once (`KmlImportTest`, `KmlImportOffSwingTest`).
+- OpenCelliD import: up to 1 GB unpacked and 2 million cells; cells without a position on the globe are left out (`OpenCellIdImportTest`).
+- Spectator: a map from the pilot PC that cannot be read no longer stops the rest of the view; the last good one stays (`MirrorMapTextTest`).
+- Overwatch: clips over 2 GB are refused, 20 pictures kept before an alert, nothing saved with under 2 GB free disk ("LOW DISK") (`OverwatchLimitsTest`).
+- Video: the frame assembler stays inside its memory budget in every case; an over-long packet no longer throws (`ProtocolFuzzTest`).
+- Installer: its log folder under ProgramData is writable by administrators only (`PcPrepLogTest`).
+- Firewall: the link port's rule takes the local network and Tailscale's addresses; an existing rule is narrowed at the next update (`FirewallRulesTest`).
+
 ### The test rig for real hardware (test-only)
 
 For the test week: the bench ([TESTING.md](TESTING.md), "Real hardware") against one real phone and its flight controller, **propellers off**, arming only on a session's own word. Not a change to the app.
