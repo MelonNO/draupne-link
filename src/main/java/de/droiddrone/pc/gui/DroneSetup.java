@@ -691,6 +691,8 @@ final class DroneSetup {
             card.add(escSection.build(line(escRow, "ESCS", readEscs, beaconOff)));
             escRow.set(State.INFO, ESC_HINT);
             card.add(javax.swing.Box.createVerticalStrut(10));
+            alsoSetsText.setVisible(false); // Q-003: above CONFIRM, what it also writes that no row shows
+            card.add(alsoSetsText);
             JPanel bottom = new JPanel(new java.awt.BorderLayout(14, 0));
             bottom.setOpaque(false);
             settings.footerText.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
@@ -1203,6 +1205,7 @@ final class DroneSetup {
             if (lastBoardId == null) return; // no board read (or its id unknown): nothing to confirm for
             confirm.press(lastBoardId); // this board only: one plugged in afterwards needs its own CONFIRM
             confirmButton.setVisible(false);
+            showAlsoSets("");
             if (!cellsConfirmed) {
                 cellsConfirmed = true;
                 main.save(Map.of(CELLS_KEY, Integer.toString(cells), CELLS_CONFIRMED_KEY, "true"));
@@ -1248,6 +1251,7 @@ final class DroneSetup {
 
         /** A choice changed: the page is no longer confirmed - CONFIRM comes back, the rows leave green. */
         private void choiceChanged() {
+            showAlsoSets(""); // what CONFIRM also sets is said again by the next read, for the choices as they are now
             if (!confirm.confirmed() && !confirm.armed()) return;
             confirm.clear();
             main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
@@ -1609,6 +1613,7 @@ final class DroneSetup {
 
         private void show(Read r) {
             busy = false;
+            showAlsoSets(""); // said again below (showChanges), from this read's plan - never from an older one
             long now = System.currentTimeMillis();
             if (paused) { // DISCONNECT came while this round ran: it is over, the port is free
                 usb.set(State.INFO, PAUSED_TEXT);
@@ -1764,9 +1769,27 @@ final class DroneSetup {
             if (cleanDone) usb.set(State.OK, usbText + "<br><b>Done - unplug the drone.</b>");
         }
 
+        /**
+         * Above CONFIRM, in the page's small grey text (Q-003: the maintainer's answer): what its press also writes
+         * that no row shows - "Also sets: battery warnings, beepers, arm without GPS fix". Only while CONFIRM is there
+         * to be pressed, and only the parts the round just read would really write (SetupPlanner.alsoSets: from the
+         * plan's own commands); "" for no line.
+         */
+        static String alsoSets(List<BetaflightPlan.Change> plan, boolean confirmShown) {
+            return confirmShown ? SetupPlanner.alsoSets(plan) : "";
+        }
+
+        private final WrappingText alsoSetsText = WrappingText.fitting("", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
+
+        private void showAlsoSets(String line) {
+            alsoSetsText.setHtml(line);
+            alsoSetsText.setVisible(!line.isEmpty());
+        }
+
         /** CONFIRM and its line under the settings: before the press; what is left after the last try. */
         private void showChanges(Read r, boolean pendingWrite) {
             confirmButton.setVisible(pendingWrite && !confirm.confirmed());
+            showAlsoSets(alsoSets(r.plan(), confirmButton.isVisible()));
             if (confirm.confirmed()) {
                 settings.footer("");
             } else if (pendingWrite && lastRefused != null) {

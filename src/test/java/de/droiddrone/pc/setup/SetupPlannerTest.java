@@ -225,6 +225,58 @@ class SetupPlannerTest {
         assertEquals(" Taken off: ARM on AUX3, BEEPER on AUX2.", SetupPlanner.takenOff(List.of("ARM on AUX3", "BEEPER on AUX2")));
     }
 
+    // ---- Q-003: CONFIRM also writes what no row shows - the line above it names those parts, from the plan itself ----
+
+    private static final String VBAT_STOCK_WARNING = "vbat_warning_cell_voltage = 350\r\n", VBAT_STOCK_MIN = "vbat_min_cell_voltage = 330\r\n";
+
+    /** A board as Betaflight ships it, for the three: the battery warnings at 3.5 / 3.3 V, every beeper on. */
+    private static FakeCli stock() {
+        return new FakeCli().with("get vbat_warning_cell_voltage", VBAT_STOCK_WARNING).with("get vbat_min_cell_voltage", VBAT_STOCK_MIN);
+    }
+
+    private static List<String> commands(SetupPlanner.Result r) {
+        List<String> all = new ArrayList<>();
+        for (BetaflightPlan.Change c : r.plan()) all.addAll(c.commands());
+        return all;
+    }
+
+    @Test
+    void theLineAboveConfirmNamesAllThreeWhenThePlanWritesAllThree() throws IOException {
+        SetupPlanner.Result r = SetupPlanner.plan(stock().with("version", NEW), new SetupPlanner.Fc(BOXES, MSP_RX_GPS, true, true),
+                wanted(true, 4, ModeSwitch.Failsafe.GPS_RESCUE));
+        assertEquals("Also sets: battery warnings, beepers, arm without GPS fix", SetupPlanner.alsoSets(r.plan()));
+        List<String> written = commands(r); // and it is true: each of the three is in what CONFIRM writes
+        assertTrue(written.contains("set vbat_warning_cell_voltage = 320") && written.contains("set vbat_min_cell_voltage = 280"), written.toString());
+        assertTrue(written.contains("beeper -ARMING") && written.contains("beacon RX_LOST"), written.toString());
+        assertTrue(written.contains("set gps_rescue_allow_arming_without_fix = ON"), written.toString());
+    }
+
+    @Test
+    void theLineNamesOnlyThePartsThisRoundWrites() throws IOException {
+        // no GPS answered: arming without a fix is not asked about, and not written
+        SetupPlanner.Result noGps = SetupPlanner.plan(stock(), new SetupPlanner.Fc(BOXES, SERIAL_RX, false, null), wanted(null, 0, ModeSwitch.Failsafe.KEEP));
+        assertEquals("Also sets: battery warnings, beepers", SetupPlanner.alsoSets(noGps.plan()));
+        assertFalse(commands(noGps).stream().anyMatch(c -> c.contains("gps_rescue_allow_arming_without_fix")));
+        // the battery warnings are the app's already: the beepers alone
+        SetupPlanner.Result beepers = SetupPlanner.plan(new FakeCli().with("get vbat_warning_cell_voltage", "vbat_warning_cell_voltage = 320\r\n")
+                .with("get vbat_min_cell_voltage", "vbat_min_cell_voltage = 280\r\n"), new SetupPlanner.Fc(BOXES, SERIAL_RX, false, null),
+                wanted(null, 0, ModeSwitch.Failsafe.KEEP));
+        assertEquals("Also sets: beepers", SetupPlanner.alsoSets(beepers.plan()));
+        // the beepers are silent already, the GPS's arming is not: the last alone
+        SetupPlanner.Result fix = SetupPlanner.plan(new FakeCli().with("version", NEW).with("beeper", SILENT).with("beacon", "Disabled:  none\r\n"),
+                new SetupPlanner.Fc(BOXES, MSP_RX_GPS, true, true), wanted(true, 4, ModeSwitch.Failsafe.GPS_RESCUE));
+        assertEquals("Also sets: arm without GPS fix", SetupPlanner.alsoSets(fix.plan()));
+    }
+
+    @Test
+    void noLineWhenThePlanWritesNoneOfThemThoughItWritesOtherThings() throws IOException {
+        SetupPlanner.Result r = SetupPlanner.plan(new FakeCli().with("beeper", SILENT).with("beacon", "Disabled:  none\r\n"),
+                new SetupPlanner.Fc(BOXES, SERIAL_RX, false, null), wanted(null, 0, ModeSwitch.Failsafe.KEEP));
+        assertFalse(r.plan().isEmpty(), "the receiver, the rate, the cells and the switches are still to write");
+        assertEquals("", SetupPlanner.alsoSets(r.plan()));
+        assertEquals("", SetupPlanner.alsoSets(List.of()), "nothing to write at all");
+    }
+
     // ---- recorded: every round of a grid as 1.0.53 planned it (moved out of the GUI unchanged) ----
     // 1.0.71: recorded anew for the field round - checked to differ from 1.0.53's (49d15c23...) in three things only:
     // the two vbat limits asked for, "beacon RX_LOST" after "beacon RX_SET", and the beepers' line saying so

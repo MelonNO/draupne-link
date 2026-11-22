@@ -232,6 +232,28 @@ public final class SetupPlanner {
         return craft.isEmpty() ? board : board + " - " + craft;
     }
 
+    /**
+     * The line above CONFIRM for what a round writes that no row of the page shows (Q-003): the battery warning
+     * voltages (BatterySetup), the beepers switched off but the lost-link ones (Beepers), and arming without a GPS
+     * fix when a GPS is set (GpsSetup) - "Also sets: battery warnings, beepers, arm without GPS fix". Only the parts
+     * this plan really writes, told by its own commands, so the line is always true; "" when it writes none of them.
+     */
+    public static String alsoSets(List<BetaflightPlan.Change> plan) {
+        boolean battery = false, beepers = false, withoutFix = false;
+        for (BetaflightPlan.Change change : plan) {
+            for (String command : change.commands()) {
+                battery |= command.startsWith("set " + BatterySetup.WARNING + " ") || command.startsWith("set " + BatterySetup.MIN + " ");
+                beepers |= command.startsWith("beeper ") || command.startsWith("beacon ");
+                withoutFix |= command.startsWith("set gps_rescue_allow_arming_without_fix ");
+            }
+        }
+        List<String> parts = new ArrayList<>();
+        if (battery) parts.add("battery warnings");
+        if (beepers) parts.add("beepers");
+        if (withoutFix) parts.add("arm without GPS fix");
+        return parts.isEmpty() ? "" : "Also sets: " + String.join(", ", parts);
+    }
+
     /** " Taken off: ARM on AUX3, BEEPER on AUX2." or "". */
     public static String takenOff(List<String> replaced) {
         return replaced.isEmpty() ? "" : " Taken off: " + String.join(", ", replaced) + ".";
