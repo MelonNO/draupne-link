@@ -52,6 +52,11 @@ The test week's first night (2026-11-21 evening to 22), with the phone app **DRA
 - **After a drone was lost armed the map's chip says until when** ("MAP PAUSED UNTIL 22:40 - A DRONE MAY BE FLYING"), and a click on it asks IT'S DOWN - RESUME as the main window does (`PossiblyFlying.untilNow`; `MapViewTest`, `PossiblyFlyingTest`; I-008).
 - **Wording and greying**: AIRSPACE KEY... and CELL KEY... (both said KEY...); NAME MAP's empty list says "No phones yet - open DRAUPNE Flight", and SCAN AGAIN; STANAG's "On a weak link it can delay the sticks" is on the STREAMS switch's text in LINK; REPORT and both EXPORTs end with Open folder or OK; FIND DRONE's buttons look off while off; no red ARMED block on the 3D radio in calibration (`Dialogs.saved`; `MapToolsTest`, `NameMapDialogTest`, `ControllerRenderTest`; I-009).
 
+### Two more of the maintainer's choices (2026-11-22)
+
+- **Before the link is up the LINK card's button says STOP** (it said STANDBY MODE, which also names a power mode): while PILOT UAV waits for the phone it only stops trying - nothing sent, nothing asked. STANDBY MODE from the first LINK READY on, also when that link is lost again. The texts that name the button say what it reads (CALIBRATE, UPDATE, Drone setup, the setup guide, Reset setup) (`PowerController.endText`; `LinkCardTest`; I-010).
+- **OSD: LINK HISTORY, the link's last 30 s** - an extra, off until turned on in SETTINGS > OSD: a thin strip under the picture delay, the ping as a line on a fixed 0 - 300 ms scale in the LINK figure's colours, marks under it for lost (red) and damaged (yellow) video frames and a lost link (red, a gap in the line). From what the link log reads at its tick; about 0.2 ms a picture at 1080p (`LinkHistory`; `LinkHistoryTest`, `OsdLayoutTest`, `PaintCostTest`; I-011).
+
 ### Small hardening (2026-11-22)
 
 - Text from other devices (a phone's device and version text, Tailscale host names, a release's tag, flight mode names) is always shown as plain text (`AsText`; `TextFromOtherMachinesTest`).
