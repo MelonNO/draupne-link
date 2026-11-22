@@ -1578,15 +1578,18 @@ public final class PhoneRig implements AutoCloseable {
      * 10.0.2.15 on one side and the phone's Wi-Fi (192.168.232.2) and mobile data on the other. The console's forward
      * ends at 10.0.2.15, in that router, and a packet from this PC never reached the app; Android 11 on has no such
      * router. Where there is one, it is told (as root, which the emulator has) to pass the phone's port on to the
-     * phone's Wi-Fi address - once, however many scenarios ask. Elsewhere root and the one look are all that is sent
-     * (without root the router cannot even be seen: the first scenario of a run, before any other asked for root, was
-     * left out); an emulator held to a real phone's rules (no root) is not looked at.
+     * phone's Wi-Fi address - once, however many scenarios ask. Elsewhere the address the forward ends at is looked
+     * for ({@link #ontoTheEmulatorsCard}) (without root the router cannot even be seen: the first scenario of a run,
+     * before any other asked for root, was left out); an emulator held to a real phone's rules (no root) is not looked at.
      */
     private void throughTheRouter(int phonePort) {
         if (!can(Capability.ROOT) || ledThrough.contains(phonePort)) return;
         ledThrough.add(phonePort);
         root();
-        if (shell("ip netns list").lines().noneMatch(l -> l.trim().startsWith("router"))) return;
+        if (shell("ip netns list").lines().noneMatch(l -> l.trim().startsWith("router"))) {
+            ontoTheEmulatorsCard();
+            return;
+        }
         Matcher wifi = Pattern.compile("inet (\\d+\\.\\d+\\.\\d+\\.\\d+)/").matcher(shell("ip -4 -o addr show wlan0"));
         if (!wifi.find()) {
             say("The emulator has a router of its own, but no Wi-Fi address to lead port " + phonePort + " to: the PC may not reach the phone.");
@@ -1597,6 +1600,32 @@ public final class PhoneRig implements AutoCloseable {
             shell("ip netns exec router iptables -t nat -A " + rule);
         }
         say("The emulator's own router (Android 8 to 10): its port " + phonePort + " led on to the phone at " + wifi.group(1) + ".");
+    }
+
+    /** Where the emulator's console forward ends: the address of the emulator's own network card. */
+    static final String FORWARDED_TO = "10.0.2.15";
+
+    /**
+     * The Android 15 image of the emulator (2026-11-22, draupne-a35: every scenario failed, the PC never saw the phone).
+     * The console's forward ends at {@value #FORWARDED_TO} on the emulator's own network card (eth0), which since
+     * Android 11 is the phone's mobile data. On this image mobile data never comes up (no SIM chosen for data, no data
+     * profile), so the card stays down without an address; the phone's only address is its Wi-Fi's, 10.0.2.16, on
+     * the emulator's Wi-Fi network, where nothing from the console arrives. Where no card has the address, the card is
+     * given it (as root, once; it lasts until the emulator restarts). The phone's answers still go out over its Wi-Fi,
+     * as on the other images (F-039), and reach this PC from another port of its loopback: the {@code Wire} takes them
+     * from any port. Android does not know of the card: aeroplane mode leaves it up.
+     */
+    private void ontoTheEmulatorsCard() {
+        String addresses = shell("ip -4 -o addr show");
+        if (addresses.isBlank() || addresses.contains("inet " + FORWARDED_TO + "/")) return;
+        String said = shell("ip link set eth0 up 2>&1 && ip addr add " + FORWARDED_TO + "/24 dev eth0 2>&1; echo rc=$?");
+        if (said.contains("rc=0")) {
+            say("The emulator's own card (eth0) had no address - this Android's mobile data never comes up - and the PC's port is forwarded to "
+                    + FORWARDED_TO + " on it: given that address, until the emulator restarts. The phone answers over its Wi-Fi.");
+        } else {
+            say("The emulator's own card (eth0) has no " + FORWARDED_TO + ", where the PC's port is forwarded, and could not be given it (" + said
+                    + "): the PC may not reach the phone.");
+        }
     }
 
     /**

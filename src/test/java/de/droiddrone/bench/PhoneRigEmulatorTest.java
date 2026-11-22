@@ -164,7 +164,7 @@ class PhoneRigEmulatorTest {
 
         int phonePort = PhoneRig.linkOnThePhone();
         int host = rig.forwardUdp(phonePort);
-        assertEquals(List.of("emu redir add udp:" + host + ":" + phonePort, "root", "shell ip netns list"), sent()); // no router of its own: nothing more
+        assertEquals(List.of("emu redir add udp:" + host + ":" + phonePort, "root", "shell ip netns list", "shell ip -4 -o addr show"), sent()); // no router of its own, nothing to give its card: nothing more
         int second = rig.forwardUdp(phonePort);
         assertEquals(List.of("emu redir add udp:" + second + ":" + phonePort), sent(), "looked once");
 
@@ -200,6 +200,38 @@ class PhoneRigEmulatorTest {
                 "shell ip netns exec router iptables -t nat -C " + rule + " 2>&1; echo rc=$?"), sent());
     }
 
+    /** What {@code ip -4 -o addr show} said on the Android 15 emulator (2026-11-22, draupne-a35): its Wi-Fi's address only. */
+    private static final String A35_ADDRESSES = "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
+            + "16: wlan0    inet 10.0.2.16/24 brd 10.0.2.255 scope global wlan0\\       valid_lft forever preferred_lft forever\n";
+
+    /**
+     * Android 15's emulator (2026-11-22, draupne-a35): no card has the address the console forwards to - its mobile
+     * data, on the emulator's own card, never comes up - so that card is given it, once. Where a card has it (the
+     * other images; the next scenario's rig on the same emulator) nothing more is sent.
+     */
+    @Test
+    void anAndroid15EmulatorsOwnCardIsGivenTheAddressTheForwardEndsAt() {
+        adb.says("shell ip -4 -o addr show", A35_ADDRESSES).says("shell ip link set eth0 up", "rc=0\n");
+        int phonePort = PhoneRig.linkOnThePhone();
+        int host = rig.forwardUdp(phonePort);
+        assertEquals(List.of("emu redir add udp:" + host + ":" + phonePort, "root", "shell ip netns list", "shell ip -4 -o addr show",
+                "shell ip link set eth0 up 2>&1 && ip addr add 10.0.2.15/24 dev eth0 2>&1; echo rc=$?"), sent());
+        int second = rig.forwardUdp(phonePort);
+        assertEquals(List.of("emu redir add udp:" + second + ":" + phonePort), sent(), "given once");
+
+        PhoneRig next = new PhoneRig(null, PhoneRig.Target.emulator(), adb, pauses::add, () -> now[0], null);
+        adb.says("shell ip -4 -o addr show", "15: eth0    inet 10.0.2.15/24 scope global eth0\\       valid_lft forever preferred_lft forever\n" + A35_ADDRESSES);
+        int third = next.forwardUdp(phonePort);
+        assertEquals(List.of("emu redir add udp:" + third + ":" + phonePort, "root", "shell ip netns list", "shell ip -4 -o addr show"), sent(), "the card has it now");
+
+        // a card that cannot be given it (no eth0): said in the film, the scenario goes on
+        PhoneRig without = new PhoneRig(null, PhoneRig.Target.emulator(), adb, pauses::add, () -> now[0], null);
+        adb.says("shell ip -4 -o addr show", A35_ADDRESSES).says("shell ip link set eth0 up", "Cannot find device \"eth0\"\nrc=1\n");
+        int fourth = without.forwardUdp(phonePort);
+        assertEquals(5, sent().size(), "looked, tried once");
+        assertTrue(fourth > 0);
+    }
+
     /** What the scenarios did in their own lines before - adb root, the crash guard's file, kill -9, am crash, ss, install -d - is sent as they sent it. */
     @Test
     void whatTheScenariosSentThemselvesIsSentTheSameThroughTheRig(@TempDir Path build) throws Exception {
@@ -229,7 +261,7 @@ class PhoneRigEmulatorTest {
             assertEquals(List.of("shell am force-stop " + APP, "shell rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml",
                     "shell input keyevent KEYCODE_WAKEUP", "shell wm dismiss-keyguard", "shell am start -n " + APP + "/de.droiddrone.flight.MainActivity",
                     "emu redir add udp:" + link.getPort() + ":" + PhoneRig.linkOnThePhone(),
-                    "root", "shell ip netns list"), opening.subList(12, opening.size())); // no router of its own (Android 11 on): nothing more
+                    "root", "shell ip netns list", "shell ip -4 -o addr show"), opening.subList(12, opening.size())); // no router of its own (Android 11 on): the card's address looked for, nothing more
             assertTrue(link.getAddress().isLoopbackAddress());
             assertTrue(rig.target().reach().isEmpty(), "the fence needs no way through for the emulator: its plan's reach is none, as ever");
         } finally {
