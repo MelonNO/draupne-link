@@ -138,7 +138,9 @@ public class DDService extends Service {
         // they need it; opened here it recorded for nobody (3.6 h through a standby in the pilot's phone's log)
         if (streamEncoder == null) streamEncoder = new StreamEncoder(cameraManager, audioSource, MainActivity.config);
         if (mp4Recorder == null) mp4Recorder = new Mp4Recorder(cameraManager, this, audioSource, MainActivity.config);
-        this.getExternalMediaDirs();
+        java.io.File[] media = this.getExternalMediaDirs();
+        // the phone's recordings (upstream's Mp4Recorder writes them there) stay out of the phone's gallery (NoMedia)
+        if (media != null && media.length > 0 && media[0] != null) markNoMedia(new java.io.File(media[0], "Video"));
         if (serial != null) serial.close();
         serial = new Serial(this, MainActivity.config);
         msp = new Msp(serial, MainActivity.config);
@@ -164,6 +166,13 @@ public class DDService extends Service {
         isRunning = true;
         startMainTimer();
         return START_REDELIVER_INTENT;
+    }
+
+    /** A media folder out of the phone's gallery (NoMedia); marked now: what the media index has of it goes. */
+    private void markNoMedia(java.io.File dir) {
+        if (!de.droiddrone.common.NoMedia.mark(dir)) return;
+        android.media.MediaScannerConnection.scanFile(getApplicationContext(), new String[]{dir.getPath()}, null, null);
+        log("Recordings: out of the phone's gallery");
     }
 
     /**

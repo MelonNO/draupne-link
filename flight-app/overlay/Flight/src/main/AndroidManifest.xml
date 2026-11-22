@@ -62,7 +62,12 @@
         android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" />
 
+    <!-- DRAUPNE Link: nothing of the app's goes to a backup or to a new phone (its settings hold the link key, the PC's
+         address, the phone's name); Android 12 on moves app data to a new phone unless the extraction rules say no -->
     <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        tools:targetApi="31"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:largeHeap="true"

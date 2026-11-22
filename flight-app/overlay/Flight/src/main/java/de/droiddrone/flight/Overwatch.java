@@ -91,9 +91,15 @@ final class Overwatch {
             File base = media != null && media.length > 0 && media[0] != null ? media[0] : c.getFilesDir();
             final ClipStore store = new ClipStore(new File(base, "Overwatch"));
             clips = store;
+            final android.content.Context app = c.getApplicationContext();
             hashing.incrementAndGet();
             hasher.execute(() -> {
                 try {
+                    // the clips stay out of the phone's gallery (NoMedia); marked now: what the media index has goes
+                    if (de.droiddrone.common.NoMedia.mark(store.dir())) {
+                        android.media.MediaScannerConnection.scanFile(app, new String[]{store.dir().getPath()}, null, null);
+                        log("Overwatch clips: out of the phone's gallery");
+                    }
                     store.scan(line -> log(line));
                     for (ClipStore.Clip gone : store.enforceQuota(usableSpace(store.dir()))) {
                         log("Overwatch clips: " + gone.file.getName() + " deleted - over the folder's quota");
