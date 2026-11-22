@@ -196,7 +196,11 @@ benchTask('benchEdge', 'edge & !finding', 'Edge cases: kills, broken files, odd 
 benchTask('benchSoak', 'soak & !finding', 'Long runs (BENCH_HOURS): a fleet flying on bad links, watched for growth and loss')
 benchTask('benchNight', 'night & !finding', 'The night: scenarios that take hours each (BENCH_HOURS) - one long flight, sleep and wake, the phone app left running')
 benchTask('benchEmulator', 'emulator & !finding', 'The real phone app in the Android emulator against the Windows app')
-benchTask('benchSitl', 'sitl & !finding', 'Real Betaflight firmware (SITL) answering the app')
+benchTask('benchSitl', 'sitl & !finding', 'Real Betaflight firmware (SITL) answering the app').configure {
+    // the SITL bench.ps1 started (tools\sitl\start.ps1): its version and folder, for the scenarios' films
+    systemProperty 'bench.sitl.version', System.getenv('BENCH_SITL_VERSION') ?: ''
+    systemProperty 'bench.sitl.folder', System.getenv('BENCH_SITL_FOLDER') ?: ''
+}
 benchTask('benchFindings', 'finding', 'The tests of bugs found and not fixed yet: each fails until its bug is fixed')
 benchTask('benchExplore', 'explore', "For the bench's author: the app started and looked at, nothing checked")
 
