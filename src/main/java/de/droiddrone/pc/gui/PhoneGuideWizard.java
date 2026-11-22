@@ -282,7 +282,7 @@ final class PhoneGuideWizard {
 
         @Override
         void onShow() {
-            background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), ok -> {
+            background(() -> WindowsSetup.firewallRuleReady(WindowsSetup.APK_RULE), ok -> {
                 firewall.setVisible(!Boolean.TRUE.equals(ok)); // shown only when it's missing
                 firewall.set(State.WARN, "No firewall rule - Windows may block the phone. "
                         + (inFirstTimeGuide(this) ? "Go Back to the firewall step." : "SETUP > PC setup adds it."));

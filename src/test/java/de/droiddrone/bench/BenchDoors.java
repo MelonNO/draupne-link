@@ -83,6 +83,12 @@ public final class BenchDoors implements Outside.Doors {
             if (command.contains("status")) return new Shell.Result(0, tailscaleStatus);
             if (command.contains("ip")) return new Shell.Result(0, "127.0.0.1\n");
         }
+        if (program.startsWith("netsh") && command.contains("show") && command.contains("rule")) {
+            // the setup's firewall rules are made here, as the installer leaves them: the setup reads a rule's name and
+            // Tailscale's range in the answer (an empty "ok" was enough until the link port's rule got its range too)
+            String name = command.stream().filter(a -> a.startsWith("name=")).map(a -> a.substring(5)).findFirst().orElse("");
+            return new Shell.Result(0, "Rule Name: " + name + "\nRemoteIP: LocalSubnet,100.64.0.0/10\nOk.\n");
+        }
         return new Shell.Result(0, "");
     }
 

@@ -34,14 +34,43 @@ public final class WindowsSetup {
     private WindowsSetup() {
     }
 
-    public static boolean firewallRuleExists(String name) {
-        return Shell.run(Duration.ofSeconds(15), "netsh", "advfirewall", "firewall", "show", "rule", "name=" + name).ok();
+    /**
+     * Where both rules let packets in from: this PC's own networks and Tailscale's addresses (its whole range,
+     * 100.64.0.0/10). The link port's rule was open to any address up to 1.0.71.
+     */
+    static final String RULE_REMOTE = "LocalSubnet,100.64.0.0/10";
+    /** Tailscale's range as netsh writes it back for a rule: numbers only, the same in every language of Windows. */
+    private static final String TAILSCALE_RANGE = "100.64.0.0/10";
+
+    /**
+     * The rule is there as the setup makes it now: of that name, and let in from {@link #RULE_REMOTE} only. A rule
+     * from before, open to any address, counts as not made - the setup guides then make it again (one Windows
+     * prompt), as the installer does at every install.
+     */
+    public static boolean firewallRuleReady(String name) {
+        return ruleReady(name, Shell.run(Duration.ofSeconds(15), "netsh", "advfirewall", "firewall", "show", "rule", "name=" + name));
     }
 
     /**
-     * Adds (replaces) both inbound rules, as administrator:
-     * UDP linkPort from anywhere (the 4G phone reaching the relay hosted on this PC), and TCP apkPort from the local
-     * network and Tailscale only (the phone downloading the Flight app from this PC).
+     * netsh's answer to "show rule name=...", read without its words (they are Windows' language's): every rule of
+     * the name - its name stands once in each - names Tailscale's range.
+     */
+    static boolean ruleReady(String name, Shell.Result shown) {
+        if (!shown.ok() || shown.output() == null) return false;
+        int rules = count(shown.output(), name);
+        return rules > 0 && count(shown.output(), TAILSCALE_RANGE) == rules;
+    }
+
+    private static int count(String text, String what) {
+        int n = 0;
+        for (int at = text.indexOf(what); at >= 0; at = text.indexOf(what, at + what.length())) n++;
+        return n;
+    }
+
+    /**
+     * Adds (replaces) both inbound rules, as administrator: UDP linkPort (name lookup, spectators, a sleeping
+     * phone's check-in) and TCP apkPort (the phone downloading the Flight app from this PC), each from this PC's own
+     * networks and Tailscale only ({@link #RULE_REMOTE}).
      */
     public static Shell.Result addFirewallRules(int linkPort, int apkPort) {
         return Shell.powershellElevated(Duration.ofMinutes(3), firewallScript(linkPort, apkPort));
@@ -78,11 +107,12 @@ public final class WindowsSetup {
                 deleteOldRules(),
                 "& $netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
                 "& $netsh advfirewall firewall add rule name=" + LINK_RULE
-                        + " dir=in action=allow protocol=UDP localport=" + linkPort + " profile=any",
+                        + " dir=in action=allow protocol=UDP localport=" + linkPort
+                        + " remoteip=" + RULE_REMOTE + " profile=any",
                 "& $netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null",
                 "& $netsh advfirewall firewall add rule name=" + APK_RULE
                         + " dir=in action=allow protocol=TCP localport=" + apkPort
-                        + " remoteip=LocalSubnet,100.64.0.0/10 profile=any");
+                        + " remoteip=" + RULE_REMOTE + " profile=any");
     }
 
     public static PowerPlan activePowerPlan() {

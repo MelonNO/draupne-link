@@ -284,8 +284,8 @@ final class PcSetupWizard {
 
         @Override
         void prepare() {
-            background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.LINK_RULE)
-                    && WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), both -> readyAtStart = Boolean.TRUE.equals(both));
+            background(() -> WindowsSetup.firewallRuleReady(WindowsSetup.LINK_RULE)
+                    && WindowsSetup.firewallRuleReady(WindowsSetup.APK_RULE), both -> readyAtStart = Boolean.TRUE.equals(both));
         }
 
         @Override
@@ -323,8 +323,8 @@ final class PcSetupWizard {
         void refresh() {
             if (checking || System.currentTimeMillis() < nextCheck) return;
             checking = true;
-            background(() -> new boolean[]{WindowsSetup.firewallRuleExists(WindowsSetup.LINK_RULE),
-                    WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE)}, r -> {
+            background(() -> new boolean[]{WindowsSetup.firewallRuleReady(WindowsSetup.LINK_RULE),
+                    WindowsSetup.firewallRuleReady(WindowsSetup.APK_RULE)}, r -> {
                 checking = false;
                 nextCheck = System.currentTimeMillis() + 5000;
                 if (r != null) show(r[0], r[1]);
