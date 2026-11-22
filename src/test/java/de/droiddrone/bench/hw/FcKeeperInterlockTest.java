@@ -67,7 +67,9 @@ class FcKeeperInterlockTest {
         assertEquals(Boolean.FALSE, s.armed());
         assertEquals(Msp.ARMING_DISABLED_MSP_BIT, s.number("lockBit"), "where the lock shows was measured on this board");
         assertTrue(bench.saidOf("channel map AETR1234 (throttle is raw channel 3), ARM on AUX1 1700-2100"), bench.said.toString());
-        assertTrue(bench.saidOf("when its sticks stop: DROP"), bench.said.toString());
+        assertTrue(bench.saidOf("; when its sticks stop: after failsafe_delay 15 (1.5 s) DROP (by MSP_FAILSAFE_CONFIG; its CLI was not asked) - the keeper lets it run "
+                + "(not a real board); motors read [1000, 1000, 1000, 1000] (at rest); 16.40 V, 4.10 V a cell (4 cells), floor 3.50; nothing but the keeper's own lock "
+                + "keeps it from arming."), bench.said.toString());
 
         phone = bench.phone().sticks(1000, 2000).startSticks(); // throttle down, ARM on: what arms a board that is not locked
         Waits.waitFor(() -> bench.sticksAtBoard() > 100, 5000, "a hundred stick frames at the board", bench.said);
@@ -90,7 +92,8 @@ class FcKeeperInterlockTest {
         bench.beat();
         assertTrue(bench.ask("OPEN 61").startsWith("NO a window is 1 to 60 s long"));
         assertTrue(bench.ask("OPEN 0").startsWith("NO a window is 1 to 60 s long"));
-        assertEquals("OK window=5000", bench.ask("OPEN 5"));
+        // (the ARM switch was on while the lock held: the keeper says at once that this still holds the board)
+        assertEquals("OK window=5000 cannotArm=ARMSWITCH", bench.ask("OPEN 5"));
         assertFalse(board.armingLocked(), "the lock is off inside the window");
         assertTrue(bench.ask("OPEN 5").startsWith("NO a window is open: close it first"), "a window is never made longer");
         // the ARM switch was on while the lock held: Betaflight wants it off once before it counts

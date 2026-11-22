@@ -7,6 +7,7 @@ import de.droiddrone.pc.setup.EscFirmware;
 import de.droiddrone.pc.setup.EscLink;
 import de.droiddrone.pc.setup.FakeEscBoard;
 import de.droiddrone.pc.setup.MotorTest;
+import de.droiddrone.testing.Waits;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -340,6 +341,143 @@ class FakeFlightBoardTest {
         }
     }
     // <<< R3
+
+    // >>> R3, second round: the board's own failsafe, its output limit, and what keeps it from arming
+    @Test
+    void itsFailsafeSettingsRxfailAndOutputLimitAreInTheCliAndInMsp() throws IOException {
+        try (BetaflightUsb fc = open()) {
+            // a stock board, by MSP_FAILSAFE_CONFIG: delay, off delay, throttle, switch mode, throttle-low delay, procedure
+            assertArrayEquals(new byte[]{15, 10, (byte) 0xe8, 3, 0, 100, 0, 1}, fc.msp(Msp.FAILSAFE_CONFIG, null));
+            fc.enterCli();
+            assertTrue(fc.command("get failsafe_delay").startsWith("failsafe_delay = 15"));
+            assertEquals("failsafe_delay set to 200", fc.command("set failsafe_delay = 200").trim());
+            assertTrue(fc.command("set failsafe_delay = 201").contains("###ERROR"), "1 to 200 tenths of a second");
+            assertEquals("failsafe_procedure set to GPS-RESCUE", fc.command("set failsafe_procedure = GPS-RESCUE").trim());
+            assertEquals("failsafe_switch_mode set to STAGE2", fc.command("set failsafe_switch_mode = STAGE2").trim());
+            assertEquals("failsafe_throttle_low_delay set to 200", fc.command("set failsafe_throttle_low_delay = 200").trim());
+            // rxfail: what each channel is given in stage 1 - sticks auto, throttle and switches held, as Betaflight has them at first
+            assertEquals("rxfail 0 a\nrxfail 1 a\nrxfail 2 a\nrxfail 3 a\nrxfail 4 h\nrxfail 5 h\nrxfail 6 h\nrxfail 7 h", fc.command("rxfail").replace("\r\n", "\n").trim());
+            assertEquals("rxfail 3 h", fc.command("rxfail 3 h").trim());
+            assertEquals("rxfail 4 s 1000", fc.command("rxfail 4 s 1000").trim());
+            assertTrue(fc.command("rxfail 4 a").contains("###ERROR"), "auto is for the four sticks");
+            assertTrue(fc.command("rxfail 9 h").contains("###ERROR"));
+            // motor_output_limit is a PID profile's own
+            assertTrue(fc.command("get motor_output_limit").replace("\r\n", "\n").startsWith("motor_output_limit = 100\nprofile 0\nAllowed range: 1 - 100"));
+            fc.command("profile 1");
+            assertEquals("motor_output_limit set to 15", fc.command("set motor_output_limit = 15").trim());
+            fc.command("profile 0");
+            assertTrue(fc.command("get motor_output_limit").startsWith("motor_output_limit = 100"));
+            fc.saveAndReboot();
+        }
+        try (BetaflightUsb fc = open()) {
+            assertArrayEquals(new byte[]{(byte) 200, 10, (byte) 0xe8, 3, 2, (byte) 200, 0, 2}, fc.msp(Msp.FAILSAFE_CONFIG, null), "saved, and the same by MSP");
+            fc.enterCli();
+            assertTrue(fc.command("rxfail").replace("\r\n", "\n").contains("rxfail 3 h\nrxfail 4 s 1000\n"));
+        }
+        assertTrue(board.saved().contains("profile 1\n\n# profile 1\nset p_roll = 45\nset anti_gravity_gain = 80\nset motor_output_limit = 15\n"), board.saved());
+        board.mspFailsafeConfig = new byte[]{1, 2, 3};
+        try (BetaflightUsb fc = open()) {
+            assertArrayEquals(new byte[]{1, 2, 3}, fc.msp(Msp.FAILSAFE_CONFIG, null), "a test's own answer, for a firmware that lays it out otherwise");
+        }
+    }
+
+    @Test
+    void sticksThatStopAreNoticedWhenItIsToldToAndThenItsFailsafeRuns() throws Exception {
+        board.setUp("aux 0 0 0 1700 2100 0 0", "set failsafe_delay = 10", "rxfail 3 h").features(BetaflightPlan.mspReceiverMask(FakeFlightBoard.DEFAULT_FEATURES));
+        board.rxLossMs = 150; // (Betaflight: 100 - a little more here, so that a loaded PC's own pauses are not taken for sticks that stopped)
+        int rxLoss = 1 << Msp.ARMING_DISABLED_RXLOSS_BIT, failsafe = 1 << Msp.ARMING_DISABLED_FAILSAFE_BIT;
+        byte[] armOff = rc(1500, 1500, 1000, 1500, 1000), armOn = rc(1500, 1500, 1000, 1500, 2000);
+        try (BetaflightUsb fc = open()) {
+            // as this board was: sticks that stop change nothing, and it says nothing of them
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            Thread.sleep(600);
+            assertTrue(board.armed());
+            assertEquals(0, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+            assertEquals(0, board.stage2());
+            board.disarm();
+
+            board.modelsRxLoss = true;
+            assertEquals(rxLoss, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)), "no sticks yet: RXLOSS");
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            assertEquals(0, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)), "sticks: the receiver is there");
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertTrue(board.armed());
+            // DROP: stage 1 for failsafe_delay (1 s) with ARM held as rxfail has it, then disarmed
+            Thread.sleep(400);
+            byte[] status = fc.msp(Msp.STATUS, null);
+            assertTrue(Msp.armed(status), "stage 1: armed still, its switches held");
+            assertEquals(rxLoss, Msp.armingDisableFlags(status), "and RXLOSS said, armed or not");
+            assertFalse(Msp.modeFlag(status, 5), "the mode box FAILSAFE (the sixth this board offers) is off in stage 1");
+            Waits.waitFor(() -> board.stage2() == 1, 3000, "stage 2");
+            status = fc.msp(Msp.STATUS, null);
+            assertFalse(Msp.armed(status), "DROP disarms");
+            assertEquals(rxLoss | failsafe, Msp.armingDisableFlags(status) & (rxLoss | failsafe));
+            assertTrue(Msp.modeFlag(status, 5), "FAILSAFE among the mode flags too");
+            assertArrayEquals(new int[]{1000, 1000, 1000, 1000}, board.motors());
+            // the sticks back, the switch off and on: it is as before
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            assertEquals(0, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertTrue(board.armed());
+
+            // GPS-RESCUE: stays armed, and its motors are the flight controller's own to drive
+            board.disarm();
+            fc.enterCli();
+            fc.command("set failsafe_procedure = GPS-RESCUE");
+            fc.saveAndReboot();
+        }
+        try (BetaflightUsb fc = open()) {
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertTrue(board.armed());
+            Waits.waitFor(() -> board.stage2() == 2, 3000, "stage 2 again");
+            assertTrue(board.armed());
+            assertArrayEquals(new int[]{1700, 1700, 1700, 1700}, board.motors(), "made up: the worst that is feared of a rescue with no fix");
+            assertEquals(1700, Msp.motors(fc.msp(Msp.MOTOR, null))[0]);
+            fc.msp(Msp.ARMING_DISABLE, new byte[]{1}); // the keeper's lock ends that too
+            assertFalse(board.armed());
+            assertArrayEquals(new int[]{1000, 1000, 1000, 1000}, board.motors());
+
+            // rxfail can also take the ARM switch down by itself: then stage 1 is the end of it
+            fc.msp(Msp.ARMING_DISABLE, new byte[]{0});
+            fc.enterCli();
+            fc.command("rxfail 4 s 1000");
+            fc.saveAndReboot();
+        }
+        try (BetaflightUsb fc = open()) {
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertTrue(board.armed());
+            Waits.waitFor(() -> !board.armed(), 3000, "the ARM switch set down by rxfail");
+            assertEquals(2, board.stage2(), "disarmed in stage 1: no stage 2");
+        }
+    }
+
+    @Test
+    void bidirectionalDshotWithNoEscAnsweringKeepsItFromArming() throws IOException {
+        board.setUp("aux 0 0 0 1700 2100 0 0", "set dshot_bidir = ON").features(BetaflightPlan.mspReceiverMask(FakeFlightBoard.DEFAULT_FEATURES));
+        int rpm = 1 << 20, armSwitch = 1 << Msp.ARMING_DISABLED_ARM_SWITCH_BIT;
+        byte[] armOff = rc(1500, 1500, 1000, 1500, 1000), armOn = rc(1500, 1500, 1000, 1500, 2000);
+        try (BetaflightUsb fc = open()) {
+            assertEquals(rpm, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)), "no battery in: no ESC answers, the RPM filter has nothing");
+            assertEquals("RPMFILTER", Msp.armingBlocks(rpm));
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertFalse(board.armed());
+            assertEquals(rpm | armSwitch, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+            board.battery(16.4, 4);
+            assertEquals(armSwitch, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)), "the pack in: the ESCs answer");
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertTrue(board.armed());
+            board.disarm();
+            board.escTelemetry = false; // the pack in and no ESC answers all the same
+            assertEquals(rpm, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+        }
+        assertEquals("RXLOSS+MSP+RPMFILTER+NO_ACC_CAL", Msp.armingBlocks(1 << 2 | 1 << 16 | 1 << 20 | 1 << 23), "by the names DRAUPNE Link shows them under");
+    }
+    // <<< R3, second round
 
     private static byte[] rc(int... channels) {
         byte[] p = new byte[channels.length * 2];

@@ -26,6 +26,13 @@ import java.io.IOException;
  * itself says, ARM down, disarmed as the board says, the window closed. It ends hands off, locked, and safe by the
  * keeper's own word (the rig asks for that at every hardware scenario's end).
  * <p>
+ * With the battery out the board would not arm whatever the keeper did (bidirectional DShot with no ESC answering:
+ * Betaflight's RPMFILTER). The film says so in the board's own words - "cannot arm: RPMFILTER ..." - beside the board's
+ * failsafe and output limit as the keeper read them, and none of it is a failure: without {@code board.mayArm} this
+ * scenario ends green on a board that cannot arm. With it, no window opens on a real board whose motor_output_limit
+ * is over the hardware file's {@code board.outputLimitMax} (gradlew boardCap writes it), and the keeper's own words
+ * for that are the failed check's.
+ * <p>
  * Without a hardware file, or with one that names no keeper, it skips itself.
  */
 @Tag("hw")
@@ -108,6 +115,13 @@ class BoardChainScenario {
                             + rest.number("findings") + ")");
                     rig.check(!ui.sees("FC: ARMED"), "the app shows nothing armed");
                     rig.film.remark("The board's arming blocks at rest, by Betaflight's names: " + rest.get("blocks") + " (MSP is the keeper's lock).");
+                    // (second round) what holds the board beside the lock is the board's own word and no failure of this run: with the
+                    // battery out and bidirectional DShot on, no ESC answers the flight controller, and Betaflight says RPMFILTER
+                    rig.film.remark(cannotArm(rest));
+                    rig.film.remark("The board's own settings, by the keeper: failsafe " + rest.get("failsafe") + " after failsafe_delay " + rest.get("failsafeDelay")
+                            + "; the keeper ends an arm window " + (rest.number("stickLimitMs") > 0 ? rest.number("stickLimitMs") + " ms after the last stick frame at the latest"
+                            : rest.number("stickLimitMs") == 0 ? "NOT by itself (board.letFailsafeRun)" : "- it has no failsafe_delay to go by: NO ARM WINDOW") + "; motor_output_limit "
+                            + (rest.number("outputLimit") < 0 ? "NOT READ" : rest.number("outputLimit")) + ", the rig allows " + rest.number("outputLimitMax") + ".");
 
                     if (bench.mayArm()) armOnce(rig, keeper, bench);
                     else rig.film.remark("No arm window asked for: the hardware file does not say board.mayArm=true.");
@@ -148,7 +162,9 @@ class BoardChainScenario {
             rig.radio.aux(arm, 1);
             boolean armed = Waits.until(() -> Boolean.TRUE.equals(state(keeper).armed()), 6000);
             s = state(keeper);
-            rig.check(armed, "ARM on at throttle minimum: the board itself says ARMED" + (armed ? "" : " - it did not: its arming blocks are " + s.get("blocks") + " (" + s + ")"));
+            // (second round) a board that does not arm says why itself; and a window the keeper ended (sticks that stopped) says so too
+            rig.check(armed, "ARM on at throttle minimum: the board itself says ARMED" + (armed ? "" : " - it did not. " + cannotArm(s)
+                    + (s.lastEnd() == null ? "" : " The keeper ended the window itself: " + s.lastEnd() + ".") + " (" + s + ")"));
             if (armed) {
                 rig.ui.shot("armed in the keeper's window: the board says so");
                 Ui.pause(2000);
@@ -164,6 +180,18 @@ class BoardChainScenario {
             String closed = rig.guard.closeWindow();
             rig.check(closed.startsWith("OK"), "the window closed, the board locked and disarmed by the keeper's word: " + closed);
         }
+    }
+
+    /**
+     * What holds the board from arming beside the keeper's own lock, as the film says it: "cannot arm: RPMFILTER ..." -
+     * the board's own word, never a failure of the keeper's or of the run.
+     */
+    static String cannotArm(KeeperClient.State s) {
+        String blocks = s.cannotArm();
+        if (blocks == null) return "Nothing but the keeper's own lock keeps the board from arming.";
+        return "cannot arm: " + blocks + " - the board's own word beside the keeper's lock, and no failure of the keeper's"
+                + (blocks.contains("RPMFILTER") ? "; RPMFILTER is bidirectional DShot with no ESC answering (the battery out, or an ESC that says nothing)" : "")
+                + (blocks.contains("RXLOSS") ? "; RXLOSS is no stick frames reaching the board" : "") + ".";
     }
 
     private static KeeperClient.State state(KeeperClient keeper) {

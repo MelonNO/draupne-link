@@ -33,7 +33,9 @@ public final class Hardware {
     private static final Set<String> KEYS = Set.of("phone.ip", "phone.port", "phone.key", "phone.adb", "phone.path", "phone.package",
             "board.port", "board.armAux", "battery.cells", "battery.cellFloor", "keeper.port",
             // >>> R3, the flight controller keeper
-            "board.mayArm", "keeper.motorSeconds");
+            "board.mayArm", "keeper.motorSeconds",
+            // (second round: the board's own failsafe, and its output limit)
+            "board.letFailsafeRun", "board.failsafeSeenOnSitl", "board.outputLimitMax");
     // <<< R3
     /**
      * What a run may say itself, or the environment for it, before the file (R5, the phone's rig): which phone on adb,
@@ -46,8 +48,8 @@ public final class Hardware {
     /** The keys whose values did not come from the file. */
     private final Set<String> outside;
     private final String phoneIp, phoneKey, phoneAdb, phonePackage, boardPort;
-    private final int phonePort, armAux, cells, keeperPort, motorSeconds;
-    private final boolean relayed, mayArm;
+    private final int phonePort, armAux, cells, keeperPort, motorSeconds, outputLimitMax;
+    private final boolean relayed, mayArm, letFailsafeRun, failsafeSeenOnSitl;
     private final double cellFloor;
 
     private Hardware(Path file, Properties p, Set<String> outside) {
@@ -97,6 +99,9 @@ public final class Hardware {
         String arm = text(p, "board.mayArm");
         if (!arm.isEmpty() && !arm.equals("true") && !arm.equals("false")) throw wrong("board.mayArm is true or false, not \"" + arm + "\"");
         mayArm = arm.equals("true");
+        letFailsafeRun = truth(p, "board.letFailsafeRun");
+        failsafeSeenOnSitl = truth(p, "board.failsafeSeenOnSitl");
+        outputLimitMax = number(p, "board.outputLimitMax", 15, 1, 100);
         // <<< R3
     }
 
@@ -174,6 +179,13 @@ public final class Hardware {
         } catch (NumberFormatException ignored) {
         }
         throw wrong(key + " is a number from " + min + " to " + max + ", not \"" + v + "\"");
+    }
+
+    /** A key that is true or false; left out: false. */
+    private boolean truth(Properties p, String key) {
+        String v = text(p, key);
+        if (!v.isEmpty() && !v.equals("true") && !v.equals("false")) throw wrong(key + " is true or false, not \"" + v + "\"");
+        return v.equals("true");
     }
 
     private IllegalStateException missing(String key, String what) {
@@ -294,6 +306,34 @@ public final class Hardware {
     /** How many seconds the board may be armed in any one hour (keeper.motorSeconds; 600 unless the file says another). */
     public int motorSecondsPerHour() {
         return motorSeconds;
+    }
+
+    /**
+     * The board's own failsafe may run (board.letFailsafeRun=true): the keeper does not end an arm window when the
+     * board's receiver is lost. For a real board the keeper takes that only together with {@link #failsafeSeenOnSitl()}.
+     * Left out or false - the rule - the keeper ends the window itself, long before the board's failsafe_delay is over.
+     */
+    public boolean letFailsafeRun() {
+        return letFailsafeRun;
+    }
+
+    /** Somebody has seen on Betaflight as a program what this board's failsafe procedure does (board.failsafeSeenOnSitl=true). */
+    public boolean failsafeSeenOnSitl() {
+        return failsafeSeenOnSitl;
+    }
+
+    /**
+     * The most Betaflight's motor_output_limit may be, in per cent, for an arm window to open on this board
+     * (board.outputLimitMax; 15 unless the file says another - the motor test's own cap is 10). gradlew boardCap writes
+     * the limit to the board; a stock board has 100 and gets no window.
+     */
+    public int outputLimitMax() {
+        return outputLimitMax;
+    }
+
+    /** The file this was read from: for whoever has to say where a word of it is wrong. */
+    public Path source() {
+        return file;
     }
     // <<< R3
 

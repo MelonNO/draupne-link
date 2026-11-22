@@ -318,6 +318,12 @@ def keeperTask = { String taskName, List<String> words, String what ->
 keeperTask('fcKeeper', [], "REAL HARDWARE: the flight controller keeper for this bench's board (the hardware file), until gradlew fcKeeperEnd (-Pfolder=, -Pbudget=)")
 keeperTask('fcKeeperEnd', ['end'], 'Tells the running flight controller keeper to make the board safe and end; fails unless it left the board safe')
 keeperTask('fcKeeperState', ['state'], "The running flight controller keeper's state, one line")
+// (second round) By hand, with the keeper ended (one program has the port), on the one real board - never in a test or a suite:
+//   gradlew boardCap -Pport=COM9 -Plimit=15
+//                          Betaflight's motor_output_limit in every PID profile, saved and read back; an armed board is refused.
+//                          A real board gets no arm window from the keeper while its limit is over the hardware file's
+//                          board.outputLimitMax (15). -Plimit=100 is Betaflight's own again, and so is boardRestore of a snapshot.
+boardTool('boardCap', 'BoardCap', "REAL HARDWARE: writes Betaflight's motor_output_limit in every PID profile of the flight controller on USB, saved and read back (-Pport=COM9, -Plimit=15)", ['port', 'limit'])
 // <<< R3 --------------------------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------------------------------

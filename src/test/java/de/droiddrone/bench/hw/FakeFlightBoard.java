@@ -61,8 +61,11 @@ import java.util.TreeSet;
  * <b>Faked loosely</b> (enough for the tools, not Betaflight's own rules): arming by sticks - armed while the ARM
  * range (and PREARM's, if set) holds in the last MSP_SET_RAW_RC, the receiver is MSP and the throttle was low when
  * it went on; no timing and <b>no RX loss: sticks that stop change nothing</b> - an armed made-up board stays armed
- * for good, where Betaflight's failsafe would disarm or land it after 1.5 s - and no other arming blocks (a throttle
- * that was up when the switch went on does not ask for the switch again). Armed motors read one fixed value. A DShot "spin
+ * for good, where Betaflight's failsafe would disarm or land it after 1.5 s - unless a test tells it to notice
+ * ({@link #modelsRxLoss}: RXLOSS, rxfail, failsafe_delay and failsafe_procedure, each loosely; what its GPS rescue does
+ * to the motors is made up, {@link #rescueMotors}) - and of the other arming blocks only RPMFILTER (dshot_bidir on and
+ * no ESC answering: the battery out, or {@link #escTelemetry} off); a throttle that was up when the switch went on does
+ * not ask for the switch again. Armed motors read one fixed value. "rxfail" is a command here and in no dump or diff. A DShot "spin
  * direction + save" changes the direction byte of a BLHeli_S-kind ESC's settings and nothing else. The sensors, the
  * battery and the mixer's motor count (always 4) are what the test sets. Dumps are short: four timer pins stand for
  * all of resources, timers and dma; no LEDs, OSD, VTX.
@@ -77,6 +80,8 @@ import java.util.TreeSet;
  */
 public final class FakeFlightBoard {
     public static final int MOTORS = 4, AUX_SLOTS = 20, PROFILES = 2, RATE_PROFILES = 2;
+    /** The channels "rxfail" knows here: the four sticks and AUX1 .. 4 (Betaflight: eighteen). */
+    public static final int RXFAIL_CHANNELS = 8;
     /** What an armed motor reads (idle). */
     public static final int RUNNING = 1060;
     /** For the tools' waits on a made-up board: it is back at once, so look often and give up soon. */
@@ -186,7 +191,13 @@ public final class FakeFlightBoard {
             Setting.number("min_throttle", Section.MASTER, 1070, 1000, 2000).brushed("1000"),
             Setting.choice("use_unsynced_pwm", "OFF", "OFF", "ON").brushed("ON"),
             Setting.choice("motor_pwm_protocol", "DSHOT600", PROTOCOLS),
+            Setting.choice("dshot_bidir", "OFF", "OFF", "ON"),
             Setting.array("motor_output_reordering", "0,1,2,3,4,5,6,7", 8, 0, 7),
+            Setting.number("failsafe_delay", Section.MASTER, 15, 1, 200),
+            Setting.number("failsafe_off_delay", Section.MASTER, 10, 0, 200),
+            Setting.number("failsafe_throttle", Section.MASTER, 1000, 885, 2000),
+            Setting.choice("failsafe_switch_mode", "STAGE1", "STAGE1", "KILL", "STAGE2"),
+            Setting.number("failsafe_throttle_low_delay", Section.MASTER, 100, 0, 300),
             Setting.choice("failsafe_procedure", "DROP", "AUTO-LANDING", "DROP", "GPS-RESCUE"),
             Setting.number("vbat_min_cell_voltage", Section.MASTER, 330, 100, 500),
             Setting.number("vbat_warning_cell_voltage", Section.MASTER, 350, 100, 500),
@@ -201,6 +212,7 @@ public final class FakeFlightBoard {
             Setting.number("stats_total_time_s", Section.MASTER, 0, 0, Integer.MAX_VALUE),
             Setting.number("p_roll", Section.PROFILE, 45, 0, 250),
             Setting.number("anti_gravity_gain", Section.PROFILE, 80, 0, 250),
+            Setting.number("motor_output_limit", Section.PROFILE, 100, 1, 100),
             Setting.number("thr_mid", Section.RATE, 50, 0, 100),
             Setting.number("roll_expo", Section.RATE, 0, 0, 100));
 
@@ -213,6 +225,8 @@ public final class FakeFlightBoard {
         final int[][] aux = new int[AUX_SLOTS][];
         /** Port id (Betaflight 4.4's numbers: UART1 = 0, USB VCP = 20) to "functions msp gps telemetry blackbox". */
         final Map<Integer, String> serial = new LinkedHashMap<>();
+        /** rxfail: what each channel (roll, pitch, yaw, throttle, AUX1 ..) is given while the receiver is lost - "a", "h" or "s 1500". */
+        final String[] rxfail = new String[RXFAIL_CHANNELS];
         /**
          * Pin to its timer ("B00" to "AF2"). A dump lists the pins that have one and says nothing of a pin that has
          * none - so a default taken off a pin is in a "diff" ("timer A02 NONE") and missing from a "dump".
@@ -231,6 +245,7 @@ public final class FakeFlightBoard {
                 }
             }
             for (int i = 0; i < AUX_SLOTS; i++) aux[i] = FREE_SLOT.clone();
+            for (int i = 0; i < RXFAIL_CHANNELS; i++) rxfail[i] = i < 4 ? "a" : "h"; // Betaflight's own: the sticks auto, the switches held
             serial.put(20, "1 115200 57600 0 115200"); // USB: MSP
             serial.put(0, "64 115200 57600 0 115200"); // UART1: the serial receiver
             for (int id : new int[]{1, 2, 5}) serial.put(id, "0 115200 57600 0 115200");
@@ -251,6 +266,7 @@ public final class FakeFlightBoard {
             c.beaconOff = beaconOff;
             c.map = map;
             for (int i = 0; i < AUX_SLOTS; i++) c.aux[i] = aux[i].clone();
+            System.arraycopy(rxfail, 0, c.rxfail, 0, RXFAIL_CHANNELS);
             c.serial.clear();
             c.serial.putAll(serial);
             c.timers.clear();
@@ -325,6 +341,30 @@ public final class FakeFlightBoard {
      * such a value and is at rest once disarmed. A tool that makes a board safe has to hold in both.
      */
     public volatile boolean keepsMotorValuesWhileArmed;
+    // >>> R3, second round: sticks that stop
+    /**
+     * The board notices that its sticks have stopped, as Betaflight does with MSP as its receiver: 100 ms after the last
+     * MSP_SET_RAW_RC (and before the first) its status says RXLOSS (arming-disable flag 2) and rxfail has its channels
+     * (h: held as they were, s: set to a value, a: sticks centred and throttle down); an armed board goes on to stage 2
+     * after failsafe_delay - FAILSAFE in its status (arming-disable flag 1 and the mode box FAILSAFE) - and does what
+     * failsafe_procedure says: DROP disarms, AUTO-LANDING runs its motors at failsafe_throttle for failsafe_off_delay
+     * and then disarms, GPS-RESCUE stays armed with its motors at {@link #rescueMotors}. False, as this board was:
+     * sticks that stop change nothing.
+     */
+    public volatile boolean modelsRxLoss;
+    /** With {@link #modelsRxLoss}: so long after the last stick frame the receiver counts as lost (Betaflight: 100 ms). */
+    public volatile long rxLossMs = 100;
+    /**
+     * What an armed board's motors read in a GPS rescue. Made up - what Betaflight really does in a rescue with no GPS
+     * fix is not known here (it may disarm at once): this is the worst of it, gps_rescue_throttle_max.
+     */
+    public volatile int rescueMotors = 1700;
+    /** With bidirectional DShot on, the ESCs answer the flight controller; false: they do not (as with the battery out), and RPMFILTER blocks arming. */
+    public volatile boolean escTelemetry = true;
+    /** What MSP_FAILSAFE_CONFIG answers instead of the board's own settings: a firmware whose answer is laid out otherwise. Null: its own. */
+    public volatile byte[] mspFailsafeConfig;
+    private int stage2Count;
+    // <<< R3, second round
     private final List<String> refused = new ArrayList<>();
 
     // ------------------------------------------------------------------ what happened
@@ -348,6 +388,9 @@ public final class FakeFlightBoard {
     private boolean armingDisabledMsp, armSwitchHeld;
     /** With {@link #keepsMotorValuesWhileArmed}: what MSP_SET_MOTOR said while armed. */
     private int[] heldMotors;
+    /** With {@link #modelsRxLoss}: when the last sticks came (nanoTime; 0: none yet), and how far the failsafe has gone since. */
+    private long lastSticksNs, stage2SinceNs;
+    private boolean rxfailApplied, inStage2, rescue, landing;
     private final StringBuilder cliLine = new StringBuilder();
     private double volts = 0.3;
     private int cells, away;
@@ -470,9 +513,16 @@ public final class FakeFlightBoard {
 
     /** Disarmed just now: the motors at rest - or at what MSP_SET_MOTOR said meanwhile ({@link #keepsMotorValuesWhileArmed}). */
     private void atDisarm() {
+        rescue = landing = false;
         Arrays.fill(motors, MotorTest.STOP);
         if (heldMotors != null) System.arraycopy(heldMotors, 0, motors, 0, MOTORS);
         heldMotors = null;
+    }
+
+    /** How often the board's failsafe has gone into its stage 2 by now (with {@link #modelsRxLoss}). */
+    public synchronized int stage2() {
+        clock();
+        return stage2Count;
     }
 
     /** The arming block "MSP" holds (the keeper's lock, MSP_ARMING_DISABLE). */
@@ -481,6 +531,11 @@ public final class FakeFlightBoard {
     }
 
     public synchronized boolean armed() {
+        clock();
+        return isArmed();
+    }
+
+    private boolean isArmed() {
         return forcedArmed || stickArmed;
     }
 
@@ -580,8 +635,11 @@ public final class FakeFlightBoard {
 
     /** Each motor's output now (1 first). */
     public synchronized int[] motors() {
+        clock();
         int[] m = new int[MOTORS];
-        for (int i = 0; i < MOTORS; i++) m[i] = armed() ? RUNNING : motors[i];
+        // armed: at idle - or where the flight controller's own failsafe drives them
+        int running = rescue ? rescueMotors : landing ? setting("failsafe_throttle") : RUNNING;
+        for (int i = 0; i < MOTORS; i++) m[i] = isArmed() ? running : motors[i];
         return m;
     }
 
@@ -619,6 +677,8 @@ public final class FakeFlightBoard {
         cliLine.setLength(0);
         forcedArmed = stickArmed = false;
         armingDisabledMsp = armSwitchHeld = false; // the arming lock is in memory only
+        lastSticksNs = stage2SinceNs = 0;
+        rxfailApplied = inStage2 = rescue = landing = false;
         heldMotors = null;
         rc = null;
         Arrays.fill(motors, MotorTest.STOP);
@@ -760,6 +820,7 @@ public final class FakeFlightBoard {
 
     private void request(Link link, boolean v2, int code, byte[] payload, byte[] frame) {
         mspSeen.add(code);
+        clock();
         if (cutAfterMspRequests >= 0 && cutAfterMspRequests-- == 0) {
             cutWire();
             return;
@@ -856,21 +917,25 @@ public final class FakeFlightBoard {
                 return new Le().u8(1).u8(2).u8(on(ram, "use_unsynced_pwm") ? 1 : 0).u8(Arrays.asList(PROTOCOLS).indexOf(ram.master.get("motor_pwm_protocol")))
                         .u16(480).u16(550).u8(0).u8(0).u8(0).u8(0).u8(48).u16(125).u16(0).u8(2).u8(0).u8(0).bytes();
             case Msp.STATUS:
-                return new Le().u16(125).u16(0).u16(1 | (mag ? 1 << 2 : 0) | (gps ? 1 << 3 : 0)).u32(armed() ? 1 : 0)
+                return new Le().u16(125).u16(0).u16(1 | (mag ? 1 << 2 : 0) | (gps ? 1 << 3 : 0))
+                        .u32((isArmed() ? 1 : 0) | (inStage2 ? 1 << boxIndex(Msp.BOX_FAILSAFE) : 0))
                         .u8(ram.profile).u16(5).u16(125).u8(0).u8(26).u32(armingDisableFlags()).u8(0).bytes();
             case Msp.ARMING_DISABLE: // the keeper's lock: not 0 blocks arming and disarms, 0 takes the block off
                 if (ignoreArmingDisable) return DONE;
                 armingDisabledMsp = p[0] != 0;
                 if (armingDisabledMsp) {
-                    boolean was = armed();
+                    boolean was = isArmed();
                     forcedArmed = stickArmed = false;
                     if (was) atDisarm();
                     if (modeOn(0)) armSwitchHeld = true; // the switch is on under the block: off once before it counts again
                 }
                 return DONE;
             case Msp.FAILSAFE_CONFIG: { // delay, off delay (0.1 s), throttle, switch mode, throttle-low delay, procedure
-                int procedure = List.of("AUTO-LANDING", "DROP", "GPS-RESCUE").indexOf(ram.master.get("failsafe_procedure"));
-                return new Le().u8(4).u8(10).u16(1000).u8(0).u16(100).u8(procedure).bytes();
+                byte[] other = mspFailsafeConfig;
+                if (other != null) return other.clone();
+                return new Le().u8(setting("failsafe_delay")).u8(setting("failsafe_off_delay")).u16(setting("failsafe_throttle"))
+                        .u8(List.of("STAGE1", "KILL", "STAGE2").indexOf(ram.master.get("failsafe_switch_mode"))).u16(setting("failsafe_throttle_low_delay"))
+                        .u8(List.of("AUTO-LANDING", "DROP", "GPS-RESCUE").indexOf(ram.master.get("failsafe_procedure"))).bytes();
             }
             case Msp.MOTOR: {
                 Le le = new Le();
@@ -902,6 +967,8 @@ public final class FakeFlightBoard {
             case Msp.SET_RAW_RC:
                 rc = new int[p.length / 2];
                 for (int i = 0; i < rc.length; i++) rc[i] = Msp.u16(p, 2 * i);
+                lastSticksNs = System.nanoTime(); // the receiver is there again: stage 1 and stage 2 are over
+                rxfailApplied = inStage2 = rescue = landing = false;
                 sticks();
                 return DONE;
             case Msp.SET_MOTOR: { // Betaflight keeps what it is sent, and uses it only while disarmed
@@ -972,8 +1039,8 @@ public final class FakeFlightBoard {
         if (!modeOn(0)) {
             stickArmed = false;
             armSwitchHeld = false; // off once: it counts again
-        } else if (armingDisabledMsp) {
-            armSwitchHeld = true; // on under the arming lock: nothing arms, and the switch has to go off first
+        } else if (armingDisabledMsp || !stickArmed && rpmFilterBlocks()) {
+            armSwitchHeld = true; // on under the arming lock (or another block): nothing arms, and the switch has to go off first
         } else if (!stickArmed && !armSwitchHeld) {
             int throttle = ram.map.indexOf('T');
             boolean prearmSet = false;
@@ -981,12 +1048,90 @@ public final class FakeFlightBoard {
             stickArmed = !cli && !escs.inPassthrough() && BetaflightPlan.isMspReceiver(ram.features) && rc.length > throttle
                     && rc[throttle] <= Integer.parseInt(ram.master.get("min_check")) && (!prearmSet || modeOn(36));
         }
-        if (was && !armed()) atDisarm();
+        if (was && !isArmed()) atDisarm();
     }
 
-    /** MSP_STATUS' arming-disable flags, the two this board knows: "MSP" (the keeper's lock) and "ARM switch". */
+    /**
+     * MSP_STATUS' arming-disable flags, those this board knows: "MSP" (the keeper's lock), "ARM switch", "RPMFILTER"
+     * (bidirectional DShot and no ESC answering), and with {@link #modelsRxLoss} "RXLOSS" and "FAILSAFE".
+     */
     private int armingDisableFlags() {
-        return (armingDisabledMsp ? 1 << Msp.ARMING_DISABLED_MSP_BIT : 0) | (armSwitchHeld ? 1 << Msp.ARMING_DISABLED_ARM_SWITCH_BIT : 0);
+        return (armingDisabledMsp ? 1 << Msp.ARMING_DISABLED_MSP_BIT : 0) | (armSwitchHeld ? 1 << Msp.ARMING_DISABLED_ARM_SWITCH_BIT : 0)
+                | (rpmFilterBlocks() ? 1 << RPMFILTER_BIT : 0) | (rxLost() ? 1 << Msp.ARMING_DISABLED_RXLOSS_BIT : 0)
+                | (inStage2 ? 1 << Msp.ARMING_DISABLED_FAILSAFE_BIT : 0);
+    }
+
+    /** Betaflight's arming block when the RPM filter is on and no ESC sends it its speed: flag 20 in 4.4. */
+    private static final int RPMFILTER_BIT = 20;
+
+    /** Bidirectional DShot is on and no ESC answers the flight controller: the battery out, or {@link #escTelemetry} off. */
+    private boolean rpmFilterBlocks() {
+        return on(ram, "dshot_bidir") && (!batteryIn() || !escTelemetry);
+    }
+
+    private int setting(String name) {
+        return Integer.parseInt(ram.master.get(name));
+    }
+
+    /** Where a mode box is among MSP_STATUS' mode flags: its place in MSP_BOXIDS' answer. */
+    private int boxIndex(int permanentId) {
+        int i = 0;
+        for (int id : offeredModes) {
+            if (id == permanentId) return i;
+            i++;
+        }
+        return 31; // not offered: a flag nobody reads
+    }
+
+    // ------------------------------------------------------------------ sticks that stop (modelsRxLoss)
+
+    /** The receiver - MSP - has sent no sticks for {@link #rxLossMs}, or none at all yet. */
+    private boolean rxLost() {
+        return modelsRxLoss && BetaflightPlan.isMspReceiver(ram.features) && (lastSticksNs == 0 || System.nanoTime() - lastSticksNs > rxLossMs * 1_000_000L);
+    }
+
+    /**
+     * What Betaflight has done by now about sticks that stopped, loosely: stage 1 gives every channel what rxfail says
+     * (so a switch that is "set" low disarms there and then, and one that is "held" stays as it was); an armed board
+     * goes into stage 2 after failsafe_delay and does what failsafe_procedure says. Looked at whenever the board is.
+     */
+    private void clock() {
+        if (!rxLost() || cli || escs.inPassthrough()) return;
+        long now = System.nanoTime(), lostAt = lastSticksNs + rxLossMs * 1_000_000L;
+        if (!rxfailApplied) {
+            rxfailApplied = true;
+            if (rc != null) {
+                String letters = "AERT1234";
+                for (int channel = 0; channel < RXFAIL_CHANNELS; channel++) {
+                    int raw = ram.map.indexOf(letters.charAt(channel));
+                    String mode = ram.rxfail[channel];
+                    if (raw < 0 || raw >= rc.length || mode.equals("h")) continue;
+                    rc[raw] = mode.startsWith("s ") ? Integer.parseInt(mode.substring(2)) : channel == 3 ? 885 : 1500;
+                }
+                boolean was = isArmed();
+                if (!modeOn(0)) stickArmed = false; // the ARM switch taken down by rxfail
+                if (was && !isArmed()) atDisarm();
+            }
+        }
+        if (!isArmed() || lastSticksNs == 0) return;
+        if (!inStage2 && now - lostAt >= setting("failsafe_delay") * 100_000_000L) {
+            inStage2 = true;
+            stage2SinceNs = now;
+            stage2Count++;
+            switch (ram.master.get("failsafe_procedure")) {
+                case "GPS-RESCUE" -> rescue = true;
+                case "AUTO-LANDING" -> landing = true;
+                default -> dropped();
+            }
+        }
+        if (landing && now - stage2SinceNs >= setting("failsafe_off_delay") * 100_000_000L) dropped();
+    }
+
+    /** The failsafe disarms: by DROP at once, by AUTO-LANDING when its time is over. The ARM switch, if it is held on, has to go off before it counts again. */
+    private void dropped() {
+        forcedArmed = stickArmed = false;
+        if (modeOn(0)) armSwitchHeld = true;
+        atDisarm();
     }
 
     /** A mode's range holds in the last sticks. */
@@ -1101,6 +1246,8 @@ public final class FakeFlightBoard {
                 }
                 ram.map = args.toUpperCase(Locale.ROOT);
                 return "map " + ram.map;
+            case "rxfail":
+                return rxfail(args);
             case "mixer": {
                 if (args.isEmpty()) return "Mixer: " + MIXERS[ram.mixer];
                 int i = Arrays.asList(MIXERS).indexOf(args.toUpperCase(Locale.ROOT));
@@ -1182,6 +1329,27 @@ public final class FakeFlightBoard {
         } catch (NumberFormatException e) {
             return otherwise;
         }
+    }
+
+    /** rxfail: all channels listed, or one set - "rxfail 3 h", "rxfail 4 s 1000"; "a" (auto) is for the four sticks alone. */
+    private String rxfail(String args) {
+        if (args.isEmpty()) {
+            List<String> out = new ArrayList<>();
+            for (int i = 0; i < RXFAIL_CHANNELS; i++) out.add("rxfail " + i + " " + ram.rxfail[i]);
+            return String.join("\r\n", out);
+        }
+        String[] p = args.split("\\s+");
+        int channel = number(p[0], -1);
+        if (channel < 0 || channel >= RXFAIL_CHANNELS) return error("rxfail", "CHANNEL_RANGE: 0 - " + (RXFAIL_CHANNELS - 1));
+        String mode = p.length > 1 ? p[1].toLowerCase(Locale.ROOT) : "";
+        if (mode.equals("h") || mode.equals("a") && channel < 4) {
+            ram.rxfail[channel] = mode;
+        } else if (mode.equals("s") && p.length > 2 && number(p[2], -1) >= 885 && number(p[2], -1) <= 2115) {
+            ram.rxfail[channel] = "s " + number(p[2], 0);
+        } else {
+            return error("rxfail", mode.equals("a") ? "CANNOT USE THIS MODE ON THIS CHANNEL" : "INVALID ARGUMENT");
+        }
+        return "rxfail " + channel + " " + ram.rxfail[channel];
     }
 
     /** "get part-of-a-name": every setting whose name has it. */

@@ -60,6 +60,9 @@ public final class HwGuard implements AutoCloseable {
     /** The scenario's name, for the keeper's frame log; and the number of the keeper's first event that is this scenario's (-1: not heard yet). */
     private volatile String scenario;
     private volatile int eventsFrom = -1;
+    /** An arm window this guard opened and has not closed; the count of beats answered, and the first of them that can know of the window. */
+    private volatile boolean windowMine;
+    private volatile long beats, windowSeenFrom;
     private volatile String tripped;
     private volatile boolean running;
     private Thread thread;
@@ -123,6 +126,15 @@ public final class HwGuard implements AutoCloseable {
                 }
                 state = s;
                 lastAnswer = System.nanoTime();
+                // (second round) the keeper ends a window itself when the board's receiver is gone - a cut is what the week tests,
+                // so the run goes on; the radio's hands come off with the window, and the next one is the scenario's to ask for.
+                // (Only a beat begun after the window was opened says so: one under way before it may still say "no window".)
+                long beat1 = ++beats;
+                if (windowMine && beat1 >= windowSeenFrom && s.windowMs() == 0) {
+                    windowMine = false;
+                    radio.handsOff();
+                    say.accept("The keeper has ended the arm window itself (" + (s.lastEnd() == null ? "no reason said" : s.lastEnd()) + "): the radio's hands are off.");
+                }
             } catch (IOException e) {
                 lastFailure = String.valueOf(e.getMessage());
                 if (beat != null) beat.close();
@@ -228,12 +240,15 @@ public final class HwGuard implements AutoCloseable {
             throw new IllegalStateException("No arm window: the keeper does not answer (" + e.getMessage() + ")");
         }
         if (!answer.startsWith("OK")) throw new IllegalStateException("No arm window: the keeper says " + answer);
+        windowSeenFrom = beats + 2;
+        windowMine = true;
         radio.handsOn();
         say.accept("ARM WINDOW open for " + seconds + " s (the keeper: " + answer + "); the radio's hands are on.");
     }
 
     /** The radio's hands off first, then the keeper's window closed and its lock set. Returns the keeper's word ("OK safe=1 locked=1 armed=0 ..."). */
     public String closeWindow() {
+        windowMine = false;
         radio.handsOff();
         String answer;
         try (KeeperClient k = keeper()) {

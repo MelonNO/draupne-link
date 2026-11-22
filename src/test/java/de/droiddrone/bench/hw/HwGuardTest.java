@@ -135,6 +135,37 @@ class HwGuardTest {
     }
 
     @Test
+    void whenTheKeeperEndsTheWindowItselfTheRadiosHandsComeOffAndTheRunGoesOn() throws Exception {
+        // a keeper that guards the board's failsafe (as a real board's does): half a second without stick frames ends the window
+        board.setUp("set failsafe_delay = 10");
+        bench.config.failsafeEndsWindow = true;
+        bench.start();
+        guard(2000);
+        phone = bench.phone().sticks(1000, 1000).startSticks();
+        Waits.waitFor(() -> bench.sticksAtBoard() > 30, 5000, "stick frames at the board", bench.said);
+        guard.openWindow(30);
+        assertFalse(radio.isHandsOff());
+        bench.arm(phone);
+        appArmed = true;
+        phone.stopSticks(); // the link is cut: the keeper ends the window, long before the board's own failsafe
+        Waits.waitFor(() -> bench.state().windowMs() == 0 && !board.armed(), 4000, "the keeper to end the window", bench.said);
+        appArmed = false;
+        Waits.waitFor(radio::isHandsOff, 3000, "the radio's hands to come off with the window", film);
+        assertTrue(film.stream().anyMatch(l -> l.startsWith("The keeper has ended the arm window itself (STICKS STOPPED: no stick frame has reached the board for")
+                && l.endsWith("the radio's hands are off.")), film.toString());
+        assertNull(guard.tripped(), "a cut is what the week tests: no stop of the run");
+        assertNull(HwGuard.stopped(dir));
+        radio.handsOn(); // not for good: the next window is the scenario's to ask for
+        radio.handsOff();
+        phone.startSticks();
+        Waits.waitFor(() -> bench.sticksAtBoard() > 100, 5000, "stick frames at the board again", bench.said);
+        guard.openWindow(10);
+        assertFalse(radio.isHandsOff());
+        assertTrue(guard.closeWindow().startsWith("OK safe=1"));
+        assertTrue(guard.finish().startsWith("OK safe=1"));
+    }
+
+    @Test
     void aKeeperThatOpensNoWindowLeavesTheHandsOff() throws Exception {
         board.battery(13.0, 4); // under the floor
         bench.start();

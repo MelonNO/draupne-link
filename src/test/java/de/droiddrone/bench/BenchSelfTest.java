@@ -543,6 +543,9 @@ class BenchSelfTest {
         assertTrue(hw.hasKeeper());
         assertFalse(hw.mayArm(), "arming is a session's own word: the example does not say it");
         assertEquals(600, hw.motorSecondsPerHour());
+        // (second round) and it lets no failsafe of the board's run, and asks for the output limit the rig allows
+        assertFalse(hw.letFailsafeRun() || hw.failsafeSeenOnSitl(), "letting a real board's failsafe run takes two words, and the example says neither");
+        assertEquals(15, hw.outputLimitMax());
         assertFalse(hw.relayed());
         assertThrows(IllegalStateException.class, hw::reach, "no reach from it in a JVM that is no hardware run");
         try (AutoCloseable back = asAHardwareRun()) {

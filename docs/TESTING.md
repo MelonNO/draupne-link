@@ -147,8 +147,8 @@ reach real things: one phone on one drone, battery in, **propellers off**. Built
 
 ### The keeper (`gradlew fcKeeper`)
 
-Built 2026-11-22 against a made-up board (`gradlew test --tests *FcKeeper* --tests *MspTap* --tests *HwGuard*`,
-`benchSelf --tests *FcKeeperProcess*`); **not yet run on a real board.** The flight controller is on this PC's USB,
+Built 2026-11-22 against a made-up board (`gradlew test --tests *FcKeeper* --tests *MspTap* --tests *HwGuard*
+--tests *BoardCap*`, `benchSelf --tests *FcKeeperProcess*`); **not yet run on a real board.** The flight controller is on this PC's USB,
 not on the phone's: the phone app's bench build reaches it over TCP down the USB cable (`adb reverse`), and the
 program at this PC's end of that is the keeper (`bench/hw/FcKeeper`). It is a process of its own, the only one that
 has the board's port while it runs, and the place where the rig's safety is kept - so it holds when the test's JVM
@@ -159,10 +159,49 @@ gradlew fcKeeper [-Pfolder=...]    the keeper, until it is told to end (its file
 gradlew fcKeeperState              its state in one line
 gradlew fcKeeperEnd                make safe and end; fails unless the board was left locked, disarmed, at rest
 gradlew boardSafe [-Pport=COM9]    the same lock and STOP with no keeper running (after one was killed outright)
+gradlew boardCap -Pport=COM9 -Plimit=15
+                                   with no keeper running: Betaflight's motor_output_limit in every PID profile, saved,
+                                   read back (an armed board is refused); -Plimit=100 is Betaflight's own again
 ```
 
 `boardSafe` without a port does it to every flight controller on this PC's USB, and the lock stays on a board until
 that board is restarted: name the port when another one is plugged in (`bench.ps1 hw` names the hardware file's).
+
+- **What the keeper reads of the board before anybody gets a lease** (2026-11-22, second round; a real board's
+  always): one visit to its CLI - `profile`, `get failsafe_procedure`, `get failsafe_delay`, `get failsafe_off_delay`,
+  `get failsafe_throttle`, `get failsafe_switch_mode`, `get failsafe_throttle_low_delay`, `rxfail`, then `profile n`
+  and `get motor_output_limit` for every PID profile, the profile in use selected again, `exit`. Nothing is set.
+  Betaflight restarts at `exit`, and the board is taken once more, locked first. MSP_FAILSAFE_CONFIG (75) is read
+  too and held against the CLI's word: nothing else in this repo reads that request, so where the two differ the
+  CLI's is taken and the keeper says FINDING. The same read is made again after Drone setup had the board, and for
+  another board on the same port. Two lines say it, and `bench.ps1 hw` prints both:
+  `The board's own settings, read in its CLI ...: failsafe_procedure = ..., failsafe_delay = ..., ...; rxfail 0 a,
+  ..., 3 h, ...; motor_output_limit = 100 in PID profile 0 (the one in use), ...` and
+  `The board is taken: ...; when its sticks stop: rxfail holds the throttle at its last value (3 h) and holds the ARM
+  switch (AUX1: 4 h) for failsafe_delay 200 (20.0 s), then GPS-RESCUE - in an arm window the keeper ends it first:
+  ...; motor_output_limit 100 - OVER the 15 this rig allows (board.outputLimitMax): NO ARM WINDOW until gradlew
+  boardCap ...; ...; cannot arm now: RXLOSS+RPMFILTER (beside the keeper's own lock).`
+- **The board's own failsafe is not let run on a real board.** A throttle the flight controller makes itself - a
+  held stick, a landing, a GPS rescue - is in no stick frame, so the 1100 ceiling does not hold it. In an open
+  window the keeper ends the window itself - the lock, then STOP, the motors read back, as for any trip - as soon
+  as the board's status says RXLOSS or FAILSAFE (asked ten times a second in a window), and at the latest when no
+  stick frame has reached the board for the shorter of 2 s and half its failsafe_delay. No `CLEAR` is asked for
+  this end: a cut is what the hardware week tests, and the next window opens once sticks reach the board again
+  (no window opens while they do not). `rig.guard` takes the radio's hands off and says so in the film; the run
+  goes on. `board.letFailsafeRun=true` in the hardware file switches this off, and the keeper refuses to start on
+  that word alone: it wants `board.failsafeSeenOnSitl=true` beside it - somebody has seen on Betaflight as a
+  program what this failsafe procedure does. The made-up board and Betaflight as a program let it run unless told
+  otherwise (`failsafe=end` by hand).
+- **The third throttle layer: the board's own output limit.** No arm window opens on a real board unless
+  `motor_output_limit` is at or under the hardware file's `board.outputLimitMax` (15) in every PID profile, or
+  when it could not be read. `gradlew boardCap` writes it (through the app's all-or-nothing CLI write, `save` last,
+  read back in a second visit); the keeper has to be ended for it - one program has the port. A snapshot taken
+  before (`boardSnapshot`) and `boardRestore` put the board's own value back.
+- **"cannot arm: ..."** is the board's own word and no failure of the keeper's: the arming blocks that hold beside
+  the keeper's lock, by Betaflight's names. With the battery out and bidirectional DShot on no ESC answers the
+  flight controller: `RPMFILTER`. It is in the "taken" line, in the line a minute, in the keeper's state
+  (`cannotArm=`), in `OPEN`'s answer (`OK window=10000 cannotArm=RPMFILTER`), and in `BoardChainScenario`'s film,
+  which stays green on it when `board.mayArm` is not set.
 
 - **Who talks to the board through it**, on this PC's loopback, never two at once: the *phone's lease* (keeper.port
   + 1; whole MSP frames only, and in strict mode - always on a real board - only the requests the phone app really
@@ -187,9 +226,11 @@ that board is restarted: name the port when another one is plugged in (`bench.ps
 - **The end** - `END`, the process told to go, an error of its own: lock, STOP to every motor, the motors read back
   at rest, the port let go. Exit code 0 only when the board was left locked, disarmed and at rest (3: not known
   safe; 2: it did not start - "in use" when another keeper runs; 5: ended by an error of its own, board safe).
-  **A keeper that is killed outright runs none of this:** then Betaflight's own failsafe (its sticks stop; it disarms
-  after 1.5 s when its failsafe is DROP - the keeper says which it is when it takes the board) and `gradlew boardSafe`
-  are what is left; `bench.ps1 hw` ends with both whatever happened.
+  **A keeper that is killed outright runs none of this:** then the board's own failsafe is what happens - on a
+  board whose rxfail holds the throttle and the ARM switch, an armed board keeps its last throttle for all of
+  failsafe_delay (20 s at 200) and then runs its procedure (a GPS rescue gives its own throttle). What bounds that
+  is the output limit above (15 % whoever asks), `gradlew boardSafe`, and the battery out; `bench.ps1 hw` ends with
+  `fcKeeperEnd` and `boardSafe` whatever happened.
 - **The guard in the test's JVM** (`bench/HwGuard`, `rig.guard`): it is the heartbeat, twenty times a second, and
   stops the run's flying - the radio's hands off for good, the keeper told, `hardware-stop.txt` in the run's folder,
   no hardware scenario after it until the file is deleted - when the keeper is silent or has tripped, when the app's
@@ -206,7 +247,9 @@ that board is restarted: name the port when another one is plugged in (`bench.ps
   the board only when the board is the made-up one or Betaflight as a program.
 - **Arming** is a word the hardware file has to say: `board.mayArm=true`, for a session with the battery in. Without
   it `BoardChainScenario` - the first run on the whole chain: the phone app told to use the keeper, PILOT UAV, the
-  flight controller shown, 20 s of sticks at rest counted at the board - asks for no window.
+  flight controller shown, 20 s of sticks at rest counted at the board - asks for no window, and ends green with the
+  battery out: its film has the board's "cannot arm: ..." line and what the keeper read of its failsafe and output
+  limit. With it, a board over `board.outputLimitMax` gets no window, and the failed check has the keeper's words.
 - **On the phone:** `adb shell setprop debug.draupne.fc tcp:<keeper.port + 1>` is set by the scenario (the one
   property the bench sets; `PhoneGuard`) and left there - gone with the phone's next restart, `... usb` puts USB
   back. The reverse port is the keeper's and is not removed.

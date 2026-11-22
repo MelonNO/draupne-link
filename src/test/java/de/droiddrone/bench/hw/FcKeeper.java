@@ -98,10 +98,34 @@ import java.util.function.Consumer;
  * </ul>
  * Every one of them closes the window and sets the lock; after one the keeper opens no window until it is told CLEAR.
  * <p>
+ * <b>The board's own settings</b> (second round, 2026-11-22). A real board need not drop when its sticks stop: its
+ * rxfail may hold the throttle and the ARM switch for all of failsafe_delay (20 s at 200), and its failsafe procedure
+ * may be a landing or a GPS rescue, with a throttle that is in no stick frame. So:
+ * <ul>
+ * <li><b>They are read before anybody gets a lease</b> ({@link Config#readSettings}; a real board's always): one visit
+ * to its CLI - the failsafe's settings, rxfail, motor_output_limit in every PID profile - left with "exit". Betaflight
+ * restarts, and the board is taken once more, locked first. Nothing is set. MSP_FAILSAFE_CONFIG is held against it and
+ * a difference said as a finding; read again after Drone setup had the board, and for another board on the port. The
+ * first lines say all of it as it is.</li>
+ * <li><b>The board's failsafe is not let run</b> ({@link Config#failsafeEndsWindow}; a real board's unless the
+ * hardware file says board.letFailsafeRun AND board.failsafeSeenOnSitl): in an open window the keeper ends the window
+ * itself - lock, STOP, the motors read back - as soon as the board's status says RXLOSS or FAILSAFE, and at the
+ * latest when no stick frame has reached the board for the shorter of 2 s and half its failsafe_delay. This end asks
+ * for no CLEAR: a cut is what the rig tests. No window opens while no sticks reach the board.</li>
+ * <li><b>The third throttle layer</b>: no window opens unless the board's own motor_output_limit is at or under
+ * {@link Config#outputLimitMax} (board.outputLimitMax, 15) in every PID profile - {@code gradlew boardCap} writes it -
+ * or when it could not be read.</li>
+ * <li><b>"cannot arm: ..."</b>: the arming blocks that hold beside the keeper's lock (the battery out and bidirectional
+ * DShot on: RPMFILTER) are the board's own word, said in the first lines, the line a minute, the state and OPEN's
+ * answer, and never a failure of the keeper's.</li>
+ * </ul>
+ * <p>
  * <b>What it cannot do.</b> A keeper that is killed outright (Task Manager, a power cut) runs none of this: then the
- * board's own failsafe (sticks stop, Betaflight disarms after 1.5 s) and {@code gradlew boardSafe}, which sets the same
- * lock, are what is left - {@code bench.ps1 hw} ends with both. And the lock lives in the board's memory: a restart of
- * the board clears it, and the keeper sets it again the moment the port is back.
+ * board's own failsafe is what happens - on a board that holds its throttle and ARM switch, an armed board keeps its
+ * last throttle for all of failsafe_delay and then runs its procedure. The board's output limit, {@code gradlew
+ * boardSafe} (which sets the same lock) and the battery out are what bounds that - {@code bench.ps1 hw} ends with
+ * fcKeeperEnd and boardSafe. And the lock lives in the board's memory: a restart of the board clears it, and the keeper
+ * sets it again the moment the port is back.
  * <p>
  * <b>Faults</b> the rig can ask for: cut (the phone's connection closed and refused - a pulled cable), starve (the
  * phone's frames taken and not passed on), stall (the phone's side not read), delay (every frame held so long), garbage
@@ -141,6 +165,30 @@ public final class FcKeeper implements AutoCloseable {
         public long reverseEveryMs = 5000;
         /** The voltage line's pace. */
         public long voltageLineMs = 60_000;
+        // >>> R3, second round: the board's own failsafe and its output limit
+        /**
+         * An open arm window is ended by the keeper - the lock, then STOP - as soon as the board says its receiver is
+         * lost (RXLOSS, FAILSAFE), and at the latest {@link #sticksStoppedMaxMs} (or half the board's failsafe_delay,
+         * whichever is shorter) after the last stick frame reached the board: the board's own failsafe never gets to
+         * run. Always so on a real board, unless the hardware file says board.letFailsafeRun=true and
+         * board.failsafeSeenOnSitl=true; the made-up board and Betaflight as a program let it run unless told.
+         */
+        public boolean failsafeEndsWindow;
+        /** The word that what this board's failsafe procedure does was seen on Betaflight as a program: only with it may a real board's failsafe be let run. */
+        public boolean failsafeSeenOnSitl;
+        /** The "2 s" of the rule above. */
+        public long sticksStoppedMaxMs = 2000;
+        /**
+         * The board's failsafe settings, rxfail and motor_output_limit are read in its CLI when it is first taken (and
+         * after every Drone setup lease), before anybody gets a lease; the visit ends with "exit", so Betaflight
+         * restarts once. Always on a real board.
+         */
+        public boolean readSettings;
+        /** No arm window opens unless the board's motor_output_limit is at or under this in every PID profile. 0: not asked (never so on a real board). */
+        public int outputLimitMax;
+        /** How long an answer in the board's CLI may take. */
+        public long cliMs = 3000;
+        // <<< R3, second round
         /** Where the keeper's lines are said beside its log file (its console). */
         public Consumer<String> console = System.out::println;
 
@@ -412,6 +460,47 @@ public final class FcKeeper implements AutoCloseable {
         }
     }
 
+    /**
+     * What the board itself is set to do when its sticks stop, and how much it may give its motors (second round): read
+     * in its CLI where the keeper is told to ({@link Config#readSettings}; a real board's always), else what
+     * MSP_FAILSAFE_CONFIG says of the failsafe alone.
+     *
+     * @param procedure    failsafe_procedure: "AUTO-LANDING", "DROP", "GPS-RESCUE"; null: not known
+     * @param delay        failsafe_delay in tenths of a second - how long stage 1 lasts; -1: not known
+     * @param rxfail       "0 a", "3 h", "4 s 1000" ... as the CLI lists them; empty: not read
+     * @param profile      the PID profile in use; -1: not known
+     * @param limits       motor_output_limit in each PID profile (0 first); empty: not read
+     * @param limitProblem why the limits were not read
+     * @param byCli        read in the CLI (the failsafe's settings at least)
+     */
+    private record Settings(String procedure, int delay, int offDelay, int throttle, String switchMode, int lowDelay, List<String> rxfail, int profile,
+                            List<Integer> limits, String limitProblem, boolean byCli) {
+        /** The largest motor_output_limit of all PID profiles (Betaflight changes profiles by itself); -1: not read. */
+        int maxLimit() {
+            int max = -1;
+            for (int v : limits) max = Math.max(max, v);
+            return max;
+        }
+
+        int maxProfile() {
+            return limits.indexOf(maxLimit());
+        }
+
+        /** What rxfail gives this channel (roll 0, pitch 1, yaw 2, throttle 3, AUX1 4 ..) while the receiver is lost: "h", "a", "s 1000"; null: not read. */
+        String rxfailOf(int channel) {
+            for (String line : rxfail) if (line.startsWith(channel + " ")) return line.substring(line.indexOf(' ') + 1);
+            return null;
+        }
+
+        static String seconds(int tenths) {
+            return tenths / 10 + "." + tenths % 10 + " s";
+        }
+    }
+
+    private static final String[] PROCEDURES = {"AUTO-LANDING", "DROP", "GPS-RESCUE"}, SWITCH_MODES = {"STAGE1", "KILL", "STAGE2"};
+    private static final java.util.regex.Pattern RXFAIL_LINE = java.util.regex.Pattern.compile("(?m)^rxfail (\\d+ [ahs](?: \\d+)?)\\s*$"),
+            PROFILE_LINE = java.util.regex.Pattern.compile("(?m)^profile (\\d+)\\s*$");
+
     /** The answer the keeper waits for: one question at a time. */
     private static final class Waiting {
         final int code;
@@ -452,6 +541,24 @@ public final class FcKeeper implements AutoCloseable {
     /** The firmware the lock's place was measured on; and what was last said of a board let go, and when. */
     private String lockMeasuredOn = "", lastGone = "";
     private long lastGoneNs;
+    // ---- second round: the board's own settings, and its word on its receiver
+    /** What the board is set to do when its sticks stop and how much it gives its motors; null: not read yet. */
+    private volatile Settings settings;
+    /** The board's settings are to be read in its CLI when it is next taken: at the start, after Drone setup had it, for another board. */
+    private volatile boolean needSettings;
+    private int settingsTries;
+    /** The board's own id as it last said it: compared, to know another board when one is plugged in - never written down. */
+    private byte[] boardUid;
+    /** While the keeper is in the board's CLI, what the board says there (the reader hands it over); null: it is not. */
+    private volatile StringBuilder cliSink;
+    private volatile long cliAtNs;
+    /** Where the mode box FAILSAFE is among MSP_STATUS' mode flags (-1: not known), and whether it is on. */
+    private volatile int failsafeBox = -1;
+    private volatile boolean failsafeBoxOn;
+    /** When the last stick frame was written to the board. */
+    private volatile long lastStickNs;
+    /** Why the keeper itself ended the last arm window; null: it did not. */
+    private volatile String lastEnd;
     private volatile Waiting waiting;
     private long nextOpenNs;
     /** When "exit" was last sent to a board that answered no MSP; long ago: never. */
@@ -504,6 +611,19 @@ public final class FcKeeper implements AutoCloseable {
         this.adb = adb;
         if (side.real() && !config.strict) throw new IllegalArgumentException("Strict mode is not switched off for a real board");
         if (config.windowMaxS < 1 || config.windowMaxS > 60) throw new IllegalArgumentException("An arm window is 60 s at most: " + config.windowMaxS);
+        // >>> second round: what a real board's keeper is never without
+        if (side.real() && !config.failsafeEndsWindow && !config.failsafeSeenOnSitl) {
+            throw new IllegalArgumentException("On a real board the keeper ends an arm window itself when the sticks stop, before the board's own failsafe can run; "
+                    + "that is switched off only with board.letFailsafeRun=true AND board.failsafeSeenOnSitl=true in the hardware file");
+        }
+        if (side.real() && !config.readSettings) {
+            throw new IllegalArgumentException("A real board's failsafe settings and output limit are always read in its CLI before anybody gets a lease (readSettings)");
+        }
+        if (config.outputLimitMax < 0 || config.outputLimitMax > 100 || side.real() && config.outputLimitMax == 0) {
+            throw new IllegalArgumentException("board.outputLimitMax is per cent, 1 to 100 (a real board gets no arm window without one): " + config.outputLimitMax);
+        }
+        needSettings = config.readSettings;
+        // <<< second round
     }
 
     // ------------------------------------------------------------------ start
@@ -545,7 +665,7 @@ public final class FcKeeper implements AutoCloseable {
                 + ", the phone's lease on 127.0.0.1:" + phonePort() + ", Drone setup's on 127.0.0.1:" + setupPort() + ", " + (config.strict ? "strict" : "NOT strict")
                 + ", throttle ceiling " + config.ceiling + ", " + (config.cells > 0 && config.cellFloor > 0 ? config.cells + " cells, floor " + config.cellFloor + " V a cell"
                 : "no battery floor known: no arm window will open") + ", windows of " + config.windowMaxS + " s at most, " + config.budgetS
-                + " armed seconds an hour (" + budgetUsedMs(System.currentTimeMillis()) / 1000 + " used).");
+                + " armed seconds an hour (" + budgetUsedMs(System.currentTimeMillis()) / 1000 + " used)." + secondRoundWords());
         thread("keeperWatch", this::watch);
         thread("keeperControl", this::acceptControl);
         thread("keeperPhone", this::acceptPhone);
@@ -805,6 +925,54 @@ public final class FcKeeper implements AutoCloseable {
                     }
                     if (armed) throw new IOException("it is ARMED and the arming lock does not disarm it - take the battery out");
                 }
+                // >>> second round: the board's own settings, before anybody gets a lease
+                // another board than the one before (by its own id: compared, never said) is read anew
+                byte[] uid;
+                try {
+                    uid = ask(Msp.UID, null);
+                } catch (IOException notSaid) {
+                    uid = boardUid; // a firmware that does not say: taken for the board it was (one that is gone fails at the next question)
+                }
+                if (boardUid != null && uid != null && !Arrays.equals(uid, boardUid)) {
+                    event(Kind.INFO, "Another board than the one before is on " + side.name() + ": where its lock shows and its settings are read anew.");
+                    lockMeasuredOn = "";
+                    settings = null;
+                    needSettings = config.readSettings;
+                    settingsTries = 0;
+                }
+                boardUid = uid;
+                int[] byMsp = failsafeByMsp();
+                if (needSettings) {
+                    // one visit to its CLI: nothing is set there, and it is left with "exit" - Betaflight restarts, and the
+                    // board is taken once more (locked first, as ever) with this known
+                    Settings read;
+                    try {
+                        read = readSettings(w, byMsp);
+                    } catch (IOException cut) {
+                        if (++settingsTries < 3) {
+                            if (wire == w) writeBoard(w, "\nexit\n".getBytes(StandardCharsets.US_ASCII)); // out of its CLI, should it be in there
+                            throw new IOException("its CLI could not be read (" + cut.getMessage() + "): once more");
+                        }
+                        read = new Settings(byMsp == null ? null : PROCEDURES[byMsp[5]], byMsp == null ? -1 : byMsp[0], -1, -1, null, -1, List.of(), -1, List.of(),
+                                "its CLI could not be read: " + cut.getMessage(), false);
+                        event(Kind.FINDING, side.name() + ": the board's CLI could not be read in three visits (" + cut.getMessage() + "): its motor_output_limit and "
+                                + "rxfail are not known.");
+                    }
+                    settings = read;
+                    needSettings = false;
+                    settingsTries = 0;
+                    if (wire == w) writeBoard(w, "\nexit\n".getBytes(StandardCharsets.US_ASCII));
+                    pause(300); // (as the app does it: a moment for the word to be out before the port is let go)
+                    if (wire == w) boardGone(w, "its settings were read in its CLI: Betaflight restarts");
+                    nextOpenNs = clock();
+                    return;
+                }
+                if (!config.readSettings) { // not asked into its CLI (the made-up board, Betaflight as a program): what MSP says of the failsafe
+                    settings = new Settings(byMsp == null ? null : PROCEDURES[byMsp[5]], byMsp == null ? -1 : byMsp[0], byMsp == null ? -1 : byMsp[1],
+                            byMsp == null ? -1 : byMsp[2], byMsp == null ? null : SWITCH_MODES[byMsp[3]], byMsp == null ? -1 : byMsp[4], List.of(), -1, List.of(),
+                            "its CLI was not asked", false);
+                }
+                // <<< second round
                 // where the lock shows is measured once for a firmware (it takes the lock off for a moment); after that the
                 // board, taken again, only has to show it there
                 String firmware = variant + " " + version;
@@ -815,7 +983,8 @@ public final class FcKeeper implements AutoCloseable {
                 int features = Msp.u32(ask(Msp.FEATURE_CONFIG, null), 0);
                 stopValue = (features & Msp.FEATURE_3D) != 0 ? Msp.STOP_3D : MotorTest.STOP;
                 Sticks s = readSticks();
-                String failsafe = failsafe();
+                failsafeBox = failsafeBoxIndex();
+                String failsafe = failsafeWords(s) + (limitWords().isEmpty() ? "" : "; " + limitWords());
                 stopMotors();
                 int[] motors = motors();
                 boolean rest = BoardSafe.atRest(motors, stopValue);
@@ -837,11 +1006,20 @@ public final class FcKeeper implements AutoCloseable {
                 }
                 event(lockBit < 0 || !rest ? Kind.FINDING : Kind.INFO, "The board is taken: " + side.name() + ", " + variant + " " + version + ", disarmed; " + lock
                         + "; " + s.said() + "; " + failsafe + "; motors read " + Arrays.toString(motors) + (rest ? " (at rest)" : " (NOT AT REST)") + "; "
-                        + voltageWords() + ".");
+                        + voltageWords() + "; " + cannotArmWords() + ".");
             } catch (IOException | RuntimeException e) {
                 if (wire == w) boardGone(w, "it could not be taken (" + e.getMessage() + ")");
             }
         }
+    }
+
+    /** (Second round.) What the keeper does about the board's own failsafe and output limit: the end of its first line. */
+    private String secondRoundWords() {
+        return " When the sticks stop in an arm window " + (config.failsafeEndsWindow ? "the keeper ends it itself - the lock, STOP - before the board's own failsafe can run."
+                : side.real() ? "THE BOARD'S OWN FAILSAFE IS LET RUN (board.letFailsafeRun, board.failsafeSeenOnSitl)." : "the board's own failsafe runs (not a real board).")
+                + (config.outputLimitMax > 0 ? " No arm window on a board whose motor_output_limit is over " + config.outputLimitMax
+                + " (board.outputLimitMax; gradlew boardCap writes it)." : "")
+                + (config.readSettings ? " The board's settings are read in its CLI first: Betaflight restarts once before the board is taken." : "");
     }
 
     /** An absent board is said once for each reason, not twice a second. */
@@ -915,17 +1093,226 @@ public final class FcKeeper implements AutoCloseable {
         return new Sticks(throttleAt, arm, prearmAux, said);
     }
 
-    /** What the board does when its sticks stop - said, not acted on; "" when it does not say. */
-    private String failsafe() {
+    // ------------------------------------------------------------------ second round: the board's own settings
+
+    /**
+     * MSP_FAILSAFE_CONFIG as the keeper reads it - failsafe_delay, failsafe_off_delay, failsafe_throttle,
+     * failsafe_switch_mode, failsafe_throttle_low_delay, failsafe_procedure, in that order (1, 1, 2, 1, 2 and 1 bytes) -
+     * or null when the answer is not of that shape. Nothing else in this repo reads that request, so on a real board
+     * its word is held to the CLI's ({@link #readSettings}), and the CLI's is the one taken.
+     */
+    private int[] failsafeByMsp() {
         try {
             byte[] f = ask(Msp.FAILSAFE_CONFIG, null);
-            if (f.length < 8) return "failsafe not understood";
-            int procedure = f[7] & 0xff;
-            String name = procedure == 0 ? "AUTO-LANDING" : procedure == 1 ? "DROP" : procedure == 2 ? "GPS-RESCUE" : "procedure " + procedure;
-            return "when its sticks stop: " + name + (procedure == 1 ? "" : " (NOT DROP: its motors go on for a while when the cable is cut)");
+            if (f.length != 8) return null;
+            int[] v = {f[0] & 0xff, f[1] & 0xff, Msp.u16(f, 2), f[4] & 0xff, Msp.u16(f, 5), f[7] & 0xff};
+            return v[0] < 1 || v[0] > 200 || v[3] >= SWITCH_MODES.length || v[5] >= PROCEDURES.length ? null : v;
         } catch (IOException e) {
-            return "failsafe not read";
+            return null;
         }
+    }
+
+    /**
+     * The one visit to the board's CLI: its failsafe settings, rxfail, and motor_output_limit in every PID profile (it
+     * is a profile's own, and Betaflight changes profiles by itself). Nothing is set; the PID profile in use is
+     * selected again at the end, and the caller says "exit". From the '#' on, what the board says on this connection is
+     * its CLI's text ({@link #cliSink}) - no MSP is asked or answered until Betaflight has restarted.
+     *
+     * @throws IOException the CLI did not open, or an answer did not come whole: nothing of it is taken then
+     */
+    private Settings readSettings(BetaflightUsb.Wire w, int[] byMsp) throws IOException {
+        StringBuilder sink = new StringBuilder();
+        cliSink = sink;
+        cli(w, sink, "#");
+        java.util.regex.Matcher inUse = PROFILE_LINE.matcher(cli(w, sink, "profile"));
+        int profile = inUse.find() ? Integer.parseInt(inUse.group(1)) : -1;
+        String procedure = setting(cli(w, sink, "get failsafe_procedure"), "failsafe_procedure");
+        int delay = number(setting(cli(w, sink, "get failsafe_delay"), "failsafe_delay")), offDelay = number(setting(cli(w, sink, "get failsafe_off_delay"), "failsafe_off_delay")),
+                throttle = number(setting(cli(w, sink, "get failsafe_throttle"), "failsafe_throttle"));
+        String switchMode = setting(cli(w, sink, "get failsafe_switch_mode"), "failsafe_switch_mode");
+        int lowDelay = number(setting(cli(w, sink, "get failsafe_throttle_low_delay"), "failsafe_throttle_low_delay"));
+        List<String> rxfail = new ArrayList<>();
+        java.util.regex.Matcher line = RXFAIL_LINE.matcher(cli(w, sink, "rxfail"));
+        while (line.find()) rxfail.add(line.group(1));
+        List<Integer> limits = new ArrayList<>();
+        String limitProblem = "";
+        for (int i = 0; i < 8 && limitProblem.isEmpty(); i++) { // (no Betaflight has more PID profiles)
+            if (cli(w, sink, "profile " + i).contains("###ERROR")) break; // one more than the board has
+            String said = cli(w, sink, "get motor_output_limit");
+            int limit = number(setting(said, "motor_output_limit"));
+            if (limit < 0) limitProblem = "its CLI: " + said.lines().map(String::strip).filter(l -> !l.isEmpty()).findFirst().orElse("no answer");
+            else limits.add(limit);
+        }
+        if (!limitProblem.isEmpty()) limits.clear();
+        else if (limits.isEmpty()) limitProblem = "its CLI named no PID profile";
+        if (profile >= 0) cli(w, sink, "profile " + profile);
+
+        // MSP's word on the failsafe held to the CLI's: where they differ the CLI's is taken, and said
+        boolean mspKnown = byMsp != null, same = mspKnown && procedure != null && procedure.equals(PROCEDURES[byMsp[5]]) && delay == byMsp[0]
+                && (offDelay < 0 || offDelay == byMsp[1]) && (throttle < 0 || throttle == byMsp[2]) && (switchMode == null || switchMode.equals(SWITCH_MODES[byMsp[3]]))
+                && (lowDelay < 0 || lowDelay == byMsp[4]);
+        boolean cliSaid = procedure != null && delay >= 0;
+        if (mspKnown && cliSaid && !same) {
+            event(Kind.FINDING, "MSP_FAILSAFE_CONFIG (75) reads failsafe_procedure " + PROCEDURES[byMsp[5]] + ", failsafe_delay " + byMsp[0] + " - the board's CLI says "
+                    + procedure + ", " + delay + ": the CLI's word is taken (the keeper's reading of MSP 75 is not this Betaflight's).");
+        }
+        String byMspWords = !mspKnown ? "MSP_FAILSAFE_CONFIG was not understood" : !cliSaid ? "taken from MSP_FAILSAFE_CONFIG where the CLI did not say"
+                : same ? "MSP_FAILSAFE_CONFIG says the same" : "MSP_FAILSAFE_CONFIG READS OTHERWISE: the CLI's word is taken";
+        if (procedure == null && mspKnown) procedure = PROCEDURES[byMsp[5]];
+        if (delay < 0 && mspKnown) delay = byMsp[0];
+        StringBuilder said = new StringBuilder("The board's own settings, read in its CLI (Betaflight restarts now, and is locked again when it is back): ");
+        said.append("failsafe_procedure = ").append(procedure == null ? "?" : procedure).append(", failsafe_delay = ").append(delay < 0 ? "?" : delay + " (" + Settings.seconds(delay) + ")")
+                .append(", failsafe_off_delay = ").append(known(offDelay)).append(", failsafe_throttle = ").append(known(throttle)).append(", failsafe_switch_mode = ")
+                .append(switchMode == null ? "?" : switchMode).append(", failsafe_throttle_low_delay = ").append(known(lowDelay)).append(" - ").append(byMspWords).append("; ");
+        said.append(rxfail.isEmpty() ? "rxfail not read" : "rxfail " + String.join(", ", rxfail)).append("; ");
+        if (limits.isEmpty()) {
+            said.append("motor_output_limit not read (").append(limitProblem).append(")");
+        } else {
+            for (int i = 0; i < limits.size(); i++) {
+                said.append(i == 0 ? "motor_output_limit = " : ", ").append(limits.get(i)).append(i == 0 ? " in PID profile " : " in profile ").append(i)
+                        .append(i == profile ? " (the one in use)" : "");
+            }
+        }
+        event(Kind.INFO, said.append('.').toString());
+        return new Settings(procedure, delay, offDelay, throttle, switchMode, lowDelay, List.copyOf(rxfail), profile, List.copyOf(limits), limitProblem, true);
+    }
+
+    private static String known(int value) {
+        return value < 0 ? "?" : Integer.toString(value);
+    }
+
+    /** "name = value" in a CLI answer: the value, or null. */
+    private static String setting(String said, String name) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?m)^" + name + " = (\\S+)\\s*$").matcher(said);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private static int number(String text) {
+        try {
+            return text == null ? -1 : Integer.parseInt(text);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    /**
+     * One line typed into the board's CLI ('#' alone opens it) and what the board printed for it, without its echo and
+     * its prompt. The prompt counts once nothing more has come for 60 ms, as the app's own CLI reader has it.
+     */
+    private String cli(BetaflightUsb.Wire w, StringBuilder sink, String command) throws IOException {
+        synchronized (sink) {
+            sink.setLength(0);
+        }
+        cliAtNs = clock();
+        writeBoard(w, (command.equals("#") ? "#" : command + "\n").getBytes(StandardCharsets.US_ASCII));
+        long end = clock() + config.cliMs * 1_000_000L;
+        while (clock() - end < 0) {
+            if (wire != w) throw new IOException("the board went away while its CLI was read");
+            String text;
+            synchronized (sink) {
+                text = sink.toString();
+            }
+            if ((text.endsWith("\n# ") || text.equals("# ")) && since(cliAtNs, clock(), 60)) {
+                text = text.replace("\r", "");
+                int firstLine = text.indexOf('\n');
+                if (firstLine >= 0 && text.substring(0, firstLine).contains(command)) text = text.substring(firstLine + 1);
+                return text.endsWith("# ") ? text.substring(0, text.length() - 2).strip() : text.strip();
+            }
+            pause(5);
+        }
+        throw new IOException("its CLI did not answer \"" + command + "\" within " + config.cliMs + " ms");
+    }
+
+    /** What the board does when its sticks stop, and what the keeper does about it: for the first lines. */
+    private String failsafeWords(Sticks s) {
+        Settings st = settings;
+        StringBuilder said = new StringBuilder("when its sticks stop: ");
+        if (st == null || st.procedure() == null || st.delay() < 0) {
+            said.append("NOT KNOWN (neither MSP_FAILSAFE_CONFIG nor its CLI said)");
+        } else if (!st.byCli()) {
+            said.append("after failsafe_delay ").append(st.delay()).append(" (").append(Settings.seconds(st.delay())).append(") ").append(st.procedure())
+                    .append(config.readSettings ? " (by MSP_FAILSAFE_CONFIG alone: ITS CLI COULD NOT BE READ, so what rxfail does with the throttle is not known)"
+                            : " (by MSP_FAILSAFE_CONFIG; its CLI was not asked)");
+        } else {
+            String throttle = st.rxfailOf(3);
+            said.append("rxfail ").append(throttle == null ? "(not read for the throttle)" : throttle.equals("h") ? "holds the throttle at its last value (3 h)"
+                    : throttle.equals("a") ? "puts the throttle down (3 a)" : "sets the throttle to " + throttle.substring(2) + " (3 " + throttle + ")");
+            for (int[] arm : s.arm()) {
+                int channel = 3 + arm[3];
+                String mode = st.rxfailOf(channel);
+                said.append(" and ").append(mode == null ? "(not read for the ARM switch, AUX" + arm[3] + ")" : mode.equals("h") ? "holds the ARM switch (AUX" + arm[3] + ": " + channel + " h)"
+                        : "sets the ARM switch to " + mode.substring(2) + " (AUX" + arm[3] + ": " + channel + " " + mode + ")");
+            }
+            said.append(" for failsafe_delay ").append(st.delay()).append(" (").append(Settings.seconds(st.delay())).append("), then ").append(st.procedure());
+        }
+        long limit = stickLimitMs();
+        if (!config.failsafeEndsWindow) said.append(side.real() ? " - board.letFailsafeRun: THE KEEPER LETS IT RUN" : " - the keeper lets it run (not a real board)");
+        else if (limit < 0) said.append(" - the keeper would end an arm window first, and has no failsafe_delay to go by: NO ARM WINDOW on this board");
+        else said.append(" - in an arm window the keeper ends it first: the lock and STOP when the board says RXLOSS or FAILSAFE, at the latest ").append(limit)
+                    .append(" ms after the last stick frame");
+        return said.toString();
+    }
+
+    /** The board's motor_output_limit against what the rig allows: for the first lines; "" when there is nothing to say. */
+    private String limitWords() {
+        Settings st = settings;
+        int max = st == null ? -1 : st.maxLimit(), cap = config.outputLimitMax;
+        if (cap <= 0) return max < 0 ? "" : "motor_output_limit " + max;
+        if (max < 0) return "motor_output_limit NOT READ (" + (st == null ? "its settings were not read" : st.limitProblem()) + "): NO ARM WINDOW on this board";
+        if (max <= cap) return "motor_output_limit " + max + " (at or under the " + cap + " this rig allows, in every PID profile)";
+        return "motor_output_limit " + max + " - OVER the " + cap + " this rig allows (board.outputLimitMax): NO ARM WINDOW until gradlew boardCap -Pport=" + side.name()
+                + " -Plimit=" + cap + " (with the keeper ended: one program has the port)";
+    }
+
+    /** The arming blocks that hold beside the keeper's own lock, by Betaflight's names ("RXLOSS+RPMFILTER"); "": none, or not known. */
+    private String otherBlocks() {
+        int f = flags;
+        if (f == -1) return "";
+        int others = f & ~(1 << (lockBit < 0 ? Msp.ARMING_DISABLED_MSP_BIT : lockBit));
+        return others == 0 ? "" : Msp.armingBlocks(others);
+    }
+
+    /** Whether the board could arm were the keeper's lock off - its own word, and no failure of the keeper's. */
+    private String cannotArmWords() {
+        String others = otherBlocks();
+        return others.isEmpty() ? "nothing but the keeper's own lock keeps it from arming" : "cannot arm now: " + others + " (beside the keeper's own lock)";
+    }
+
+    /** Where the mode box FAILSAFE is among MSP_STATUS' mode flags: its place in MSP_BOXIDS' answer (asked page by page, 32 a page); -1: not offered, or not said. */
+    private int failsafeBoxIndex() {
+        try {
+            int index = 0;
+            for (int page = 0; page < 4; page++) {
+                byte[] ids = ask(Msp.BOXIDS, new byte[]{(byte) page});
+                for (byte id : ids) {
+                    if ((id & 0xff) == Msp.BOX_FAILSAFE) return index;
+                    index++;
+                }
+                if (ids.length < 32) break;
+            }
+        } catch (IOException e) {
+            // the arming-disable flags say RXLOSS and FAILSAFE too
+        }
+        return -1;
+    }
+
+    /** What the board's own status says of a receiver that is gone - "RXLOSS", "FAILSAFE", both - or null. */
+    private String receiverLost() {
+        int f = flags;
+        if (!statusKnown) return null;
+        boolean rxLoss = f != -1 && (f >> Msp.ARMING_DISABLED_RXLOSS_BIT & 1) != 0, failsafe = f != -1 && (f >> Msp.ARMING_DISABLED_FAILSAFE_BIT & 1) != 0 || failsafeBoxOn;
+        return rxLoss && failsafe ? "RXLOSS and FAILSAFE" : rxLoss ? "RXLOSS" : failsafe ? "FAILSAFE" : null;
+    }
+
+    /**
+     * How long after the last stick frame the keeper ends an open arm window: the shorter of
+     * {@link Config#sticksStoppedMaxMs} and half the board's failsafe_delay. 0: it does not (the failsafe is let run);
+     * -1: it would, and the board's failsafe_delay is not known.
+     */
+    private long stickLimitMs() {
+        if (!config.failsafeEndsWindow) return 0;
+        Settings st = settings;
+        return st == null || st.delay() < 0 ? -1 : Math.min(config.sticksStoppedMaxMs, st.delay() * 100L / 2);
     }
 
     private void stopMotors() throws IOException {
@@ -955,6 +1342,8 @@ public final class FcKeeper implements AutoCloseable {
             statusKnown = voltsKnown = false;
             flags = -1;
             sticks = null;
+            cliSink = null; // the next connection begins with MSP again
+            failsafeBoxOn = false;
             if (windowOpen) lostInWindow = true; // even if it is back within the same tick: a board that restarted is no longer the one the window was opened on
         }
         try {
@@ -994,6 +1383,14 @@ public final class FcKeeper implements AutoCloseable {
                 SetupConn s = setup;
                 if (s != null) {
                     s.fromBoard(buf, n, in);
+                    continue;
+                }
+                StringBuilder cli = cliSink; // the keeper itself is in the board's CLI: text, until this connection ends
+                if (cli != null) {
+                    synchronized (cli) {
+                        cli.append(new String(buf, 0, n, StandardCharsets.US_ASCII));
+                    }
+                    cliAtNs = in;
                     continue;
                 }
                 long before = frames.skipped();
@@ -1036,6 +1433,7 @@ public final class FcKeeper implements AutoCloseable {
     private void learn(int code, byte[] payload, long at) {
         if (code == Msp.STATUS && payload.length > 6) {
             flags = Msp.armingDisableFlags(payload);
+            failsafeBoxOn = Msp.modeFlag(payload, failsafeBox);
             armed = Msp.armed(payload);
             statusNs = at;
             statusKnown = true;
@@ -1117,6 +1515,7 @@ public final class FcKeeper implements AutoCloseable {
             boolean wasOpen = windowOpen;
             windowOpen = false;
             if (tripped == null) tripped = why;
+            if (wasOpen) lastEnd = why;
             if (!again) {
                 lastTripKey = key;
                 event(Kind.TRIP, why + (wasOpen ? " - the arm window is closed." : ""));
@@ -1124,6 +1523,22 @@ public final class FcKeeper implements AutoCloseable {
             lastTripNs = now;
             Safe s = lockAndStop();
             if (!again || !s.safe()) event(s.safe() ? Kind.INFO : Kind.TRIP, "After that: " + s.text());
+        }
+    }
+
+    /**
+     * (Second round.) The keeper ends an open arm window because the board's receiver is gone: the lock, STOP, the motors
+     * read back, said loudly - as for any trip - but with no CLEAR to ask for afterwards. A cut is what the hardware week
+     * tests: the next window opens when sticks reach the board again and the board says so.
+     */
+    private void endWindow(String why) {
+        synchronized (windowLock) {
+            if (!windowOpen) return;
+            windowOpen = false;
+            lastEnd = why;
+            event(Kind.TRIP, why + " - the arm window is closed.");
+            Safe s = lockAndStop();
+            event(s.safe() ? Kind.INFO : Kind.TRIP, "After that: " + s.text() + " No CLEAR is asked for this end: a window opens again once sticks reach the board.");
         }
     }
 
@@ -1148,6 +1563,7 @@ public final class FcKeeper implements AutoCloseable {
             windowEndNs = clock() + seconds * 1_000_000_000L;
             lowSinceNs = 0;
             low = false;
+            lastEnd = null;
             windowOpen = true; // before the lock comes off: from here on the watch takes "not locked" for right
             try {
                 ask(Msp.ARMING_DISABLE, UNLOCK);
@@ -1159,9 +1575,11 @@ public final class FcKeeper implements AutoCloseable {
                 event(Kind.FINDING, "No arm window: " + e.getMessage() + ". " + s.text());
                 return "NO " + e.getMessage();
             }
-            event(Kind.INFO, "ARM WINDOW OPEN for " + seconds + " s: the arming lock is off. " + voltageWords() + "; "
-                    + (config.budgetS * 1000L - budgetUsedMs(System.currentTimeMillis())) / 1000 + " armed seconds left in this hour.");
-            return "OK window=" + seconds * 1000L;
+            // (second round) the lock is off - whether the board can arm now is the board's own to say, and no failure of the keeper's
+            String cannot = otherBlocks();
+            event(Kind.INFO, "ARM WINDOW OPEN for " + seconds + " s: the arming lock is off" + (cannot.isEmpty() ? ". " : " - and the board cannot arm yet: " + cannot + ". ")
+                    + voltageWords() + "; " + (config.budgetS * 1000L - budgetUsedMs(System.currentTimeMillis())) / 1000 + " armed seconds left in this hour.");
+            return "OK window=" + seconds * 1000L + (cannot.isEmpty() ? "" : " cannotArm=" + cannot);
         }
     }
 
@@ -1185,6 +1603,26 @@ public final class FcKeeper implements AutoCloseable {
         if (cell < config.cellFloor) {
             return String.format(Locale.ROOT, "the battery is at %.2f V a cell (%.2f V, %d cells), under the floor of %.2f", cell, volts, config.cells, config.cellFloor);
         }
+        // >>> second round
+        // the throttle layer that holds whatever makes the throttle: the board's own output limit, in every PID profile
+        if (config.outputLimitMax > 0) {
+            Settings st = settings;
+            int max = st == null ? -1 : st.maxLimit();
+            if (max < 0) return "the board's motor_output_limit is not known (" + (st == null ? "its settings were not read" : st.limitProblem()) + ")";
+            if (max > config.outputLimitMax) {
+                return "the board's motor_output_limit is " + max + " (in PID profile " + st.maxProfile() + "), over the " + config.outputLimitMax
+                        + " this rig allows (board.outputLimitMax): gradlew boardCap -Pport=" + side.name() + " -Plimit=" + config.outputLimitMax + " writes it (with the keeper ended: one program has the port)";
+            }
+        }
+        // a window the keeper would have to end at once is not opened: the board's receiver has to be there, by its own word and by the stick frames
+        if (config.failsafeEndsWindow) {
+            long limit = stickLimitMs();
+            if (limit < 0) return "the board's failsafe_delay is not known, so the keeper has no clock for sticks that stop";
+            String lost = receiverLost();
+            if (lost != null) return "the board says its receiver is lost (" + lost + "): no sticks reach it";
+            if (lastStickNs == 0 || since(lastStickNs, now, limit)) return "no stick frame has reached the board in the last " + limit + " ms";
+        }
+        // <<< second round
         if (budgetUsedMs(System.currentTimeMillis()) >= config.budgetS * 1000L) return "this hour's " + config.budgetS + " armed seconds are used up";
         return null;
     }
@@ -1228,7 +1666,8 @@ public final class FcKeeper implements AutoCloseable {
         }
         if (since(lastVoltageLineNs, now, config.voltageLineMs)) {
             lastVoltageLineNs = now;
-            event(Kind.INFO, "VOLTS: " + voltageWords() + (statusKnown ? armed ? ", ARMED" : ", disarmed" : ""));
+            event(Kind.INFO, "VOLTS: " + voltageWords() + (statusKnown ? armed ? ", ARMED" : ", disarmed" : "")
+                    + (ready && !otherBlocks().isEmpty() ? "; " + cannotArmWords() : ""));
         }
     }
 
@@ -1236,7 +1675,9 @@ public final class FcKeeper implements AutoCloseable {
     private void poll(long now) {
         if (!ready || setup != null || ending) return;
         try {
-            if (!statusKnown || since(statusNs, now, config.statusEveryMs)) readStatus();
+            // (second round) in a window whose end hangs on the board's word about its receiver, that word is asked for ten times a second
+            long every = windowOpen && config.failsafeEndsWindow ? Math.min(config.statusEveryMs, 100) : config.statusEveryMs;
+            if (!statusKnown || since(statusNs, now, every)) readStatus();
             if (!voltsKnown || since(voltsNs, now, config.voltsEveryMs)) ask(Msp.ANALOG, null);
             pollFailures = 0;
         } catch (IOException e) {
@@ -1275,6 +1716,24 @@ public final class FcKeeper implements AutoCloseable {
                 return;
             }
             // a window is open
+            // >>> second round: the board's receiver gone - by its own word, or by the stick frames that no longer pass - ends the
+            // window before the board's own failsafe can run (a throttle the flight controller makes itself is in no stick frame)
+            if (config.failsafeEndsWindow) {
+                String lost = receiverLost();
+                Settings st = settings;
+                long limit = stickLimitMs(), quiet = (now - lastStickNs) / 1_000_000;
+                if (lost != null) {
+                    endWindow("RECEIVER LOST: the board says " + lost + " in an open arm window - ended by the keeper before the board's own failsafe ("
+                            + (st == null || st.procedure() == null ? "not known" : st.procedure() + " after " + Settings.seconds(st.delay())) + ") can run");
+                    return;
+                }
+                if (limit >= 0 && quiet >= limit) {
+                    endWindow("STICKS STOPPED: no stick frame has reached the board for " + quiet + " ms in an open arm window (the keeper's limit is " + limit
+                            + " ms: the shorter of " + config.sticksStoppedMaxMs + " ms and half the board's failsafe_delay of " + Settings.seconds(st.delay()) + ")");
+                    return;
+                }
+            }
+            // <<< second round
             boolean lowNow = !voltsKnown || since(voltsNs, now, config.voltsStaleMs) || volts / config.cells < config.cellFloor;
             if (!lowNow) {
                 low = false;
@@ -1283,8 +1742,12 @@ public final class FcKeeper implements AutoCloseable {
                 lowSinceNs = now;
             }
             if (now - windowEndNs >= 0) {
-                if (isArmed) trip("time", "ARMED TIME: the arm window's time was over and the board was still armed");
-                else closeWindow("its time was over");
+                if (isArmed) {
+                    trip("time", "ARMED TIME: the arm window's time was over and the board was still armed");
+                } else {
+                    closeWindow("its time was over");
+                    lastEnd = "THE WINDOW'S TIME WAS OVER (the board was disarmed)"; // the keeper's own doing, not the rig's: the rig's guard takes the radio's hands off
+                }
             } else if (since(beatNs, now, config.heartbeatMs)) {
                 trip("heartbeat", "HEARTBEAT: no beat from the rig for " + (now - beatNs) / 1_000_000 + " ms while an arm window was open");
             } else if (low && since(lowSinceNs, now, config.voltageLowMs)) {
@@ -1555,7 +2018,9 @@ public final class FcKeeper implements AutoCloseable {
                 boardGone(w, "a write to it failed (" + e.getMessage() + ")");
             }
         }
-        tap.seen(new MspTap.Seen(in, no == null ? clock() : 0, MspTap.Way.PHONE_TO_BOARD, f, throttle, arm, no == null ? null : "dropped: " + no));
+        long out = no == null ? clock() : 0;
+        if (out != 0 && f.code() == Msp.SET_RAW_RC) lastStickNs = out; // the keeper's own clock on sticks that stop goes by this
+        tap.seen(new MspTap.Seen(in, out, MspTap.Way.PHONE_TO_BOARD, f, throttle, arm, no == null ? null : "dropped: " + no));
     }
 
     /** Frames held back for a fault's delay, let go in the order they came. */
@@ -1745,6 +2210,8 @@ public final class FcKeeper implements AutoCloseable {
             quietly(socket);
             BetaflightUsb.Wire w = wire;
             if (setup == this) setup = null;
+            needSettings = config.readSettings; // (second round) Drone setup may have changed the failsafe: the board's settings are read anew
+            settingsTries = 0;
             if (!ending) event(Kind.INFO, "Drone setup's lease has ended: " + why + ".");
             if (w != null) boardGone(w, "after Drone setup it is taken anew");
             nextOpenNs = clock();
@@ -2008,6 +2475,15 @@ public final class FcKeeper implements AutoCloseable {
         s.append(" blocks=").append(Msp.armingBlocks(flags)); // why Betaflight would not arm just now, by its 4.4 names
         s.append(" window=").append(windowOpen ? Math.max(1, (windowEndNs - now) / 1_000_000) : 0);
         s.append(" tripped=").append(tripped == null ? "-" : tripped.replace(' ', '_'));
+        // (second round) why the keeper itself ended the last window; the board's failsafe and the keeper's clock on the stick frames
+        // (0: the failsafe is let run, -1: not known); the largest motor_output_limit of its PID profiles (-1: not read) against the rig's
+        String ended = lastEnd;
+        Settings st = settings;
+        s.append(" cannotArm=").append(otherBlocks().isEmpty() ? "-" : otherBlocks()); // "blocks" without the keeper's own lock: the board's word, no failure
+        s.append(" lastEnd=").append(ended == null ? "-" : ended.replace(' ', '_'));
+        s.append(" failsafe=").append(st == null || st.procedure() == null ? "?" : st.procedure()).append(" failsafeDelay=").append(st == null ? -1 : st.delay());
+        s.append(" stickLimitMs=").append(stickLimitMs());
+        s.append(" outputLimit=").append(st == null ? -1 : st.maxLimit()).append(" outputLimitMax=").append(config.outputLimitMax);
         s.append(" volts=").append(voltsKnown ? String.format(Locale.ROOT, "%.2f", volts) : "?");
         s.append(" cell=").append(voltsKnown && config.cells > 0 ? String.format(Locale.ROOT, "%.3f", volts / config.cells) : "?");
         s.append(" floor=").append(config.cellFloor);
@@ -2183,9 +2659,14 @@ public final class FcKeeper implements AutoCloseable {
         PhoneAdb adb = null;
         String board = said.get("board");
         if (board == null) {
-            Hardware bench = Hardware.load(); // says what is missing, and where
-            Path home = Hardware.file().getParent();
-            forHardware(config, bench, home);
+            Hardware bench;
+            try {
+                bench = Hardware.load(); // says what is missing, and where
+                forHardware(config, bench, Hardware.file().getParent());
+            } catch (IllegalStateException said2) {
+                out.println("THE KEEPER DID NOT START: " + said2.getMessage());
+                return EXIT_NO_START;
+            }
             side = serial(bench.boardPort());
             try {
                 PhoneRig.Target phone = PhoneRig.Target.device();
@@ -2214,11 +2695,24 @@ public final class FcKeeper implements AutoCloseable {
         if (said.containsKey("heartbeat")) config.heartbeatMs = number(said, "heartbeat", 2000);
         if (said.containsKey("back")) config.backMs = number(said, "back", 12_000);
         if (said.containsKey("strict")) config.strict = !said.get("strict").equalsIgnoreCase("false");
+        // (second round) for Betaflight as a program, what a real board's keeper has from the hardware file: failsafe=end - the keeper
+        // ends an arm window when the sticks stop - or failsafe=run; settings=true - its settings read in its CLI; outputLimit=15
+        if (said.containsKey("failsafe")) {
+            String how = said.get("failsafe").toLowerCase(Locale.ROOT);
+            if (!how.equals("end") && !how.equals("run")) {
+                out.println("failsafe=" + said.get("failsafe") + ": failsafe=end (the keeper ends an arm window when the sticks stop) or failsafe=run (the board's own failsafe runs).");
+                return EXIT_NO_START;
+            }
+            if (board != null) config.failsafeEndsWindow = how.equals("end"); // (a real board's is the hardware file's word, never an argument's)
+        }
+        if (said.containsKey("settings") && board != null) config.readSettings = said.get("settings").equalsIgnoreCase("true");
+        if (said.containsKey("outputLimit") && board != null) config.outputLimitMax = number(said, "outputLimit", 0);
 
-        FcKeeper keeper = new FcKeeper(config, side, adb);
+        FcKeeper keeper;
         try {
+            keeper = new FcKeeper(config, side, adb);
             keeper.start();
-        } catch (IOException e) {
+        } catch (IOException | IllegalArgumentException e) {
             out.println("THE KEEPER DID NOT START: " + e.getMessage());
             return EXIT_NO_START;
         }
@@ -2238,6 +2732,18 @@ public final class FcKeeper implements AutoCloseable {
         config.lockFile = home.resolve("keeper.lock");
         config.budgetFile = home.resolve("keeper-armed.txt");
         config.folder = home.resolve("keeper");
+        // >>> second round: a real board's own failsafe is never let run on one word alone, its settings are always read, and
+        // no arm window opens over its own output limit
+        if (bench.letFailsafeRun() && !bench.failsafeSeenOnSitl()) {
+            throw new IllegalStateException("The hardware file " + bench.source() + " says board.letFailsafeRun=true without board.failsafeSeenOnSitl=true. A real "
+                    + "board's own failsafe is let run only when somebody has seen, on Betaflight as a program, what its failsafe procedure does; until then the "
+                    + "keeper ends an arm window itself when the sticks stop. Take the line out, or add the second word once it is true.");
+        }
+        config.failsafeEndsWindow = !bench.letFailsafeRun();
+        config.failsafeSeenOnSitl = bench.failsafeSeenOnSitl();
+        config.readSettings = true;
+        config.outputLimitMax = bench.outputLimitMax();
+        // <<< second round
     }
 
     private static int number(Map<String, String> said, String key, int unset) {

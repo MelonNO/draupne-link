@@ -178,6 +178,9 @@ class FcKeeperFaultTest {
             }
         };
         try (KeeperBench strict = new KeeperBench(other)) {
+            strict.config.failsafeEndsWindow = true; // what a keeper has to be told for a board that counts as real
+            strict.config.readSettings = true;
+            strict.config.outputLimitMax = 15;
             strict.start(real);
             try (StandInPhone p = strict.phone()) {
                 p.request(Msp.STATUS, null);

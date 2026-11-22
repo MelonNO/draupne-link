@@ -32,6 +32,13 @@ public final class Msp {
     public static final int ARMING_DISABLED_MSP_BIT = 16;
     /** The arming block "ARM switch": the switch was on while something else blocked - it has to go off once before it counts. */
     public static final int ARMING_DISABLED_ARM_SWITCH_BIT = 25;
+    /**
+     * The arming blocks by which Betaflight says its receiver is gone (R3, second round): "RXLOSS" a tenth of a second
+     * after the last stick frame - set whether the board is armed or not - and "FAILSAFE" once its failsafe has run.
+     */
+    public static final int ARMING_DISABLED_FAILSAFE_BIT = 1, ARMING_DISABLED_RXLOSS_BIT = 2;
+    /** Betaflight's permanent id of the mode box FAILSAFE: on, among MSP_STATUS' mode flags, while its failsafe is in stage 2. */
+    public static final int BOX_FAILSAFE = 27;
     /** MSP v2 only: the motor output order, and DShot commands to the ESCs. */
     public static final int MOTOR_OUTPUT_REORDERING = 0x3001, SET_MOTOR_OUTPUT_REORDERING = 0x3002, SEND_DSHOT_COMMAND = 0x3003;
     /** 3D mode in the feature mask: there 1000 is full reverse and 1500 is stop. */
@@ -59,9 +66,31 @@ public final class Msp {
         return status.length < at + 5 ? -1 : u32(status, at + 1);
     }
 
-    /** Betaflight 4.4's arming blocks in the order of their flags (runtime_config.h), as its OSD names them: for a person to read, never to act on. */
+    /**
+     * MSP_STATUS: whether the mode flag at this place is on. The flags are in the order of MSP_BOXIDS' answer (the
+     * first is ARM): 32 of them in the status' own four bytes, the rest in the bytes that follow the count.
+     */
+    public static boolean modeFlag(byte[] status, int index) {
+        if (status == null || index < 0) return false;
+        if (index < 32) return status.length >= 10 && (u32(status, 6) >>> index & 1) != 0;
+        if (status.length < 16) return false;
+        int more = status[15] & 0x0f, at = 16 + (index - 32) / 8;
+        return (index - 32) / 8 < more && status.length > at && (status[at] >> (index - 32) % 8 & 1) != 0;
+    }
+
+    /** MSP_STATUS: the PID profile in use (0 first), or -1 when the answer is too short. */
+    public static int pidProfile(byte[] status) {
+        return status == null || status.length < 11 ? -1 : status[10] & 0xff;
+    }
+
+    /**
+     * Betaflight 4.4's arming blocks in the order of their flags (runtime_config.h), by the names DRAUPNE Link shows
+     * them under (FcTelemetry's own table; a space there is a _ here): for a person to read. The keeper acts on three of
+     * them only - MSP (its own lock, whose place it measures), RXLOSS and FAILSAFE, which have been flags 2 and 1 in every
+     * Betaflight this rig meets.
+     */
     private static final String[] ARMING_BLOCKS = {"NOGYRO", "FAILSAFE", "RXLOSS", "BADRX", "BOXFAILSAFE", "RUNAWAY", "CRASH", "THROTTLE", "ANGLE", "BOOTGRACE",
-            "NOPREARM", "LOAD", "CALIB", "CLI", "CMS", "BST", "MSP", "PARALYZE", "GPS", "RESCUE_SW", "RPMFILTER", "REBOOT_REQD", "DSHOT_BBANG", "ACC_CALIB",
+            "NOPREARM", "LOAD", "CALIB", "CLI", "CMS", "BST", "MSP", "PARALYZE", "GPS", "RESCUE_SW", "RPMFILTER", "REBOOT_REQD", "DSHOT_BBANG", "NO_ACC_CAL",
             "MOTOR_PROTO", "ARMSWITCH"};
 
     /** The arming blocks that hold, by Betaflight 4.4's names: "MSP+ARMSWITCH"; "none"; "?" when the flags are not known. */

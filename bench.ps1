@@ -273,10 +273,26 @@ function Start-Keeper {
         -not (Select-String -Path $log -Pattern 'THE KEEPER IS UP' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 500 }
     if ($p.HasExited) {
         Write-Host "          the keeper did not start (exit $($p.ExitCode)) - logs\fcKeeper.log says why; the scenarios that need it say so and fail"
+        # (R3, second round) its own word for it, when it has one: a hardware file that lets the board's failsafe run on one word alone
+        Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -match 'THE KEEPER DID NOT START' } | Select-Object -First 1 | ForEach-Object { Write-Host "          $_" }
     } elseif (-not (Select-String -Path $log -Pattern 'THE KEEPER IS UP' -Quiet -ErrorAction SilentlyContinue)) {
         Write-Host '          the keeper is not up after 4 min (logs\fcKeeper.log); the scenarios that need it say so and fail'
     } else {
-        Get-Content $log | Where-Object { $_ -match 'THE KEEPER IS UP|The board is taken|No board' } | Select-Object -First 3 | ForEach-Object { Write-Host "          $_" }
+        # (R3, second round) a real board's own settings are read in its CLI first - Betaflight restarts - and only then is the
+        # board taken: its first lines (its failsafe, its output limit, whether an arm window can open at all) are waited for
+        # (a board that was never there says "No board" before any settings are read: that is not waited out)
+        $taken = (Get-Date).AddSeconds(90)
+        while ((Get-Date) -lt $taken -and -not $p.HasExited -and
+            -not (Select-String -Path $log -Pattern 'The board is taken' -Quiet -ErrorAction SilentlyContinue) -and
+            ((Select-String -Path $log -Pattern "The board's own settings" -Quiet -ErrorAction SilentlyContinue) -or
+            -not (Select-String -Path $log -Pattern 'No board' -Quiet -ErrorAction SilentlyContinue))) { Start-Sleep -Milliseconds 500 }
+        $said = @(Get-Content $log -ErrorAction SilentlyContinue)
+        foreach ($what in @('THE KEEPER IS UP', "The board's own settings", 'The board is taken')) {
+            $said | Where-Object { $_ -match $what } | Select-Object -Last 1 | ForEach-Object { Write-Host "          $_" }
+        }
+        if (-not ($said | Where-Object { $_ -match 'The board is taken' })) {
+            $said | Where-Object { $_ -match 'No board' } | Select-Object -Last 1 | ForEach-Object { Write-Host "          $_" }
+        }
     }
     return $p
 }

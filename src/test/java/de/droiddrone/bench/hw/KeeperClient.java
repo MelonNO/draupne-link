@@ -165,6 +165,22 @@ public final class KeeperClient implements AutoCloseable {
             return get("lease");
         }
 
+        /** Why the keeper itself ended the last arm window ("RECEIVER LOST: ...", "STICKS STOPPED: ...", a trip's words); null: it did not. */
+        public String lastEnd() {
+            String t = get("lastEnd");
+            return t.isEmpty() || t.equals("-") ? null : t.replace('_', ' ');
+        }
+
+        /**
+         * The arming blocks that hold the board beside the keeper's own lock, by Betaflight's names ("RXLOSS+RPMFILTER");
+         * null: none, or not known. The board's own word - with its battery out and bidirectional DShot on, RPMFILTER - and
+         * no failure of the keeper's.
+         */
+        public String cannotArm() {
+            String t = get("cannotArm");
+            return t.isEmpty() || t.equals("-") ? null : t;
+        }
+
         @Override
         public String toString() {
             StringBuilder s = new StringBuilder();

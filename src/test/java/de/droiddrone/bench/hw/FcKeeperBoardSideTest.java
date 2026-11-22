@@ -168,6 +168,51 @@ class FcKeeperBoardSideTest {
         assertEquals(600, armable.motorSecondsPerHour());
     }
 
+    // >>> R3, second round
+    @Test
+    void aRealBoardsKeeperGuardsItsFailsafeAndItsOutputLimitUnlessTheHardwareFileSaysBothWords() throws Exception {
+        Path file = dir.resolve(Hardware.FILE);
+        String rig = "phone.ip=192.0.2.10\nboard.port=COM99\nbattery.cells=6\nbattery.cellFloor=3.5\nkeeper.port=47800\n";
+        Files.writeString(file, rig);
+        Hardware plain = Hardware.read(file);
+        assertFalse(plain.letFailsafeRun() || plain.failsafeSeenOnSitl());
+        assertEquals(15, plain.outputLimitMax(), "the motor test's own cap is 10 %: a little over it");
+        FcKeeper.Config c = new FcKeeper.Config();
+        assertFalse(c.failsafeEndsWindow || c.readSettings, "of itself (the made-up board, Betaflight as a program) the keeper lets a failsafe run and asks no CLI");
+        assertEquals(0, c.outputLimitMax);
+        assertEquals(2000, c.sticksStoppedMaxMs);
+        FcKeeper.forHardware(c, plain, dir);
+        assertTrue(c.failsafeEndsWindow, "on a real board the keeper ends a window before the board's failsafe can run");
+        assertTrue(c.readSettings, "and reads the board's own settings first");
+        assertEquals(15, c.outputLimitMax);
+        assertFalse(c.failsafeSeenOnSitl);
+
+        // let it run: only with the second word, that somebody saw on Betaflight as a program what this procedure does
+        Files.writeString(file, rig + "board.letFailsafeRun=true\nboard.outputLimitMax=10\n");
+        Hardware alone = Hardware.read(file);
+        assertTrue(alone.letFailsafeRun());
+        assertEquals(10, alone.outputLimitMax());
+        IllegalStateException no = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> FcKeeper.forHardware(new FcKeeper.Config(), alone, dir));
+        assertTrue(no.getMessage().contains("board.letFailsafeRun=true") && no.getMessage().contains("board.failsafeSeenOnSitl=true") && no.getMessage().contains(file.toString()),
+                no.getMessage());
+        Files.writeString(file, rig + "board.letFailsafeRun=true\nboard.failsafeSeenOnSitl=true\n");
+        FcKeeper.Config let = new FcKeeper.Config();
+        FcKeeper.forHardware(let, Hardware.read(file), dir);
+        assertFalse(let.failsafeEndsWindow);
+        assertTrue(let.failsafeSeenOnSitl && let.readSettings);
+        assertEquals(15, let.outputLimitMax, "the output limit is asked for either way");
+        // and what is no such word is said, not read as one
+        for (String wrong : List.of("board.letFailsafeRun=yes\n", "board.failsafeSeenOnSitl=1\n", "board.outputLimitMax=0\n", "board.outputLimitMax=101\n")) {
+            Files.writeString(file, rig + wrong);
+            assertTrue(org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> Hardware.read(file), wrong).getMessage().contains(file.toString()));
+        }
+        // by hand (Betaflight as a program): the same words as arguments, and a wrong one is said
+        ByteArrayOutputStream said = new ByteArrayOutputStream();
+        assertEquals(FcKeeper.EXIT_NO_START, FcKeeper.run(new String[]{"board=tcp:127.0.0.1:9", "failsafe=perhaps"}, new PrintStream(said, true, StandardCharsets.UTF_8)));
+        assertTrue(said.toString(StandardCharsets.UTF_8).contains("failsafe=perhaps: failsafe=end (the keeper ends an arm window when the sticks stop) or failsafe=run"), said.toString(StandardCharsets.UTF_8));
+    }
+    // <<< R3, second round
+
     @Test
     void byHandTheKeeperSaysItsStateAndTakesNoSerialPortFromItsArguments() throws Exception {
         bench.start();
