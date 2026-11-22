@@ -69,6 +69,14 @@ The test week's first night (2026-11-21 evening to 22), with the phone app **DRA
 - Video: the frame assembler stays inside its memory budget in every case; an over-long packet no longer throws (`ProtocolFuzzTest`).
 - Installer: its log folder under ProgramData is writable by administrators only (`PcPrepLogTest`).
 - Firewall: the link port's rule takes the local network and Tailscale's addresses; an existing rule is narrowed at the next update (`FirewallRulesTest`).
+- Phone app: it writes nothing to the flight controller that is not a stick or a request of its own: the raw MAVLink packet reaches it only on a MAVLink flight controller with the phone's own bridge set to carry it (`MavlinkRaw`; `MavlinkRawTest`).
+- Phone app: its settings from the PC no longer include the serial port path, the choice of the phone's own serial port, or the MAVLink UDP bridge (`PhoneOwnConfig`; `PhoneOwnConfigTest`, `ConfigPacketTest`).
+- Phone app: it keeps who its pilot was across a restart of the app (forgotten at a clean DISCONNECT and at STANDBY): its PC gets the drone back at once, another PC only with the flight controller known disarmed and the pilot silent 10 s (`KeptPilot`; `KeptPilotTest`, `KeptPilotEndToEndTest`).
+- A phone's name changes only with its flight controller known disarmed, from its pilot's PC or from a PC that asked its name; a sleeping phone's check-in no longer moves a name the PC has at another address (`NameAssignGate`, `NameService.checkInFiles`; `NameAssignGateTest`, `VirtualNameAssignTest`, `NameCheckInTest`).
+- UPDATE PHONE APP is taken only from the project's GitHub release downloads, and installed only when the downloaded app is a newer build; the phone's own update check downloads only from there too (`UpdateSource`; `UpdateSourceTest`, `UpdateCheckSourceTest`).
+- Phone app: it comes over the lock screen only for its own wake, and the lock screen is back once that screen has been left (`WakeIntent`; `WakeIntentTest`).
+- Phone app: its data goes to no backup and no device transfer; recordings and overwatch clips no longer show in the phone's gallery (`NoMedia`; `NoBackupNoGalleryTest`).
+- Phone app: a sleeping phone stays awake for a packet only when it carries the phone's key; its answer queue, name books, waiting packets and config updates have caps (`SleepWake`, `DropOldest`; `SleepWakeAndCapsTest`).
 
 ### The test rig for real hardware (test-only)
 
