@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.RcSession;
+import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.video.VideoPipeline;
 
 import java.util.Locale;
@@ -127,6 +128,30 @@ final class OsdDataBuilder {
      */
     static String unansweredHint(boolean everUp, ControlLink.State state, boolean awaitingWake, long waitedMs) {
         return !everUp && !awaitingWake && state == ControlLink.State.CONNECTING && waitedMs > UNANSWERED_MS ? UNANSWERED : null;
+    }
+
+    /**
+     * The steady line under CONNECTING / LINK LOST: why the link is down, as far as this PC can tell. Tailscale's word
+     * on the phone first (offline, not on the network, this PC off it or without it); for a pilot's wait unanswered for
+     * 8 s, Q-009's "closed, or another key?" when the phone's Tailscale answers and nothing came from the phone, else
+     * I-004's questions; else that the sticks still go out.
+     * @param tailscale this PC's Tailscale on the phone (ONLINE while a link is up); null when not asked (a virtual
+     *                  phone, no address)
+     * @param wait the pilot's connection; null when watching or not connected
+     */
+    static String linkHint(Tailscale.PhoneState tailscale, PhoneSilence.Wait wait, boolean sticksSent) {
+        if (tailscale != null && tailscale.isProblem()) {
+            return switch (tailscale) {
+                case OFFLINE -> "PHONE NOT ON TAILSCALE";
+                case NOT_FOUND -> "PHONE ADDRESS NOT ON YOUR TAILSCALE";
+                case PC_OFF -> "TAILSCALE ON THIS PC IS OFF";
+                case NOT_INSTALLED -> "TAILSCALE NOT INSTALLED ON THIS PC";
+                case ONLINE -> null;
+            };
+        }
+        String ask = wait == null ? null : unansweredHint(wait.everUp(), wait.state(), wait.awaitingWake(), wait.waitedMs());
+        if (ask != null) return PhoneSilence.shows(tailscale, wait) ? PhoneSilence.HINT : ask;
+        return sticksSent ? "STICKS STILL SENT - RECONNECTING" : null;
     }
 
     static OsdRenderer.Data build(In in) {

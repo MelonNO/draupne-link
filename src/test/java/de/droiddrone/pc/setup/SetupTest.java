@@ -95,6 +95,17 @@ class SetupTest {
         assertFalse(Tailscale.parsePing("timeout waiting for ping reply").reached());
     }
 
+    /** Q-009's one quick ping: any pong counts, also one of a second or more (parsePing's figures take only ms). */
+    @Test
+    void theQuickPingCountsAPongOfAnySpeed() {
+        assertEquals(120, Tailscale.parseOnePing("pong from phone (100.64.0.20) via DERP(fra) in 120ms").bestMs());
+        Tailscale.PingResult slow = Tailscale.parseOnePing("pong from phone (100.64.0.20) via DERP(fra) in 1.234s");
+        assertTrue(slow.reached());
+        assertEquals(-1, slow.bestMs());
+        assertFalse(Tailscale.parseOnePing("ping \"100.64.0.20\" timed out\nno reply").reached());
+        assertFalse(Tailscale.parseOnePing("").reached());
+    }
+
     @Test
     void apkShareOnlyAnswersLocalNetworksAndTailscale() throws Exception {
         assertTrue(ApkShare.isAllowed(InetAddress.getByName("192.168.1.20")));

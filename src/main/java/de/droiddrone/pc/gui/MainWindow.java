@@ -580,6 +580,8 @@ public class MainWindow extends JFrame {
                 t.setPriority(Thread.MIN_PRIORITY);
                 return t;
             });
+    /** Q-009: Tailscale's ping for a phone silent to PILOT UAV, on the phone check's thread. */
+    private final PhoneSilence phoneSilence = new PhoneSilence(Tailscale::pingOnce, phoneWatch, MonoClock::ms);
     private final JTextArea log = new JTextArea();
 
     private final JComboBox<Joystick.Info> joystickCombo = new JComboBox<>();
@@ -4082,24 +4084,26 @@ public class MainWindow extends JFrame {
         return null;
     }
 
-    /** Under LINK LOST on the OSD: the reason, when Tailscale knows it; else that the sticks still go out. */
+    /**
+     * Under CONNECTING / LINK LOST on the OSD: the reason, when Tailscale knows it; PILOT UAV unanswered for 8 s, the
+     * questions (I-004) or, the phone online and its Tailscale answering, "closed, or another key?" (Q-009); else that
+     * the sticks still go out.
+     */
     private String osdLinkHint(RcSession session) {
-        Tailscale.PhoneState s = shownPhoneState();
-        if (s == null || !s.isProblem()) {
-            Connection c = connection; // I-004: PILOT UAV unanswered for 8 s - the log's questions, short
-            ControlLink l = c == null ? null : c.getLink();
-            String ask = l == null || l.isWatchOnly() || l.isSpectator() ? null
-                    : OsdDataBuilder.unansweredHint(l.wasEverReady(), l.getState(), power.awaitingWake, c.openFor());
-            if (ask != null) return ask;
-            return session != null && session.isRcEnabled() ? "STICKS STILL SENT - RECONNECTING" : null;
-        }
-        return switch (s) {
-            case OFFLINE -> "PHONE NOT ON TAILSCALE";
-            case NOT_FOUND -> "PHONE ADDRESS NOT ON YOUR TAILSCALE";
-            case PC_OFF -> "TAILSCALE ON THIS PC IS OFF";
-            case NOT_INSTALLED -> "TAILSCALE NOT INSTALLED ON THIS PC";
-            case ONLINE -> null;
-        };
+        return OsdDataBuilder.linkHint(shownPhoneState(), pilotWait(connection), session != null && session.isRcEnabled());
+    }
+
+    /** I-004 / Q-009: the pilot's wait on this connection - what it has heard; null when watching or not connected. */
+    private PhoneSilence.Wait pilotWait(Connection c) {
+        ControlLink l = c == null ? null : c.getLink();
+        if (l == null || l.isWatchOnly() || l.isSpectator()) return null;
+        return new PhoneSilence.Wait(l.wasEverReady(), l.getState(), power.awaitingWake, c.openFor(), l.wasEverHeard(),
+                phoneSilence.pongAgo(c));
+    }
+
+    /** Q-009, at the card's slow round: Tailscale's ping when due; the log's line once, as the hint first shows. */
+    private void followSilence(Connection c) {
+        if (phoneSilence.follow(c, config.getIp(), shownPhoneState(), pilotWait(c))) logLine(phoneSilence.logLine(c));
     }
 
     RcSession rcSession() {
@@ -6031,6 +6035,7 @@ public class MainWindow extends JFrame {
         }
         refreshLostDrone(link, state);
         if (!slow) return; // 1.0.64: the card's texts at the slow pace
+        followSilence(connection);
         showConnectedName(link.isSpectator() ? "WATCHING " + connectedName : connectedName);
         FcInfo fc = link.getFcInfo();
         fcValue.setText(fc == null ? "-" : fc.getFcName() + " " + fc.getFcVersionStr());

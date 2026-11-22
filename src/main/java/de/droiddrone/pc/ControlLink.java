@@ -2146,6 +2146,15 @@ public class ControlLink {
     }
 
     /**
+     * Anything at all came from the phone since start(): an answer, whatever it said - a session, who flies, an old
+     * session's, a sleeping phone's check-in. Q-009: a phone that has said nothing to PILOT UAV while Tailscale's way to
+     * it works is closed, or has another key (it stays silent to one, on purpose).
+     */
+    public boolean wasEverHeard() {
+        return lastReceivedAt != 0 || sleepHello != null;
+    }
+
+    /**
      * 1.0.64: nothing says the phone hears this PC now - the link has been up and isn't READY, or pongs came on it and
      * none has for PONG_SILENCE_MS (one way only, perhaps: its telemetry may still arrive). The sticks go out all the
      * same (see {@link #sendRc}); a phone that gets none feeds Betaflight the idle sticks once it reads DISARMED, arm

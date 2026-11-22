@@ -269,6 +269,24 @@ public final class Tailscale {
         return parsePing(result.output());
     }
 
+    /**
+     * Q-009: one quick `tailscale ping` - does the phone's Tailscale answer now? For the connecting screen's guess why
+     * PILOT UAV goes unanswered. A few seconds at most; on a background thread.
+     */
+    public static PingResult pingOnce(String ip) {
+        Path exe = exe();
+        if (exe == null) return new PingResult(false, false, "", -1, -1, "Tailscale is not installed");
+        Shell.Result result = Shell.run(Duration.ofSeconds(8), exe.toString(), "ping", "--c", "1",
+                "--until-direct=false", "--timeout", "3s", ip);
+        return parseOnePing(result.output());
+    }
+
+    /** As parsePing, and a pong of a second or more counts too (Tailscale writes it "in 1.2s"): reached, no figures. */
+    static PingResult parseOnePing(String output) {
+        PingResult p = parsePing(output);
+        return p.reached() || !output.contains("pong from ") ? p : new PingResult(true, false, "", -1, -1, output.trim());
+    }
+
     static PingResult parsePing(String output) {
         Matcher m = PONG.matcher(output);
         List<Integer> all = new ArrayList<>();
