@@ -895,7 +895,8 @@ final class PreviousFlightsDialog extends JDialog {
         figures[1].setText(s == null || Double.isNaN(s.speedKmh()) ? "-" : Math.round(s.speedKmh()) + " km/h");
         figures[2].setText(s == null || Double.isNaN(s.cellVolts()) ? "-" : String.format(Locale.ROOT, "%.2f V", s.cellVolts()));
         figures[3].setText(s == null || s.homeM() < 0 ? "-" : MapView.distanceText(s.homeM()));
-        figures[4].setText(s == null || s.mode() == null || s.mode().isEmpty() ? "-" : s.mode().toUpperCase(Locale.ROOT));
+        // the mode's name is the flight controller's own, as the phone passed it on and the flight's log kept it
+        figures[4].setText(s == null || s.mode() == null || s.mode().isEmpty() ? "-" : AsText.label(s.mode().toUpperCase(Locale.ROOT)));
         double[] at = d.positionAt(t);
         if (at == null) map.setReplayMarker(Double.NaN, Double.NaN, Double.NaN);
         else map.setReplayMarker(at[0], at[1], at[2]);

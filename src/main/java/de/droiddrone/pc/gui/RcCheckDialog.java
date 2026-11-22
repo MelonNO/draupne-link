@@ -202,9 +202,7 @@ final class RcCheckDialog extends JDialog {
             arm.set(State.WARN, auxName + " not mapped - run CALIBRATE, flip the arm switch at the " + auxName + " step.");
         }
 
-        modes.set(State.INFO, s.activeModes().isEmpty()
-                ? "None. Flip a mode switch - its mode should appear here."
-                : "<b>" + String.join(", ", s.activeModes()) + "</b> - flip switches to see these change.");
+        modes.set(State.INFO, modesLine(s.activeModes()));
 
         if (s.blockers().isEmpty()) {
             blockers.setHtml(s.armed() ? "Armed." : "Nothing - it arms when you flip the arm switch.");
@@ -216,6 +214,12 @@ final class RcCheckDialog extends JDialog {
             }
             blockers.setHtml(html.toString());
         }
+    }
+
+    /** The modes row: the flight controller's own names for its active modes, as the phone passes them on. */
+    static String modesLine(java.util.List<String> active) {
+        return active.isEmpty() ? "None. Flip a mode switch - its mode should appear here."
+                : "<b>" + AsText.html(String.join(", ", active)) + "</b> - flip switches to see these change.";
     }
 
     private static boolean has(FcTelemetry.Status s, String osdName) {

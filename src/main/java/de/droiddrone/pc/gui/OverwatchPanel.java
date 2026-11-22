@@ -800,7 +800,7 @@ final class OverwatchPanel extends JPanel {
         if ("none".equals(c.meta().getProperty("clip")) && !full) kind = preview ? "preview (no full clip)" : "pictures only";
         if (c.meta().getProperty("clipBadSha256") != null && !full) kind = preview ? "preview (full clip damaged)" : "pictures only";
         String where = c.hasPosition() ? Coordinates.format(fmt, c.lat(), c.lon()) : "position unknown";
-        return new Row(c, thumb(c.thumbnail()), "<html><b>" + when + "</b><br>" + length(c.durationMs()) + "  -  " + kind
+        return new Row(c, thumb(c.thumbnail()), "<html><b>" + AsText.html(when) + "</b><br>" + length(c.durationMs()) + "  -  " + kind
                 + "<br><span style='color:#8c8c7e'>" + where + "</span></html>");
     }
 

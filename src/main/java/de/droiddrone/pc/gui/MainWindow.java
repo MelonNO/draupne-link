@@ -1717,7 +1717,12 @@ public class MainWindow extends JFrame {
                 : e.isVirtual() ? "VIRTUAL DRONE - the virtual fleet on this PC, not a real drone. " + (e.online() ? e.detail() + "  -  " + e.ip() : "Not running now.")
                 : e.online() ? e.detail() + "  -  " + e.ip()
                 : e.name() + " was last seen " + Names.agoText(e.lastSeen(), now) + (kind == Names.Kind.PHONE ? ": open DRAUPNE Flight on it." : ".");
-        phoneHint.setText("<html>" + hint + "</html>");
+        phoneHint.setText(hintHtml(hint));
+    }
+
+    /** The line under the PHONE list, wrapping (the chosen device's own device, host and version text is in it). */
+    static String hintHtml(String hint) {
+        return "<html>" + AsText.html(hint) + "</html>";
     }
 
     /** Whether the list shows exactly these lines, in this order (then it is left as it is). */
@@ -2073,8 +2078,8 @@ public class MainWindow extends JFrame {
         }
         String other = others.get(0);
         String[] options = {"Rename " + other + " to " + free, "Cancel"};
-        int choice = Dialogs.option(this, text + "\n\n" + target.name() + " in the name map is " + target.ip()
-                        + (target.detail().isEmpty() ? "" : " (" + target.detail() + ")") + ".\nRename the phone at " + other + " to " + free + "?",
+        int choice = Dialogs.option(this, AsText.label(text + "\n\n" + target.name() + " in the name map is " + target.ip()
+                        + (target.detail().isEmpty() ? "" : " (" + target.detail() + ")") + ".\nRename the phone at " + other + " to " + free + "?"),
                 "Cannot connect", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[1]);
         if (choice == 0) {
             nameService.assign(other, free);
@@ -3189,7 +3194,7 @@ public class MainWindow extends JFrame {
         if (result == null) return;
         logLine("Last update: " + result);
         if (!result.startsWith("OK")) {
-            Dialogs.message(this, "<html>The last update did not install:<br>" + result
+            Dialogs.message(this, "<html>The last update did not install:<br>" + AsText.html(result)
                     + "<br><br>Press UPDATE again, or get the installer from the release page.</html>",
                     "Update", JOptionPane.WARNING_MESSAGE);
         }
@@ -3213,7 +3218,7 @@ public class MainWindow extends JFrame {
         ObserveSet set = ObserveSet.parse(config.getString(ObserveSet.KEY));
         String hint = set.size() == 0 ? "No drone chosen yet: CHOOSE DRONES picks up to " + ObserveSet.MAX + " idle ones."
                 : String.join(", ", set.phones()) + "  (" + set.size() + " of " + ObserveSet.MAX + ")";
-        phoneHint.setText("<html>" + hint + "</html>");
+        phoneHint.setText(hintHtml(hint));
     }
 
     /** Why each phone can't be observed now (idle phones only; app pc.37 on); absent: it can. */
@@ -3858,9 +3863,13 @@ public class MainWindow extends JFrame {
     }
 
     static String updateQuestion(String version) {
-        return "<html>Update to DRAUPNE Link " + version + " now?<br><br>"
+        return "<html>Update to DRAUPNE Link " + AsText.html(version) + " now?<br><br>"
                 + "It downloads, closes, installs (Windows asks once) and restarts.<br>"
                 + "Settings stay.</html>";
+    }
+
+    static String updateFailedQuestion(String why) {
+        return "<html>The update didn't work: " + AsText.html(why) + "<br><br>Open the release page?</html>";
     }
 
     private void updateFailed(UpdateCheck.Release r, String why) {
@@ -3872,8 +3881,7 @@ public class MainWindow extends JFrame {
             logLine("Release page: " + r.pageUrl());
             return;
         }
-        int answer = Dialogs.confirm(this, "<html>The update didn't work: " + why
-                        + "<br><br>Open the release page?</html>",
+        int answer = Dialogs.confirm(this, updateFailedQuestion(why),
                 "Update", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (answer == JOptionPane.YES_OPTION) PcSetupWizard.openInBrowser(this, r.pageUrl());
     }
@@ -6045,7 +6053,7 @@ public class MainWindow extends JFrame {
         logLine("YOU ARE NOT FLYING: " + who + " is the pilot. This PC is a spectator - sticks not sent.");
         SwingUtilities.invokeLater(() -> Dialogs.message(this,
                 "<html><div style='width:420px'><b style='font-size:16px;color:#ff5a4f'>You are not flying.</b><br><br>"
-                        + "Another PC (" + who + ") is already the pilot.<br><br>"
+                        + "Another PC (" + AsText.html(who) + ") is already the pilot.<br><br>"
                         + "This PC is a <b>spectator</b>: video and OSD only, a little behind. Your "
                         + "sticks are <b>not</b> sent.<br><br>To fly: the other PC disconnects, then "
                         + "STANDBY MODE, then PILOT UAV here.</div></html>",
@@ -6064,7 +6072,7 @@ public class MainWindow extends JFrame {
         } else if (version == null) {
             setLabel(phoneAppValue, old ? "OLD - UPDATE IT" : "-", old ? Theme.WARN : Theme.MUTED);
         } else {
-            setLabel(phoneAppValue, old ? version + " - OLD" : version, old ? Theme.WARN : Theme.OK);
+            setLabel(phoneAppValue, AsText.label(old ? version + " - OLD" : version), old ? Theme.WARN : Theme.OK);
         }
         int battery = t == null ? -1 : t.getPhoneBatteryPercent();
         if (battery < 0) {
@@ -6079,7 +6087,7 @@ public class MainWindow extends JFrame {
         if (updateSaid) {
             phoneAppWarning.setHtml(phoneUpdateSaid);
         } else if (old) {
-            phoneAppWarning.setHtml("Old phone app" + (version == null ? "" : " (" + version + ")")
+            phoneAppWarning.setHtml("Old phone app" + (version == null ? "" : " (" + AsText.html(version) + ")")
                     + "; newest is " + newest + ". Update: UPDATE PHONE APP or SETUP &gt; Set up a new drone.");
             if (!phoneAppWarned) {
                 phoneAppWarned = true;
@@ -6200,7 +6208,7 @@ public class MainWindow extends JFrame {
         updatePhoneButton.setText(over ? "Update phone app" : text.length() > 34 ? "Updating the phone..." : text);
         updatePhoneButton.setToolTipText(text);
         updatePhoneButton.setEnabled(over);
-        phoneAppWarning.setHtml(text);
+        phoneAppWarning.setHtml(AsText.html(text));
         if (!shown(phoneAppWarning)) {
             show(phoneAppWarning, true);
             phoneAppWarning.getParent().revalidate();
@@ -6208,7 +6216,7 @@ public class MainWindow extends JFrame {
         if (over) {
             if (!answered) logLine("No answer to the update: phone app older than " + REMOTE_UPDATE_MIN_PHONE + ".");
             remoteUpdateAskedAt = 0;
-            phoneUpdateSaid = text;
+            phoneUpdateSaid = AsText.html(text);
             phoneUpdateSaidUntil = now + 10_000;
         }
     }

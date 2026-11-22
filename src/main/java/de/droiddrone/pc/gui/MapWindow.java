@@ -1207,7 +1207,7 @@ final class MapWindow extends JFrame {
             if (coverageRun.get() != run) return;
             if (complete) coverageComplete = true;
             map.setCoverage(true, grid, line);
-            tools.coverageStatus.setText(status(line.replace("  -  ", "<br>")));
+            tools.coverageStatus.setText(status(AsText.html(line).replace("  -  ", "<br>"))); // a map service's own error text may be in it
         });
     }
 
@@ -1215,7 +1215,7 @@ final class MapWindow extends JFrame {
         SwingUtilities.invokeLater(() -> {
             if (coverageRun.get() != run) return;
             map.setCoverage(true, map.coverage(), line);
-            tools.coverageStatus.setText(status(line));
+            tools.coverageStatus.setText(status(AsText.html(line)));
         });
     }
 

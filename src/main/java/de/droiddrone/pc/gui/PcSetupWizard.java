@@ -199,7 +199,7 @@ final class PcSetupWizard {
             openButton.setVisible(false);
             installed.set(State.OK, "Installed and running.");
             if (s.signedIn()) {
-                signedIn.set(State.OK, "Signed in as " + s.selfName());
+                signedIn.set(State.OK, "Signed in as " + AsText.html(s.selfName()));
                 signInButton.setVisible(false);
                 address.set(State.OK, "<b>" + s.selfIp() + "</b>");
                 openLinkWhenReady = false;

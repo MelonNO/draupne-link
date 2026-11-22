@@ -59,6 +59,34 @@ final class PhoneGuideWizard {
         return !page.section.isEmpty();
     }
 
+    // ---- the rows that show another device's own words (its host name, its device and version text)
+
+    /** A phone in the Tailscale step's list. */
+    static String peerChoice(Tailscale.Peer p) {
+        return AsText.label(p.hostName() + "  " + p.ip() + (p.online() ? "" : "  (offline)"));
+    }
+
+    /** The Tailscale step's phone row. */
+    static String peerLine(Tailscale.Peer p) {
+        return "<b>" + AsText.html(p.hostName()) + "</b> - " + AsText.html(p.ip()) + (p.online() ? " - online." : " - offline: switch Tailscale on on the phone.");
+    }
+
+    /** The app step's row once a phone answers by name. */
+    static String appOpenLine(Names.Entry e) {
+        return "<b>" + AsText.html(e.name()) + "</b>: DRAUPNE Flight " + AsText.html(e.version()) + " open.";
+    }
+
+    /** A phone in the connect step's list. */
+    static String phoneChoice(Names.Entry p) {
+        return AsText.label(p.name() + "  " + p.detail() + (p.online() ? "" : "  (offline)"));
+    }
+
+    /** The connect step's phone row. */
+    static String phoneLine(Names.Entry e, long now) {
+        return "<b>" + AsText.html(e.name()) + "</b> - " + AsText.html(e.detail())
+                + (e.online() ? " - online." : " - last seen " + Names.agoText(e.lastSeen(), now) + ": open DRAUPNE Flight.");
+    }
+
     private static JComponent valueTable(String[][] rows) {
         JPanel table = new JPanel(new GridLayout(0, 2, 16, 8));
         table.setBackground(Theme.PANEL_2);
@@ -117,7 +145,7 @@ final class PhoneGuideWizard {
                 public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
                                                                        int index, boolean selected, boolean focus) {
                     super.getListCellRendererComponent(list, value, index, selected, focus);
-                    if (value instanceof Tailscale.Peer p) setText(p.hostName() + "  " + p.ip() + (p.online() ? "" : "  (offline)"));
+                    if (value instanceof Tailscale.Peer p) setText(peerChoice(p));
                     return this;
                 }
             });
@@ -155,7 +183,7 @@ final class PhoneGuideWizard {
                         : "do SETUP > PC setup first."));
                 return;
             }
-            pc.set(State.OK, s.selfName() + " - " + s.selfIp());
+            pc.set(State.OK, AsText.html(s.selfName()) + " - " + AsText.html(s.selfIp()));
             List<Tailscale.Peer> androids = new ArrayList<>(s.androidPeers());
             androids.sort((a, b) -> Boolean.compare(b.online(), a.online()));
             updatingChoice = true;
@@ -170,9 +198,7 @@ final class PhoneGuideWizard {
             if (current == null) {
                 phone.set(State.PENDING, "Waiting for the phone on Tailscale...");
             } else {
-                phone.set(current.online() ? State.OK : State.WARN, "<b>" + current.hostName() + "</b> - " + current.ip()
-                        + (current.online() ? " - online."
-                        : " - offline: switch Tailscale on on the phone."));
+                phone.set(current.online() ? State.OK : State.WARN, peerLine(current));
             }
             wizard.update();
         }
@@ -341,7 +367,7 @@ final class PhoneGuideWizard {
             if (online == null) return;
             if (!installed) main.nameService().scanSoon();
             installed = true;
-            file.set(State.OK, "<b>" + online.name() + "</b>: DRAUPNE Flight " + online.version() + " open.");
+            file.set(State.OK, appOpenLine(online));
             wizard.update();
         }
 
@@ -465,7 +491,7 @@ final class PhoneGuideWizard {
                 public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
                                                                        int index, boolean selected, boolean focus) {
                     super.getListCellRendererComponent(list, value, index, selected, focus);
-                    if (value instanceof Names.Entry p) setText(p.name() + "  " + p.detail() + (p.online() ? "" : "  (offline)"));
+                    if (value instanceof Names.Entry p) setText(phoneChoice(p));
                     return this;
                 }
             });
@@ -551,8 +577,7 @@ final class PhoneGuideWizard {
             if (chosen == null) {
                 setPhone(State.PENDING, "Waiting for DRAUPNE Flight on Tailscale...");
             } else {
-                setPhone(chosen.online() ? State.OK : State.WARN, "<b>" + chosen.name() + "</b> - " + chosen.detail()
-                        + (chosen.online() ? " - online." : " - last seen " + Names.agoText(chosen.lastSeen(), System.currentTimeMillis()) + ": open DRAUPNE Flight."));
+                setPhone(chosen.online() ? State.OK : State.WARN, phoneLine(chosen, System.currentTimeMillis()));
             }
         }
 

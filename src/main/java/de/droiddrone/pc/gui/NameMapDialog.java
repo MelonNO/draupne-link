@@ -199,7 +199,7 @@ final class NameMapDialog extends JDialog {
         JComboBox<String> pick = new JComboBox<>(free.toArray(new String[0]));
         TacticalCombo.install(pick);
         String detail = e.detail();
-        int answer = Dialogs.confirm(this, new Object[]{"New name for " + e.name() + (detail.isEmpty() ? "" : " (" + detail + ")") + ":", pick},
+        int answer = Dialogs.confirm(this, new Object[]{AsText.label("New name for " + e.name() + (detail.isEmpty() ? "" : " (" + detail + ")") + ":"), pick},
                 "Rename", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
         String to = (String) pick.getSelectedItem();
@@ -242,7 +242,7 @@ final class NameMapDialog extends JDialog {
         }
     }
 
-    private void fill() {
+    void fill() {
         if (!isDisplayable()) return;
         settingOwn = true;
         try {
@@ -262,7 +262,7 @@ final class NameMapDialog extends JDialog {
         model.setRowCount(0);
         for (Names.Entry e : all) {
             model.addRow(new Object[]{e.name(), e.kind() == Names.Kind.PHONE ? "phone" : "PC", e.ip() == null ? "" : e.ip(),
-                    e.device() == null ? "" : e.device(), e.host() == null ? "" : e.host(),
+                    e.device() == null ? "" : AsText.label(e.device()), e.host() == null ? "" : AsText.label(e.host()),
                     e.online() ? "online" : Names.agoText(e.lastSeen(), now)});
         }
         if (selected >= 0 && selected < model.getRowCount()) table.setRowSelectionInterval(selected, selected);
