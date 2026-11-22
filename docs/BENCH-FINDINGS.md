@@ -386,6 +386,20 @@ row's top (`LinkCardLayout.reveal`, `Fold.whenOpened`); "1 drawing or symbol, 1 
 `aLineThatOpensAtTheFootOfTheLinkCardIsScrolledIntoSightWhole` (both red before),
 `theViewsTopGoesToTheNextRowsTopWhileTheLineStaysInSight`, `MapToolsTest.importSaysWhatItBroughtInTheRightNumber`.
 
+**F-076 - On Android 8 and 9 an error left the phone app half alive until "has stopped" was tapped (phone app).**
+Android's own handling of an uncaught error showed "DRAUPNE Flight has stopped - Open app again" and ended the
+process only once that was answered (on Android 8 and 9 at every error; from Android 10 only after errors close
+together, "keeps stopping"). Until then the app's window and main thread were gone and its camera, video and link
+still ran: the PC kept a link and saw nothing wrong, and pc.55's reopen alarm (`CrashGuard`, 1.5 s) rang for a process
+that could not take it - Android closes the question by itself after about 5 minutes. Found by the bench's first run
+of the phone app on its lowest Android (`PhoneCrashScenario` on the Android 8 emulator, `bench.ps1 emulator -Avd
+draupne-a26`): no new process within 30 s, no reopen after any of three errors; by hand, the process still there 24 s
+after `am crash` with Android's question in front. **Mended (pc.57-beta):** while the app is at work (its service
+running) `CrashGuard` ends the process itself at once, after writing Android's own two lines (`AndroidRuntime`,
+"FATAL EXCEPTION: <thread>", the trace) - what Android's handler does after the question; the alarm then finds no
+process and opens a new one. An app that is only open, nothing running, gets Android's handling as before. Test: the
+crash scenario on Android 8 (red before) and on the bench's Android 14 (green before and after).
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's

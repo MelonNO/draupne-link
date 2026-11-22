@@ -29,7 +29,8 @@ import static de.droiddrone.common.Logcat.log;
  * drone in the air or in a field.
  * <p>
  * An error no thread caught: said in the log, kept for the next start, and an alarm set for a moment later
- * ({@link PowerAlarmReceiver}, in the new process) - then Android's own handling, which ends the app as before. The
+ * ({@link PowerAlarmReceiver}, in the new process) - then the app ends itself at once (F-076: Android's own handling
+ * may wait for a tap on "has stopped" first); an app that was not at work gets Android's own handling as before. The
  * alarm opens MainActivity the way a wake from deep sleep does; opened, it starts the service and listens for the
  * PC (pc.28). The same when the sleep check's alarm rings and finds no app: it was ended while asleep (a phone
  * maker's battery saver does that). Not for ever: {@link CrashRestarts}.
@@ -52,20 +53,42 @@ final class CrashGuard {
         final Context app = context.getApplicationContext();
         final Thread.UncaughtExceptionHandler before = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
+            boolean atWork = false;
             try {
                 log("FATAL on thread " + thread.getName() + ": " + error);
                 // only a phone that was at work: the app open on a bench with nothing running stays closed
-                if (DDService.isRunning) planReopen(app, thread.getName() + ": " + error);
+                atWork = DDService.isRunning;
+                if (atWork) planReopen(app, thread.getName() + ": " + error);
             } catch (Throwable ignored) {
                 // nothing here may stand in the way of the app's end
             }
-            if (before != null) {
-                before.uncaughtException(thread, error);
+            if (atWork || before == null) {
+                endNow(app, thread, error);
             } else {
-                android.os.Process.killProcess(android.os.Process.myPid());
-                System.exit(10);
+                before.uncaughtException(thread, error);
             }
         });
+    }
+
+    /**
+     * F-076 (the bench's Android 8 emulator, 2026-11-22): Android's own handling of an error shows "DRAUPNE Flight has
+     * stopped" and ends the app only when that is answered - on Android 8 and 9 at every error, on newer ones after
+     * errors that come close together ("keeps stopping"). Until then the app was half alive: its window and main thread
+     * gone, its camera, video and link still running - the PC saw a link and nothing wrong, and the alarm that opens
+     * the app again rang for a process that could not take it. Nobody answers that on a drone. So an app at work ends
+     * itself at once, as Android's handler does after the question: the same two lines in the log under Android's own
+     * name (what the bench and a reader of the phone's log look for), then the process ended - the alarm finds none
+     * and opens a new one.
+     */
+    private static void endNow(Context app, Thread thread, Throwable error) {
+        try {
+            android.util.Log.e("AndroidRuntime", "FATAL EXCEPTION: " + thread.getName() + "\nProcess: " + app.getPackageName() + ", PID: "
+                    + android.os.Process.myPid(), error);
+        } catch (Throwable ignored) {
+            // the end comes all the same
+        }
+        android.os.Process.killProcess(android.os.Process.myPid());
+        System.exit(10);
     }
 
     /** An alarm for {@link CrashRestarts#DELAY_MS} from now, unless the app has opened itself too often. */
