@@ -20,4 +20,26 @@ class RemoteUpdateAnswerTest {
         assertTrue(MainWindow.updateAnswered(10_900, 10_000, 600));
         assertTrue(MainWindow.updateAnswered(10_400, 10_000, -1), "an unknown ping counts as none");
     }
+
+    /**
+     * F-082 (the bench's update test on Android 11, 2026-11-22): Android ended the phone app when "Install unknown
+     * apps" was allowed, the link was lost while the update was asked, the phone said nothing - and the PC's log blamed
+     * a phone app older than 2.3.0-pc.32, though it knew the phone ran 2.3.0-pc.57-beta.
+     */
+    @Test
+    void noAnswerFromAPhoneAppThatTakesTheUpdateIsALostLinkNotAnOldApp() {
+        String lost = "No answer from the phone (link lost) - press UPDATE PHONE APP again.";
+        assertEquals(lost, MainWindow.noUpdateAnswer("2.3.0-pc.57-beta"));
+        assertEquals(lost, MainWindow.noUpdateAnswer(MainWindow.REMOTE_UPDATE_MIN_PHONE), "pc.32 itself takes the update");
+        assertEquals(lost, MainWindow.noUpdateAnswer("2.3.0-pc.55"));
+        assertEquals(lost, MainWindow.noUpdateAnswer("2.4.0"));
+
+        // the version not known, or older: the old words, as before
+        String old = "No answer to the update: phone app older than 2.3.0-pc.32.";
+        assertEquals(old, MainWindow.noUpdateAnswer(null));
+        assertEquals(old, MainWindow.noUpdateAnswer(""));
+        assertEquals(old, MainWindow.noUpdateAnswer("unknown"));
+        assertEquals(old, MainWindow.noUpdateAnswer("2.3.0-pc.31"));
+        assertEquals(old, MainWindow.noUpdateAnswer("2.3.0"));
+    }
 }

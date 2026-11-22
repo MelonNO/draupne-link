@@ -6188,6 +6188,19 @@ public class MainWindow extends JFrame {
     /** The least time between the request going out and a report that can be its answer, ms. */
     static final long UPDATE_ANSWER_MIN_MS = 400;
 
+    /**
+     * The log's line when the phone gave no answer to UPDATE PHONE APP within 10 s. F-082 (the bench's update test on
+     * Android 11, 2026-11-22: Android ended the phone app when "Install unknown apps" was allowed, and the update asked
+     * meanwhile got no answer): a phone app known to take the update ({@link #REMOTE_UPDATE_MIN_PHONE} on) that says
+     * nothing lost the link - the old words blamed an old phone app though the PC knew its version. They stay for a
+     * version not known or older.
+     */
+    static String noUpdateAnswer(String phoneVersion) {
+        boolean known = phoneVersion != null && phoneVersion.matches(".*\\d.*");
+        if (known && !UpdateCheck.isNewer(REMOTE_UPDATE_MIN_PHONE, phoneVersion)) return "No answer from the phone (link lost) - press UPDATE PHONE APP again.";
+        return "No answer to the update: phone app older than " + REMOTE_UPDATE_MIN_PHONE + ".";
+    }
+
     /** While a remote update runs: the request again until the phone answers, and its progress on the card. */
     private void refreshRemoteUpdate(FcTelemetry t, String phoneVersion) {
         if (remoteUpdateAskedAt == 0) return;
@@ -6244,7 +6257,7 @@ public class MainWindow extends JFrame {
             phoneAppWarning.getParent().revalidate();
         }
         if (over) {
-            if (!answered) logLine("No answer to the update: phone app older than " + REMOTE_UPDATE_MIN_PHONE + ".");
+            if (!answered) logLine(noUpdateAnswer(phoneVersion));
             remoteUpdateAskedAt = 0;
             phoneUpdateSaid = AsText.html(text);
             phoneUpdateSaidUntil = now + 10_000;
