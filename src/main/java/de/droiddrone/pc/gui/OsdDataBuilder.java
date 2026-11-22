@@ -100,6 +100,19 @@ final class OsdDataBuilder {
     /** F-019: in LINK LOST's place until the connection's first link. */
     static final String CONNECTING = "CONNECTING";
 
+    /** I-004: PILOT UAV unanswered this long: the usual reasons under CONNECTING. */
+    static final long UNANSWERED_MS = 8000;
+    static final String UNANSWERED = "DRAUPNE FLIGHT OPEN? TAILSCALE? KEY?";
+
+    /**
+     * I-004: the line under CONNECTING while PILOT UAV has waited more than UNANSWERED_MS for a phone that has not
+     * answered once - the log's questions, short; null as soon as the phone answers (CONNECTING is the link's state
+     * while the phone is unheard), once a link was up (then it is lost, not unanswered) and for a sleeper waited for.
+     */
+    static String unansweredHint(boolean everUp, ControlLink.State state, boolean awaitingWake, long waitedMs) {
+        return !everUp && !awaitingWake && state == ControlLink.State.CONNECTING && waitedMs > UNANSWERED_MS ? UNANSWERED : null;
+    }
+
     static OsdRenderer.Data build(In in) {
         boolean spectator = in.spectator();
         long now = in.now();

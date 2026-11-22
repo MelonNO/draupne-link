@@ -6,9 +6,16 @@ import java.net.InetAddress;
 /** A ControlLink straight to the phone (or, watching, to the pilot PC) at the address in the settings. */
 public class Connection {
     private final ControlLink link;
+    /** MonoClock when it was opened: PILOT UAV (or the watch) pressed. */
+    private final long openedAt = MonoClock.ms();
 
     private Connection(ControlLink link) {
         this.link = link;
+    }
+
+    /** ms since it was opened. */
+    public long openFor() {
+        return MonoClock.ms() - openedAt;
     }
 
     public static Connection open(PcConfig config) throws IOException {

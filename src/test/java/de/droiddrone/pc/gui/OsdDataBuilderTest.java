@@ -196,6 +196,31 @@ class OsdDataBuilderTest {
         assertNull(b.build().waking());
     }
 
+    /**
+     * I-004 (the bench's fly, 1.0.71): CONNECTING on the video said nothing more while PILOT UAV waited for a phone that
+     * never answered - the questions were in the log only. After 8 s they stand under CONNECTING, gone the moment the
+     * phone answers.
+     */
+    @Test
+    void aPhoneUnansweredFor8sGetsTheQuestionsUnderConnecting() {
+        ControlLink.State connecting = ControlLink.State.CONNECTING;
+        assertNull(OsdDataBuilder.unansweredHint(false, connecting, false, 7_999), "the first seconds: CONNECTING alone");
+        assertEquals("DRAUPNE FLIGHT OPEN? TAILSCALE? KEY?", OsdDataBuilder.unansweredHint(false, connecting, false, 8_001));
+        assertNull(OsdDataBuilder.unansweredHint(false, ControlLink.State.CONFIGURING, false, 30_000), "the phone answered: gone");
+        assertNull(OsdDataBuilder.unansweredHint(false, ControlLink.State.READY, false, 30_000));
+        assertNull(OsdDataBuilder.unansweredHint(true, connecting, false, 30_000), "a link was up: lost, not unanswered");
+        assertNull(OsdDataBuilder.unansweredHint(false, connecting, true, 30_000), "a sleeper waited for: WAKING");
+
+        B b = new B();
+        b.ready = false;
+        b.hasStream = false;
+        b.neverUp = true;
+        b.hint = OsdDataBuilder.UNANSWERED;
+        OsdRenderer.Data d = b.build();
+        assertEquals("CONNECTING", d.waking());
+        assertEquals("DRAUPNE FLIGHT OPEN? TAILSCALE? KEY?", d.linkHint(), "under CONNECTING");
+    }
+
     private static boolean redFrame(OsdRenderer.Data d) {
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB);
         java.awt.Graphics2D g = img.createGraphics();

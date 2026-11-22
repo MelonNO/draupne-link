@@ -4045,6 +4045,11 @@ public class MainWindow extends JFrame {
     private String osdLinkHint(RcSession session) {
         Tailscale.PhoneState s = shownPhoneState();
         if (s == null || !s.isProblem()) {
+            Connection c = connection; // I-004: PILOT UAV unanswered for 8 s - the log's questions, short
+            ControlLink l = c == null ? null : c.getLink();
+            String ask = l == null || l.isWatchOnly() || l.isSpectator() ? null
+                    : OsdDataBuilder.unansweredHint(l.wasEverReady(), l.getState(), power.awaitingWake, c.openFor());
+            if (ask != null) return ask;
             return session != null && session.isRcEnabled() ? "STICKS STILL SENT - RECONNECTING" : null;
         }
         return switch (s) {
