@@ -21,6 +21,7 @@
  *  deep sleep lets go of the port, the GPS, the socket and the wake lock and locks the screen; a check opens the
  *  socket; waking brings it all back and lights the screen with a full-screen intent. pc.36: overwatch sleep - as
  *  deep sleep, but the wake lock stays and the camera watches (Overwatch); the battery's readings for its floor.
+ *  pc.58 (Q-006, Tailscale only): upstream's MAVLink UDP bridge never opens.
  */
 
 package de.droiddrone.flight;
@@ -120,6 +121,7 @@ public class DDService extends Service {
             return START_REDELIVER_INTENT;
         }
         isConnected = false;
+        PhoneTailscale.with(this); // Q-006: Android's networks, for the link's Tailscale address
         String destIp = MainActivity.config.getIp();
         int port = MainActivity.config.getPort();
         String key = MainActivity.config.getKey();
@@ -145,7 +147,21 @@ public class DDService extends Service {
         serial = new Serial(this, MainActivity.config);
         msp = new Msp(serial, MainActivity.config);
         mavlink = new Mavlink(serial, MainActivity.config);
-        mavlinkUdpBridge = new MavlinkUdpBridge(MainActivity.config, mavlink);
+        mavlinkUdpBridge = new MavlinkUdpBridge(MainActivity.config, mavlink) {
+            private boolean said;
+
+            /**
+             * Q-006 (Tailscale only): upstream's MAVLink UDP bridge stays shut. Its socket listens on every address of
+             * the phone and passes what its peer sends to the flight controller; the phone answers over Tailscale and
+             * nothing else. It was off already (DRAUPNE Link sends it off, the phone keeps its own value: PhoneOwnConfig).
+             */
+            @Override
+            public void initialize() {
+                if (said) return;
+                said = true;
+                log("MAVLink UDP bridge: stays off - this phone answers over Tailscale only");
+            }
+        };
         mavlink.setMavlinkUdpBridge(mavlinkUdpBridge);
         serial.initialize(msp, mavlink);
         phoneTelemetry = new PhoneTelemetry(this, streamEncoder, cameraManager, mp4Recorder);

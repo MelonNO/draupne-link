@@ -105,6 +105,59 @@ class ReleaseHasNoBenchCodeTest {
         assertTrue(text(overlay.resolve("Flight/build.gradle")).contains("debug.java.srcDirs += 'src/release/java'"), "a debug build compiles the same BenchFc");
     }
 
+    /**
+     * Q-006 (Tailscale only): the link's rule is widened in the Android emulator for the rig's build and the update
+     * test's alone (their own BenchNet). The released app's says "not built in" and does nothing, and the one place
+     * that asks it (PhoneTailscale) asks the constant first - so the widened rule is not in the compiled app.
+     */
+    @Test
+    void theBenchNetOfTheReleasedAppSaysNotBuiltInAndTheRuleIsNeverWidenedThere() throws Exception {
+        Path root = root();
+        Path overlay = root.resolve("flight-app/overlay");
+        String stubPath = "Flight/src/release/java/de/droiddrone/flight/BenchNet.java";
+        List<String> stubs = new ArrayList<>();
+        try (Stream<Path> files = Files.walk(overlay)) {
+            for (Path f : files.filter(p -> p.getFileName().toString().equals("BenchNet.java")).sorted().toList()) stubs.add(slashes(overlay.relativize(f)));
+        }
+        assertEquals(List.of(stubPath), stubs, "BenchNet under flight-app/overlay");
+        StringBuilder code = new StringBuilder();
+        for (String line : Files.readAllLines(overlay.resolve(stubPath), StandardCharsets.ISO_8859_1)) {
+            String l = line.strip();
+            if (!l.startsWith("/*") && !l.startsWith("*") && !l.startsWith("//")) code.append(l).append('\n');
+        }
+        String stub = code.toString();
+        assertTrue(Pattern.compile("static\\s+final\\s+boolean\\s+BUILT_IN\\s*=\\s*false\\s*;").matcher(stub).find(), "BUILT_IN = false, a constant the compiler knows");
+        assertFalse(stub.contains("true"), stubPath + " says yes nowhere");
+        for (String doing : List.of("java.net", "Socket", "new ", "Thread", "SystemProperties", "getprop", "import ", "Build.")) {
+            assertFalse(stub.contains(doing), stubPath + " does nothing, but has: " + doing);
+        }
+        // asked in one place, the constant first on the same line
+        List<String> wrong = new ArrayList<>();
+        int asked = 0;
+        try (Stream<Path> files = Files.walk(overlay.resolve("Flight/src/main/java"))) {
+            for (Path f : files.filter(p -> p.toString().endsWith(".java")).sorted().toList()) {
+                List<String> lines = Files.readAllLines(f, StandardCharsets.ISO_8859_1);
+                for (int i = 0; i < lines.size(); i++) {
+                    String l = lines.get(i).strip();
+                    if (l.startsWith("//") || l.startsWith("*") || l.startsWith("/*") || !l.contains("BenchNet.")) continue;
+                    String at = f.getFileName() + ":" + (i + 1) + ": " + l;
+                    if (!f.getFileName().toString().equals("PhoneTailscale.java")) wrong.add(at + "  <- only PhoneTailscale asks it");
+                    if (l.contains("BenchNet.wide()") && !l.contains("BenchNet.BUILT_IN && BenchNet.wide()")) wrong.add(at + "  <- BenchNet.BUILT_IN is not asked first");
+                    if (l.contains("BenchNet.wide()")) asked++;
+                }
+            }
+        }
+        assertEquals(List.of(), wrong);
+        assertEquals(1, asked, "PhoneTailscale asks it once, for the place of the link's sockets");
+        // the rig's and the update test's own: widened in the emulator alone, each with its own marker in code that runs
+        String rig = text(root.resolve("flight-app/bench-overlay/Flight/src/bench/java/de/droiddrone/flight/BenchNet.java"));
+        assertTrue(rig.contains("BUILT_IN = true") && rig.contains("\"ranchu\"") && rig.contains("log(BenchFc.MARKER"), "the rig's: the emulator alone, said with its marker");
+        String updateTest = text(root.resolve("flight-app/bench-overlay/update-test/Flight/src/release/java/de/droiddrone/flight/BenchNet.java"));
+        assertTrue(updateTest.contains("BUILT_IN = true") && updateTest.contains("\"ranchu\"") && updateTest.contains("log(UpdateTestSource.MARKER"),
+                "the update test's: the emulator alone, said with its marker");
+        assertFalse(updateTest.contains("BenchFc") || updateTest.contains(MARKER), "nothing of the rig's in the update test's builds (their scan refuses it)");
+    }
+
     @Test
     void serialAsksBuiltInBeforeEveryStepOfTheRig() throws Exception {
         Path sources = root().resolve("flight-app/overlay/Flight/src/main/java/de/droiddrone/flight");

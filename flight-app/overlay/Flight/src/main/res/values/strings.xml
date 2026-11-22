@@ -30,7 +30,7 @@
         <item>Direct connection</item>
     </string-array>
     <string name="connection_mode_server">Both sides connect to the relay server.</string>
-    <string name="connection_mode_vpn">PC connects to this phone\'s Tailscale or Wi-Fi address.</string>
+    <string name="connection_mode_vpn">PC connects to this phone\'s Tailscale address.</string>
 
     <!-- DRAUPNE Link layout -->
     <string name="dd_title">DRAUPNE</string>
@@ -57,11 +57,11 @@
     <string name="dd_old_downloads">Old installers may be in Downloads. Tap to open and delete.</string>
     <string name="dd_old_app">Old DroidDrone Flight installed: it can take the flight controller. Tap to remove.</string>
     <string name="dd_tailscale_title">Tailscale is off</string>
-    <string name="dd_tailscale_off">The PC reaches this phone over Tailscale.\n\nSwitch Tailscale on (with mobile data), then tap Start again.</string>
+    <string name="dd_tailscale_off">The PC reaches this phone over Tailscale only.\n\nSwitch Tailscale on (with mobile data). Started anyway, the phone answers once Tailscale is on.</string>
     <string name="dd_tailscale_open">Open Tailscale</string>
     <string name="dd_connect_anyway">Start anyway</string>
     <string name="dd_tailscale_not_found">Tailscale not installed: get it from the Play Store.</string>
-    <string name="dd_tailscale_off_line">Waiting for PC - Tailscale is off</string>
+    <string name="dd_tailscale_off_line">No Tailscale - the PC cannot reach this phone.</string>
     <string name="dd_lock_button">LOCK SCREEN</string>
     <string name="dd_locked_title">SCREEN LOCKED</string>
     <string name="dd_locked_text">Touches ignored. The PC link and flight controller keep running.</string>

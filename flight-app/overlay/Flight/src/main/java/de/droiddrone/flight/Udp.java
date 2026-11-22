@@ -64,6 +64,10 @@
  *  Reed-Solomon parity (Fec, FecSender) in bad coverage mode for a PC that mends with it (profile bit 4 and VIDEO_FEC
  *  m > 0, both this session's): VIDEO_PARITY_RS behind each block of a frame in place of the XOR groups, key frames
  *  once; the parity's share comes off the encoder's bitrate, the step's figure is still the one reported.
+ *  pc.58 (Q-006, the pilot: "Tailscale only"): the link's socket is bound to this phone's Tailscale address, not to
+ *  every address it has, and hears and sends to Tailscale's addresses alone (TailscaleOnly, PhoneTailscale); with no
+ *  Tailscale it is parked and silent. Twice a second the address is looked at, and when it comes, changes or goes the
+ *  socket is opened anew where it belongs (sendWatchRun, LinkSocket.reopen, as for a jammed socket).
  */
 
 package de.droiddrone.flight;
@@ -111,6 +115,7 @@ import de.droiddrone.common.SendWatch;
 import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.SleepWake;
+import de.droiddrone.common.TailscaleOnly;
 import de.droiddrone.common.Takeover;
 import de.droiddrone.common.TelemetryData;
 import de.droiddrone.common.TelemetryRecords;
@@ -567,22 +572,16 @@ public class Udp {
         }
         try {
             if (socket != null) socket.close();
-            // pc.55: a socket that can be opened anew under its users when nothing leaves it (LinkSocket, sendWatchRun)
-            socket = new LinkSocket(() -> {
-                DatagramSocket s = new DatagramSocket(port);
-                try {
-                    // DRAUPNE Link: upstream's 2 KB held two packets: a 4G burst (a key frame's packets delivered at
-                    // once, sticks behind them) tail-dropped the newest frames. 256 KB holds the burst; the sequence
-                    // byte and the writer's newest-first rule keep stale sticks from going out
-                    s.setReceiveBufferSize(256 * 1024);
-                    s.setSendBufferSize(UdpCommon.packetLength * 30);
-                    s.setTrafficClass(0x10);
-                } catch (java.io.IOException | RuntimeException e) {
-                    s.close();
-                    throw e;
-                }
-                return s;
-            });
+            // pc.55: a socket that can be opened anew under its users when nothing leaves it (LinkSocket, sendWatchRun).
+            // Q-006 (Tailscale only): bound to this phone's Tailscale address, not to every address it has - else
+            // parked, silent - and only Tailscale's addresses heard and sent to (TailscaleOnly; sendWatchRun follows
+            // the address when it comes, changes or goes)
+            socket = new LinkSocket(this::openLinkSocket, tailscale);
+            TailscaleOnly.Place at = tailscale.bound();
+            if (!at.equals(linkSaid)) {
+                linkSaid = at;
+                log("Link socket: " + where(at));
+            }
             udpSender = new UdpSender(socket);
             if (connectionMode == SettingsCommon.ConnectionMode.overServer) {
                 udpSender.connect(destIp, port);
@@ -622,6 +621,55 @@ public class Udp {
             return false;
         }
     }
+
+    /**
+     * Q-006: the link's socket, opened where the rule wants it now (PhoneTailscale.place: on this phone's Tailscale
+     * address at the link port, else parked on its own loopback) - at the start and at every reopen. A Tailscale
+     * address that cannot be bound (the port held, the address not usable yet) parks it rather than ending the app: the
+     * next look, half a second on, tries again. Where it went is the watch's ({@link TailscaleOnly.Watch#opened}).
+     */
+    private DatagramSocket openLinkSocket() throws java.io.IOException {
+        TailscaleOnly.Place at = PhoneTailscale.place();
+        DatagramSocket s;
+        try {
+            s = at.open(port);
+        } catch (java.io.IOException | RuntimeException e) {
+            if (at.parked || at.everywhere) throw e; // as before Q-006: the port could not be had
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - bindRefusedSaidAt >= 60_000) {
+                bindRefusedSaidAt = now;
+                log("Link socket: " + at.address.getHostAddress() + ":" + port + " could not be bound (" + e + ") - silent, tried again");
+            }
+            at = TailscaleOnly.Place.PARKED;
+            s = at.open(port);
+        }
+        try {
+            // DRAUPNE Link: upstream's 2 KB held two packets: a 4G burst (a key frame's packets delivered at
+            // once, sticks behind them) tail-dropped the newest frames. 256 KB holds the burst; the sequence
+            // byte and the writer's newest-first rule keep stale sticks from going out
+            s.setReceiveBufferSize(256 * 1024);
+            s.setSendBufferSize(UdpCommon.packetLength * 30);
+            s.setTrafficClass(0x10);
+        } catch (java.io.IOException | RuntimeException e) {
+            s.close();
+            throw e;
+        }
+        tailscale.opened(at);
+        return s;
+    }
+
+    /** Q-006: where the link's socket is, for the log. */
+    private String where(TailscaleOnly.Place at) {
+        return at.parked ? NO_TAILSCALE : at.everywhere ? "on every address (the rule widened)" : "on Tailscale, " + at.address.getHostAddress() + ":" + port;
+    }
+
+    /** Q-006: the log's line while the phone is not on Tailscale. */
+    static final String NO_TAILSCALE = "no Tailscale - the phone answers nothing";
+    /** Q-006: the link socket's binding (the opener sets it), and the gate it holds: Tailscale's addresses, nothing while parked. */
+    private final TailscaleOnly.Watch tailscale = new TailscaleOnly.Watch();
+    /** Where the log last said the socket is; a refused bind said at most once a minute. */
+    private volatile TailscaleOnly.Place linkSaid;
+    private volatile long bindRefusedSaidAt = -60_000;
 
     public void sendConnect(){
         UdpSender sender = udpSender;
@@ -1178,6 +1226,20 @@ public class Udp {
                     DatagramSocket s = socket;
                     if (id != udpThreadsId || !(s instanceof LinkSocket) || s.isClosed()) continue;
                     LinkSocket link = (LinkSocket) s;
+                    // Q-006: Tailscale came, changed its address or went - the socket opened anew where it belongs
+                    // now, as after a jammed socket: the session, the camera and the FC's port stay; the PC's next
+                    // packet finds it (a session silent past its 4 s comes back by the pilot's own Connect)
+                    TailscaleOnly.Place wanted = PhoneTailscale.place();
+                    if (tailscale.rebindDue(wanted)) {
+                        TailscaleOnly.Place was = tailscale.bound();
+                        boolean open = link.reopen();
+                        TailscaleOnly.Place at = tailscale.bound();
+                        if (!at.equals(linkSaid)) {
+                            linkSaid = at;
+                            log("Link socket: " + where(at) + " (was " + where(was) + ")" + (open ? "" : " - could not be opened, trying again"));
+                        }
+                        continue;
+                    }
                     long now = android.os.SystemClock.elapsedRealtime();
                     long stuck = link.stuckMs();
                     boolean broken = link.broken();

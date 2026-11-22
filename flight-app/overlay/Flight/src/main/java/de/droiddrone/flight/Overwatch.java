@@ -375,6 +375,7 @@ final class Overwatch {
 
     private void tick() {
         long now = System.currentTimeMillis(), mono = SystemClock.elapsedRealtime();
+        followTailscale(); // Q-006
         if (watching) {
             MotionWatch.tick(service.fcArmedState() == FcArmedState.DISARMED, service.camera());
             watchdog(mono);
@@ -1017,11 +1018,53 @@ final class Overwatch {
 
     // ------------------------------------------------------------------ the socket
 
+    /**
+     * Q-006 (Tailscale only): the overwatch socket's binding and its gate - as the link's: on this phone's Tailscale
+     * address (a port of its own, never the link's), else parked and silent; Tailscale's addresses alone heard and sent
+     * to. The tick opens it anew when the address comes, changes or goes ({@link #followTailscale}).
+     */
+    private final de.droiddrone.common.TailscaleOnly.Watch tailscale = new de.droiddrone.common.TailscaleOnly.Watch();
+
+    private DatagramSocket openWhereTailscaleIs() throws IOException {
+        de.droiddrone.common.TailscaleOnly.Place at = PhoneTailscale.place();
+        DatagramSocket s;
+        try {
+            s = at.open(0);
+        } catch (IOException | RuntimeException e) {
+            if (at.parked || at.everywhere) throw e;
+            at = de.droiddrone.common.TailscaleOnly.Place.PARKED; // the next tick tries the address again
+            s = at.open(0);
+        }
+        try {
+            s.setSendBufferSize(256 * 1024);
+        } catch (IOException | RuntimeException e) {
+            s.close();
+            throw e;
+        }
+        tailscale.opened(at);
+        return s;
+    }
+
+    /** The tick's look: the socket opened anew where Tailscale now is (once said in the log). */
+    private void followTailscale() {
+        DatagramSocket s = socket;
+        if (!(s instanceof de.droiddrone.common.LinkSocket) || s.isClosed()) return;
+        de.droiddrone.common.TailscaleOnly.Place wanted = PhoneTailscale.place();
+        if (!tailscale.rebindDue(wanted)) return;
+        ((de.droiddrone.common.LinkSocket) s).reopen();
+        de.droiddrone.common.TailscaleOnly.Place at = tailscale.bound();
+        if (!at.equals(tailscaleSaid)) {
+            tailscaleSaid = at;
+            log("Overwatch socket: " + (at.parked ? "no Tailscale - the PCs cannot be called" : "on " + at));
+        }
+    }
+
+    private de.droiddrone.common.TailscaleOnly.Place tailscaleSaid;
+
     private boolean openSocket() {
         if (socket != null && !socket.isClosed()) return true;
         try {
-            socket = new DatagramSocket(); // a port of its own: never the link's
-            socket.setSendBufferSize(256 * 1024);
+            socket = new de.droiddrone.common.LinkSocket(this::openWhereTailscaleIs, tailscale); // a port of its own: never the link's
             final DatagramSocket s = socket;
             Thread t = new Thread(() -> receive(s), "overwatchReceive");
             t.setDaemon(true);

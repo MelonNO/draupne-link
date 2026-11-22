@@ -250,13 +250,15 @@ public class MainActivity extends Activity {
         if (savedInstanceState == null) BootRevealView.show(this);
         activity = this;
         appContext = getApplicationContext();
+        PhoneTailscale.with(appContext); // Q-006: the screen asks what the link asks
         main = findViewById(R.id.llMain);
         main.setKeepScreenOn(true);
         bStartStopService = findViewById(R.id.startStopService);
         bStartStopService.setOnClickListener(v -> {
             if (!checkPermissions()) return;
-            // DRAUPNE Link: in Direct mode the PC reaches this phone at its Tailscale address, so with Tailscale off
-            // a CONNECT waits for ever. Say so before starting, with the way to Tailscale; the pilot may still go on.
+            // DRAUPNE Link: the PC reaches this phone at its Tailscale address and nowhere else (Q-006), so with
+            // Tailscale off nothing answers. Say so before starting, with the way to Tailscale; the pilot may still
+            // start - the link answers once Tailscale is up, without a restart.
             if (!DDService.isRunning && connectionMode.getSelectedItemPosition() == SettingsCommon.ConnectionMode.direct
                     && !onTailscale()) {
                 warnTailscaleOff();
@@ -752,6 +754,10 @@ public class MainActivity extends Activity {
             cbConnectOnStartup.setEnabled(true);
         }
         updatePower(); // after the lines above: the mode overwrites the network line and the pill
+        // Q-006: in a power mode too - no Tailscale, no PC can reach the phone (normal mode's line says it alone)
+        if (DDService.isRunning && !DDService.isConnected && PowerMode.mode() != PowerMode.NORMAL && !onTailscaleCached()) {
+            tvNetworkStatus.setText(tvNetworkStatus.getText() + "\n" + getString(R.string.dd_tailscale_off_line));
+        }
     }
 
     /**
@@ -874,7 +880,9 @@ public class MainActivity extends Activity {
         long now = System.currentTimeMillis();
         if (now - phoneInfoAt < 2000) return;
         phoneInfoAt = now;
-        String tailscale = null;
+        // Q-006: the Tailscale address as the link has it - on Tailscale's VPN, never a carrier's 100.64.0.0/10
+        java.net.InetAddress own = PhoneTailscale.address();
+        String tailscale = own == null ? null : own.getHostAddress();
         StringBuilder others = new StringBuilder();
         try {
             java.util.Enumeration<java.net.NetworkInterface> all = java.net.NetworkInterface.getNetworkInterfaces();
@@ -884,9 +892,7 @@ public class MainActivity extends Activity {
                 for (java.net.InterfaceAddress ia : nif.getInterfaceAddresses()) {
                     if (!(ia.getAddress() instanceof java.net.Inet4Address)) continue;
                     String ip = ia.getAddress().getHostAddress();
-                    if (isTailscaleAddress(ia.getAddress().getAddress())) {
-                        if (tailscale == null) tailscale = ip;
-                    } else {
+                    if (!ip.equals(tailscale)) {
                         if (others.length() > 0) others.append(", ");
                         others.append(ip);
                     }
@@ -937,28 +943,12 @@ public class MainActivity extends Activity {
     private boolean tailscaleCached;
 
     /**
-     * Is this phone on Tailscale right now: an interface with an address in Tailscale's 100.64.0.0/10 range (the
-     * address the PC connects to). A VPN that is not Tailscale doesn't count: the PC can't reach it.
+     * Is this phone on Tailscale right now - can the PC reach it. Q-006: the link's own rule (PhoneTailscale): an
+     * address in Tailscale's ranges on a VPN's interface; a carrier's 100.64.0.0/10 on mobile data does not count, nor
+     * does a VPN that is not Tailscale.
      */
     static boolean onTailscale() {
-        try {
-            java.util.Enumeration<java.net.NetworkInterface> all = java.net.NetworkInterface.getNetworkInterfaces();
-            while (all != null && all.hasMoreElements()) {
-                java.net.NetworkInterface nif = all.nextElement();
-                if (!nif.isUp()) continue;
-                for (java.net.InterfaceAddress ia : nif.getInterfaceAddresses()) {
-                    if (ia.getAddress() instanceof java.net.Inet4Address && isTailscaleAddress(ia.getAddress().getAddress())) return true;
-                }
-            }
-        } catch (java.net.SocketException ignored) {
-            // no interfaces to look at: not on Tailscale as far as we can tell
-        }
-        return false;
-    }
-
-    /** 100.64.0.0/10: the first byte 100, the second 64..127. */
-    static boolean isTailscaleAddress(byte[] ip) {
-        return ip.length == 4 && (ip[0] & 0xff) == 100 && (ip[1] & 0xc0) == 0x40;
+        return PhoneTailscale.up();
     }
 
     /** The status line is refreshed often: the interfaces are looked at once a second at most. */
@@ -971,7 +961,7 @@ public class MainActivity extends Activity {
         return tailscaleCached;
     }
 
-    /** CONNECT with Tailscale off: open Tailscale, go on anyway (the PC's Wi-Fi, say), or not. */
+    /** CONNECT with Tailscale off: open Tailscale, start anyway (it answers once Tailscale is up), or not. */
     private void warnTailscaleOff() {
         new android.app.AlertDialog.Builder(this)
                 .setTitle(R.string.dd_tailscale_title)

@@ -39,6 +39,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * real socket - which lets every waiting send go, with an error, as lost - and opens a new one on the same port.
  * Who holds this socket notices nothing else: a receive that was waiting goes on waiting on the new one.
  * {@link SendWatch} decides when. Plain java.net: the PC's tests check it.
+ * <p>
+ * Q-006 (Tailscale only): with {@link Peers}, a datagram from an address they refuse is dropped here - its receive
+ * goes on waiting, nobody above ever sees it - and one to such an address does not leave (as lost, without an error).
+ * {@link TailscaleOnly.Watch} is the phone's: Tailscale's addresses, nothing at all while parked.
  */
 public class LinkSocket extends DatagramSocket {
     /** Opens the real socket, bound and set up; called again by {@link #reopen}. */
@@ -46,19 +50,32 @@ public class LinkSocket extends DatagramSocket {
         DatagramSocket open() throws IOException;
     }
 
+    /** Q-006: who may be heard and sent to through this socket. */
+    public interface Peers {
+        boolean allows(InetAddress address);
+    }
+
     /** How long a reopen tries to bind the port again before it gives up (and is {@link #broken}), ms. */
     static final long REBIND_MS = 1000;
     private final Opener opener;
+    private final Peers peers;
     private final Object swap = new Object();
     private volatile DatagramSocket real;
     private volatile boolean closed;
     private final AtomicInteger sending = new AtomicInteger();
     private volatile long progressAtNs = System.nanoTime();
     private volatile int reopens;
+    private final AtomicInteger refusedIn = new AtomicInteger(), refusedOut = new AtomicInteger();
 
     public LinkSocket(Opener opener) throws IOException {
+        this(opener, null);
+    }
+
+    /** @param peers who may be heard and sent to; null: anyone */
+    public LinkSocket(Opener opener, Peers peers) throws IOException {
         super((SocketAddress) null); // this object itself is never bound: all goes to the real socket
         this.opener = opener;
+        this.peers = peers;
         try {
             real = opener.open();
         } catch (IOException | RuntimeException e) {
@@ -69,6 +86,11 @@ public class LinkSocket extends DatagramSocket {
 
     @Override
     public void send(DatagramPacket p) throws IOException {
+        // Q-006: to an address the peers refuse nothing leaves - as a datagram lost on the way (no error to log)
+        if (peers != null && !closed && p.getAddress() != null && !peers.allows(p.getAddress())) {
+            refusedOut.incrementAndGet();
+            return;
+        }
         DatagramSocket r = real;
         // the wait, if there is one, starts now - stamped before it is counted, or the watch could read "one waits"
         // against the stamp of the last send, seconds old
@@ -98,6 +120,15 @@ public class LinkSocket extends DatagramSocket {
     /** How many times the real socket was opened anew. */
     public int reopens() {
         return reopens;
+    }
+
+    /** Q-006: datagrams dropped so far, that came from (in) or were to go to (out) an address the peers refuse. */
+    public int refusedIn() {
+        return refusedIn.get();
+    }
+
+    public int refusedOut() {
+        return refusedOut.get();
     }
 
     /**
@@ -142,6 +173,11 @@ public class LinkSocket extends DatagramSocket {
             DatagramSocket r = real;
             try {
                 r.receive(p);
+                // Q-006: from an address the peers refuse - dropped, the receive goes on
+                if (peers != null && !peers.allows(p.getAddress())) {
+                    refusedIn.incrementAndGet();
+                    continue;
+                }
                 return;
             } catch (SocketTimeoutException e) {
                 throw e;
