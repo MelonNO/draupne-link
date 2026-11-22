@@ -409,10 +409,15 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   its serial task, 100 a second** (serial_update_rate_hz) - at 100 stick frames a second nothing else was answered,
   so the scenarios send 25.
 - **What was seen of the drone's failsafe** (4.4.1, `SitlFailsafeScenario`; GPS-RESCUE after failsafe_delay 200,
-  rxfail 3 h and 4 h, no GPS fix, arming without a fix allowed): the sticks stop at throttle 1080; RXLOSS 0.17 s later;
-  armed and every motor held where it was for 20 s; at 20.1 s GPS rescue, which with no fix gives up at once - the
-  motors at rest and disarmed 0.1 s later, FAILSAFE and ARMSWITCH among the blocks; no motor ever above the held
-  throttle. Sticks back with ARM off: free again 2 s later. The film's `failsafe-timeline.tsv` has every change.
+  rxfail 3 h and 4 h, no GPS fix, arming without a fix allowed): the sticks stop at throttle 1080; RXLOSS 0.15 - 0.17 s
+  later; armed and every motor held where it was (1098 - 1100) for 20 s; at 20.05 - 20.08 s GPS rescue, which with no
+  fix gives up at once - disarmed 0 - 0.09 s later, the motors at rest, FAILSAFE and ARMSWITCH among the blocks.
+  **In that moment the rescue can run every motor up to its hover throttle** (gps_rescue_throttle_hover 1275: the
+  motors read 1290) - seen in two runs of five, for no longer than the 20 to 90 ms between two looks. Sticks back with
+  ARM off: free again 2.1 s later. The film's `failsafe-timeline.tsv` has every change.
+- **A new connection is cleaned first** (`Sitl.usb`): SITL sends the next client what it still had to say to the one
+  before (answers to requests left in its queue), cut where its buffer ran over - a "diff all" read with that in
+  front is not whole. One question is asked and all that comes is thrown away until 150 ms pass with nothing.
 - **The keeper against it** (`SitlKeeperScenario`): as a real board's in every rule but the battery
   (`noBattery`, `battery=none` by hand - refused for a real board).
 

@@ -27,8 +27,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * Seen on 4.4.1 (2026-11-22): the stick frames stop; RXLOSS a tenth of a second later; for 20 s nothing else - armed,
  * every motor where the held throttle put it (stage 1); then stage 2, GPS rescue, which without a GPS fix gives up at
  * once and the board disarms within a tenth of a second, FAILSAFE among its arming blocks. In that tenth the rescue
- * may have run every motor up to its hover throttle (gps_rescue_throttle_hover): seen in one run of two, 1290 for at
- * most 0.09 s where 1100 was held - so around stage 2 the motors are read as fast as they answer, and the run-up, if
+ * may have run every motor up to its hover throttle (gps_rescue_throttle_hover 1275): seen in two runs of five, 1290
+ * where 1100 was held, for no longer than one look (20 to 90 ms) - so around stage 2 the motors are read as fast as they answer, and the run-up, if
  * any, is said and timed: it has to be in stage 2 and over with the disarm within half a second. Sticks back with the
  * ARM switch off: the failsafe lets go two seconds later. Every change, with its time after the last stick frame, is
  * in the film's failsafe-timeline.tsv.
