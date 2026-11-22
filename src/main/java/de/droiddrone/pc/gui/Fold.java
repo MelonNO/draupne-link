@@ -32,6 +32,14 @@ final class Fold extends JPanel {
         return shown;
     }
 
+    /** Run once the fold stands fully open (after the layout that opened it). */
+    private Runnable opened;
+
+    Fold whenOpened(Runnable r) {
+        opened = r;
+        return this;
+    }
+
     void setShown(boolean shown, boolean animate) {
         if (this.shown == shown && (animate || progress == (shown ? 1 : 0))) return;
         this.shown = shown;
@@ -39,6 +47,7 @@ final class Fold extends JPanel {
             timer.stop();
             progress = shown ? 1 : 0;
             relayout();
+            if (shown) afterOpening();
             return;
         }
         lastTick = System.currentTimeMillis();
@@ -52,6 +61,12 @@ final class Fold extends JPanel {
         progress = shown ? Math.min(1, progress + step) : Math.max(0, progress - step);
         if (progress == (shown ? 1 : 0)) timer.stop();
         relayout();
+        if (shown && progress == 1) afterOpening();
+    }
+
+    private void afterOpening() {
+        Runnable r = opened;
+        if (r != null) javax.swing.SwingUtilities.invokeLater(r); // after the layout the revalidate asked for
     }
 
     private void relayout() {

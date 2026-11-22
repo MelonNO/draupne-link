@@ -1,12 +1,17 @@
 package de.droiddrone.pc.gui;
 
+import javax.swing.JComponent;
 import javax.swing.JPanel;
+import javax.swing.JRootPane;
+import javax.swing.JViewport;
 import javax.swing.Scrollable;
+import javax.swing.SwingUtilities;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.Insets;
 import java.awt.LayoutManager;
+import java.awt.Point;
 import java.awt.Rectangle;
 
 /**
@@ -67,6 +72,60 @@ final class LinkCardLayout implements LayoutManager {
         boolean shown = miniH >= MINI_SHOWN_MIN;
         miniMap.setBounds(x, top, w, shown ? miniH : 0);
         if (miniMap.isVisible() != shown) miniMap.setVisible(shown);
+    }
+
+    /**
+     * F-075: a line that opens at the foot of the LINK card's rows, where a low window cut it in half at the card's edge
+     * (QUEUED: OVERWATCH at 1093 x 584): the rows scroll it into sight, the top of the view at the top of a row, never
+     * through one. Nothing scrolls when it is in sight already.
+     */
+    static void reveal(JComponent line) {
+        JViewport v = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, line);
+        if (v == null || !(v.getView() instanceof Container rows) || line.getHeight() <= 0) return;
+        JRootPane root = SwingUtilities.getRootPane(line);
+        if (root != null) root.validate(); // the layout the opening asked for, done
+        for (Component p = line; p != rows && p.getParent() != null; p = p.getParent()) {
+            if (!p.isVisible() || p.getY() + p.getHeight() > p.getParent().getHeight()) return; // in a fold that is shut
+        }
+        Rectangle r = SwingUtilities.convertRectangle(line.getParent(), line.getBounds(), rows);
+        int y = revealY(v.getViewPosition().y, v.getExtentSize().height, rows.getHeight(), r.y, r.y + r.height, rowTops(rows));
+        if (y != v.getViewPosition().y) v.setViewPosition(new Point(v.getViewPosition().x, y));
+    }
+
+    /**
+     * Where the view's top goes for the part from top to bottom to be in sight: as little scrolled as will do, then on
+     * to the next row's top (rowTops ascending), as long as the part stays in sight.
+     */
+    static int revealY(int at, int viewH, int contentH, int top, int bottom, int[] rowTops) {
+        if (top >= at && bottom <= at + viewH) return at;
+        int least = bottom - viewH, y;
+        if (least < at) { // above the view: up to its row's top
+            y = top;
+            int best = Integer.MIN_VALUE;
+            for (int t : rowTops) if (t <= top && t >= least) best = t;
+            if (best != Integer.MIN_VALUE) y = best;
+        } else { // below: down as little as will do, then on to the next row's top
+            y = least;
+            for (int t : rowTops) {
+                if (t < y) continue;
+                if (t <= top) y = t;
+                break;
+            }
+        }
+        return Math.max(0, Math.min(y, Math.max(0, contentH - viewH)));
+    }
+
+    /** The tops of the rows and of the parts of a row of several (PHONE, its list, CONNECT AS ...), ascending. */
+    private static int[] rowTops(Container rows) {
+        java.util.TreeSet<Integer> tops = new java.util.TreeSet<>();
+        for (Component c : rows.getComponents()) {
+            if (!c.isVisible() || c.getHeight() <= 0) continue;
+            tops.add(c.getY());
+            if (c instanceof JPanel p && !(c instanceof Fold)) {
+                for (Component part : p.getComponents()) if (part.isVisible() && part.getHeight() > 0) tops.add(c.getY() + part.getY());
+            }
+        }
+        return tops.stream().mapToInt(Integer::intValue).toArray();
     }
 
     /** The LINK card's rows: as wide as the card (never a sideways scroll), as tall as they want. */

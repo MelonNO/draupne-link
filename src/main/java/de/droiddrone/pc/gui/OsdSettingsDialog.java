@@ -52,7 +52,7 @@ final class OsdSettingsDialog extends JFrame {
     private final List<Row> rows = new ArrayList<>();
     private final JLabel countLabel = Theme.label(" ", Theme.headingFont(11f), Theme.MUTED);
     private final JLabel infoTitle = Theme.label(" ", Theme.headingFont(20f), Theme.TEXT);
-    private final JLabel infoHelp = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
+    private final JLabel infoHelp = helpLabel();
     private final JLabel infoState = Theme.label(" ", Theme.font(Font.BOLD, 12.5f), Theme.MUTED);
     private final JButton resetElement = Theme.secondaryButton("Reset element");
     private final Timer ticker = new Timer(500, e -> preview.repaint()); // the sample's timers run
@@ -144,7 +144,7 @@ final class OsdSettingsDialog extends JFrame {
         OsdElement e = selected;
         OsdLayout.Placement p = layout.get(e);
         infoTitle.setText(e.title.toUpperCase());
-        infoHelp.setText("<html>" + e.help + "</html>");
+        infoHelp.setText(helpHtml(e));
         String where = !e.movable ? "Fixed in the middle"
                 : switch (p.align()) {
                     case LEFT -> "Left-aligned";
@@ -156,6 +156,39 @@ final class OsdSettingsDialog extends JFrame {
         resetElement.setEnabled(!p.equals(OsdLayout.defaultPlacement(e)));
         for (Row r : rows) r.repaint();
         preview.repaint();
+    }
+
+    /** The ELEMENT card's room: its column, less the card's frame and padding. */
+    static final int INFO_WIDTH = 270, INFO_TEXT_WIDTH = INFO_WIDTH - 2 * (2 + 16);
+
+    static String helpHtml(OsdElement e) {
+        return "<html>" + e.help + "</html>";
+    }
+
+    /**
+     * The element's words, wrapped to the card's width and as high as all their lines (F-075: a plain HTML label asked
+     * for one long line, got the card's width and one line's height, and the wrapped rest was cut off - "Cell voltage
+     * with a bar, pack voltage,").
+     */
+    static JLabel helpLabel() {
+        JLabel label = new JLabel(" ") {
+            @Override
+            public Dimension getPreferredSize() {
+                javax.swing.text.View v = (javax.swing.text.View) getClientProperty(javax.swing.plaf.basic.BasicHTML.propertyKey);
+                if (v == null) return super.getPreferredSize();
+                java.awt.Insets in = getInsets();
+                v.setSize(INFO_TEXT_WIDTH - in.left - in.right, 0);
+                return new Dimension(INFO_TEXT_WIDTH, (int) Math.ceil(v.getPreferredSpan(javax.swing.text.View.Y_AXIS)) + in.top + in.bottom);
+            }
+
+            @Override
+            public Dimension getMaximumSize() {
+                return getPreferredSize();
+            }
+        };
+        label.setFont(Theme.font(Font.PLAIN, 13f));
+        label.setForeground(Theme.TEXT);
+        return label;
     }
 
     // ------------------------------------------------------------------ left: elements
@@ -270,7 +303,7 @@ final class OsdSettingsDialog extends JFrame {
     private JComponent infoCard() {
         JPanel column = new JPanel(new BorderLayout(0, 14));
         column.setOpaque(false);
-        column.setPreferredSize(new Dimension(270, 10));
+        column.setPreferredSize(new Dimension(INFO_WIDTH, 10));
 
         JPanel card = Theme.card(null);
         card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));

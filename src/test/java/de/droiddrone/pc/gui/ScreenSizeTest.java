@@ -6,6 +6,7 @@ import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Rectangle;
@@ -136,6 +137,109 @@ class ScreenSizeTest {
         Rectangle screen = new Rectangle(0, 0, 1280, 672); // 1920x1080 at 150 %, taskbar off
         assertEquals(new Dimension(960, 560), ScreenFit.least(new Dimension(960, 560), screen));
         assertEquals(new Dimension(1100, 672), ScreenFit.least(new Dimension(1100, 760), screen));
+    }
+
+    /**
+     * F-075 (the bench's menus-windows, 1.0.71): OSD settings' ELEMENT card cut an element's words after the first line
+     * ("Cell voltage with a bar, pack voltage,"). Each fits the card's width now and asks for the height of all its lines.
+     */
+    @Test
+    void theOsdElementsWordsAreWholeInTheirCard() {
+        Theme.install();
+        Font font = Theme.font(Font.PLAIN, 13f);
+        int oneLine = Theme.label("<html>Cell voltage</html>", font, Theme.TEXT).getPreferredSize().height;
+        int wrapped = 0;
+        for (OsdElement e : OsdElement.values()) {
+            JLabel help = OsdSettingsDialog.helpLabel();
+            help.setText(OsdSettingsDialog.helpHtml(e));
+            Dimension d = help.getPreferredSize();
+            assertTrue(d.width <= OsdSettingsDialog.INFO_TEXT_WIDTH, e + " as wide as the card at most: " + d.width);
+            int textWidth = help.getFontMetrics(font).stringWidth(e.help);
+            if (textWidth > OsdSettingsDialog.INFO_TEXT_WIDTH) {
+                wrapped++;
+                assertTrue(d.height >= 2 * oneLine, e + ": the height of its wrapped lines, " + d.height + " for a line of " + oneLine);
+            } else {
+                assertTrue(d.height >= oneLine, e + ": one whole line");
+            }
+        }
+        assertTrue(wrapped > 0, "some words are longer than a line");
+        JLabel battery = OsdSettingsDialog.helpLabel();
+        battery.setText(OsdSettingsDialog.helpHtml(OsdElement.BATTERY));
+        assertTrue(battery.getPreferredSize().height >= 2 * oneLine, "BATTERY's words on two lines: " + battery.getPreferredSize());
+        // as the card lays it out: the width it has, the height it asks for - nothing cut
+        battery.setSize(battery.getPreferredSize());
+        assertEquals(battery.getPreferredSize().height, battery.getHeight());
+    }
+
+    /**
+     * F-075 (the bench's sleep-small-window at 1093 x 584, 1.0.71): QUEUED: OVERWATCH opened under the sleep buttons,
+     * cut in half at the card's edge. The LINK card's rows now scroll it into sight as it opens, the view's top at the
+     * top of a row (PHONE), never through one. Laid out off screen as the LINK card's rows are.
+     */
+    @Test
+    void aLineThatOpensAtTheFootOfTheLinkCardIsScrolledIntoSightWhole() {
+        Theme.install();
+        JPanel rows = new LinkCardLayout.Rows(new java.awt.GridBagLayout());
+        java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+        c.gridx = 0;
+        c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        c.weightx = 1;
+        c.insets = new java.awt.Insets(0, 0, 6, 0);
+        JLabel title = Theme.sectionTitle("Pilot mode");
+        rows.add(title, c);
+        JPanel fields = new JPanel(new java.awt.GridLayout(0, 1, 0, 6));
+        JLabel phone = Theme.label("PHONE", Theme.headingFont(11f), Theme.MUTED);
+        fields.add(phone);
+        fields.add(new javax.swing.JComboBox<>(new String[]{"MobileYankee"}));
+        fields.add(Theme.label("CONNECT AS", Theme.headingFont(11f), Theme.MUTED));
+        fields.add(new javax.swing.JComboBox<>(new String[]{"Pilot - fly the drone"}));
+        rows.add(fields, c);
+        JButton pilot = Theme.primaryButton("Pilot UAV");
+        rows.add(pilot, c);
+        JLabel queued = Theme.label("QUEUED: OVERWATCH (AT CHECK-IN)", Theme.headingFont(11f), Theme.WARN);
+        Fold fold = new Fold(queued, false);
+        rows.add(fold, c);
+        rows.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), c); // the rows go on under it
+        JPanel stats = new JPanel(new java.awt.GridLayout(2, 2, 8, 6));
+        for (String s : new String[]{"PHONE BATTERY", "-", "FLIGHT CONTROLLER", "-"}) stats.add(Theme.label(s, Theme.headingFont(11f), Theme.MUTED));
+        rows.add(stats, c);
+        JScrollPane scroll = new JScrollPane(rows, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(javax.swing.BorderFactory.createEmptyBorder());
+        javax.swing.JFrame frame = new javax.swing.JFrame(); // never shown
+        try {
+            frame.setContentPane(scroll);
+            fold.setShown(true, false);
+            frame.pack();
+            Offscreen.layout(frame, 320, 2000);
+            Rectangle line = SwingUtilities.convertRectangle(queued.getParent(), queued.getBounds(), rows);
+            int chrome = frame.getHeight() - scroll.getHeight();
+            Offscreen.layout(frame, 320, chrome + line.y + line.height / 2); // the card ends half way down the line
+            javax.swing.JViewport v = scroll.getViewport();
+            line = SwingUtilities.convertRectangle(queued.getParent(), queued.getBounds(), rows);
+            int y0 = v.getViewPosition().y, h = v.getExtentSize().height;
+            assertTrue(line.y + line.height > y0 + h, "the line cut at the card's edge, as on the bench: " + line + " in " + y0 + "+" + h);
+
+            LinkCardLayout.reveal(queued);
+            int y = v.getViewPosition().y;
+            assertTrue(line.y >= y && line.y + line.height <= y + h, "the line whole in sight: " + line + " in " + y + "+" + h);
+            int phoneTop = SwingUtilities.convertPoint(fields, phone.getLocation(), rows).y;
+            assertTrue(y == fields.getY() + 0 || y == phoneTop || y == pilot.getY(), "the view's top at a row's top, not through one: " + y
+                    + " (rows at " + title.getY() + ", " + fields.getY() + ", " + pilot.getY() + ")");
+            LinkCardLayout.reveal(queued);
+            assertEquals(y, v.getViewPosition().y, "in sight already: nothing scrolls");
+        } finally {
+            frame.dispose();
+        }
+    }
+
+    @Test
+    void theViewsTopGoesToTheNextRowsTopWhileTheLineStaysInSight() {
+        int[] tops = {0, 30, 60, 120, 200};
+        assertEquals(30, LinkCardLayout.revealY(0, 200, 230, 205, 220, tops), "20 px wanted: on to the next row's top");
+        assertEquals(0, LinkCardLayout.revealY(0, 230, 230, 205, 220, tops), "in sight: as it is");
+        assertEquals(20, LinkCardLayout.revealY(0, 200, 300, 205, 220, new int[]{0, 210}), "no row's top before the line: as little as will do");
+        assertEquals(25, LinkCardLayout.revealY(0, 200, 225, 205, 220, tops), "not past the rows' end");
+        assertEquals(120, LinkCardLayout.revealY(200, 100, 400, 130, 140, tops), "above the view: its row's top at the top");
     }
 
     @Test

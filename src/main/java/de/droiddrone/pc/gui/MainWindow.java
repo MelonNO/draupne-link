@@ -4104,7 +4104,8 @@ public class MainWindow extends JFrame {
         sleepFold = new Fold(sleepButtons, true); // folds away while the drone is armed, and back when it is disarmed
         powerRow.add(sleepFold, c);
         queuedLine.setToolTipText("Sent when the phone next listens; FLEET in the map window cancels it");
-        powerRow.add(folded(queuedLine, 0), c); // a mode queued for the chosen phone (not connected)
+        // a mode queued for the chosen phone (not connected); F-075: scrolled into sight when it opens on a low window
+        powerRow.add(folded(queuedLine, 0).whenOpened(() -> LinkCardLayout.reveal(queuedLine)), c);
         JPanel interval = new JPanel(new BorderLayout(8, 0));
         interval.setOpaque(false);
         interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);

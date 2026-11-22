@@ -590,11 +590,16 @@ final class MapWindow extends JFrame {
                 map.centreOn((s + n) / 2, (w + e) / 2, Math.max(map.zoom(), 12));
                 syncFollow();
             }
-            Dialogs.message(this, parsed.items().size() + " drawings and symbols, " + parsed.pins().size() + " pins imported.",
+            Dialogs.message(this, importedText(parsed.items().size(), parsed.pins().size()),
                     "Import", javax.swing.JOptionPane.INFORMATION_MESSAGE);
         } catch (java.io.IOException | RuntimeException e) {
             Dialogs.message(this, "Import failed: " + e.getMessage(), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
+    }
+
+    /** What IMPORT brought, in the right number (F-075: "1 drawings and symbols, 1 pins imported."). */
+    static String importedText(int items, int pins) {
+        return items + (items == 1 ? " drawing or symbol, " : " drawings and symbols, ") + pins + (pins == 1 ? " pin" : " pins") + " imported.";
     }
 
     /** PLACE AT: a position typed or pasted in any format the map writes; a point of the drawing on, else a symbol. */

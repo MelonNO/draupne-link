@@ -233,7 +233,7 @@ class MapToolsScenario {
             ui.click("Open");
             ui.until("the import to be said done", 20_000, () -> ui.sees("imported") || ui.sees("Import failed"));
             ui.shot("the KML imported");
-            rig.check(ui.sees("1 drawings and symbols, 1 pins imported"), "IMPORT says what it brought: one line, one pin");
+            rig.check(ui.sees("1 drawing or symbol, 1 pin imported"), "IMPORT says what it brought: one line, one pin");
             ui.click("OK");
             waitForDrawings(rig, 1);
             rig.check(drawings(rig) == 1 && read(pins).contains("Alpha"), "the line and the pin are back: " + drawings(rig) + " drawing(s), pins: " + read(pins).strip());

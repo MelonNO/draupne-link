@@ -54,6 +54,14 @@ class MapToolsTest {
         return n;
     }
 
+    /** F-075: IMPORT said "1 drawings and symbols, 1 pins imported." */
+    @Test
+    void importSaysWhatItBroughtInTheRightNumber() {
+        assertEquals("1 drawing or symbol, 1 pin imported.", MapWindow.importedText(1, 1));
+        assertEquals("2 drawings and symbols, 0 pins imported.", MapWindow.importedText(2, 0));
+        assertEquals("0 drawings and symbols, 3 pins imported.", MapWindow.importedText(0, 3));
+    }
+
     @Test
     void theRulerMeasuresLegsClosesOnItsFirstPointAndCanBeKept(@TempDir Path dir) {
         MapGraphics g = new MapGraphics(null);
