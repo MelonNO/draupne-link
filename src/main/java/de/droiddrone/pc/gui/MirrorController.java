@@ -264,7 +264,7 @@ final class MirrorController implements AutoCloseable {
     }
 
     /** A state from the pilot PC (Swing thread). */
-    private void apply(Map<String, byte[]> s) {
+    void apply(Map<String, byte[]> s) {
         if (client == null) return;
         Mirror.Mode mode = Mirror.Mode.decode(s.get(Mirror.MODE));
         Mirror.Mode before = mirroredMode;
@@ -286,15 +286,21 @@ final class MirrorController implements AutoCloseable {
         mirroredObserved = obs == null || mode == null || mode.mode() != Mirror.OBSERVER ? List.of() : obs;
         String text = Mirror.text(s.get(MirrorCodec.MAP));
         if (text != null && !text.equals(mapText)) {
-            mapText = text;
-            Kml.Parsed parsed = Kml.read(text);
-            Pins p = new Pins(null);
-            for (Pins.Pin pin : parsed.pins()) p.add(pin.name(), pin.lat(), pin.lon());
-            MapGraphics g = new MapGraphics(null);
-            g.addAll(parsed.items());
-            mirroredPins = p;
-            mirroredGraphics = g;
-            mapsShowingMirror.clear(); // every map takes the new ones
+            mapText = text; // one that can't be read is not tried again either: the next that differs is
+            try {
+                Kml.Parsed parsed = Kml.read(text);
+                Pins p = new Pins(null);
+                for (Pins.Pin pin : parsed.pins()) p.add(pin.name(), pin.lat(), pin.lon());
+                MapGraphics g = new MapGraphics(null);
+                g.addAll(parsed.items());
+                mirroredPins = p;
+                mirroredGraphics = g;
+                mapsShowingMirror.clear(); // every map takes the new ones
+            } catch (RuntimeException | StackOverflowError e) {
+                // a text cut short or not KML: it ended this whole state on the Swing thread - the drones, the marks
+                // and the FLEET list of it never reached the maps. The last map that could be read stays
+                host.logLine("Spectator: the pilot PC's map can't be read - the last one stays.");
+            }
         }
         List<MapView> maps = new ArrayList<>();
         maps.add(host.miniMap());
