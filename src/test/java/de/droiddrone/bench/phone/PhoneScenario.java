@@ -77,7 +77,9 @@ class PhoneScenario {
             if (phone.device()) {
                 phone.installApp(); // the app that is there, unless the run names an APK
             } else {
-                Path apk = PhoneRig.builtApk();
+                // Q-006: the bench build (the released app answers over Tailscale only; the emulator has none)
+                Path apk = phone.appApk();
+                phone.stopTheOther();
                 phone.install(apk);
                 film.remark("Installed " + apk.getFileName() + "; the phone says version " + phone.version());
                 check(apk.getFileName().toString().contains(phone.version()), "the installed app is the built one: " + phone.version());

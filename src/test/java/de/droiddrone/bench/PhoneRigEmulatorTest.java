@@ -19,9 +19,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * and device, and for every step the same adb commands in the same order - written down here from the rig as it was
  * on 2026-11-21 (commit ea36694), where each method sent them itself. The emulator scenarios run every night; a
  * change that alters what they send has to change this test first.
+ * <p>
+ * Q-006 (2.3.0-pc.58, the phone answers over Tailscale only; the emulator has none): the package flown there is the
+ * bench build's, whose link takes every address in the emulator alone. Its APK comes from build/flight-bench and is
+ * installed with -t (it is test-only); before it, the other package (the released app's) is stopped, as both want the
+ * link port. The update test flies the released app's package there ({@link PhoneRig.Target#flying}).
  */
 class PhoneRigEmulatorTest {
-    private static final String APP = "de.droiddrone.flight.pc";
+    /** The package flown on the emulator since Q-006: the bench build's. */
+    private static final String APP = "de.droiddrone.flight.pc.bench";
+    private static final String RELEASED = "de.droiddrone.flight.pc";
     private final RecordingAdb adb = new RecordingAdb();
     private final List<Long> pauses = new ArrayList<>();
     private final long[] now = {1_000_000};
@@ -45,8 +52,9 @@ class PhoneRigEmulatorTest {
         assertEquals("emulator-5584", t.serial());
         assertEquals("emulator-5584", PhoneRig.SERIAL);
         assertEquals("draupne-bench", PhoneRig.AVD);
-        assertEquals(APP, PhoneRig.APP);
-        assertEquals(APP, t.app());
+        assertEquals(RELEASED, PhoneRig.APP);
+        assertEquals(APP, t.app(), "the bench build (Q-006)");
+        assertTrue(t.benchBuild());
         assertEquals(PhoneRig.Kind.EMULATOR, t.kind());
         assertEquals(EnumSet.allOf(PhoneRig.Capability.class), t.can());
         assertNull(t.link(), "its link port is reached through a forwarded port");
@@ -68,7 +76,7 @@ class PhoneRigEmulatorTest {
         assertEquals(List.of("shell getprop sys.boot_completed"), sent());
 
         rig.install(Path.of("build", "flight", "DRAUPNE-Flight.apk"));
-        assertEquals(List.of("install -r " + Path.of("build", "flight", "DRAUPNE-Flight.apk")), sent());
+        assertEquals(List.of("install -r -t " + Path.of("build", "flight", "DRAUPNE-Flight.apk")), sent());
         assertEquals(180L, adb.timeouts.get(adb.count() - 1));
 
         rig.clearData();
@@ -196,7 +204,7 @@ class PhoneRigEmulatorTest {
     @Test
     void whatTheScenariosSentThemselvesIsSentTheSameThroughTheRig(@TempDir Path build) throws Exception {
         adb.says("shell getprop sys.boot_completed", "1").says("install", "Success").says("shell ss", "State Recv-Q Send-Q");
-        Path apk = Files.createDirectories(build.resolve("flight")).resolve("DRAUPNE-Flight-2.3.0-pc.55.apk");
+        Path apk = Files.createDirectories(build.resolve("flight-bench")).resolve("DRAUPNE-Flight-2.3.0-pc.58-beta-bench.apk");
         Files.write(apk, new byte[]{1});
         String before = System.getProperty("bench.build");
         System.setProperty("bench.build", build.toString());
@@ -214,13 +222,14 @@ class PhoneRigEmulatorTest {
             List<String> opening = sent();
             assertEquals("shell getprop sys.boot_completed", opening.get(0));
             assertEquals("root", opening.get(1));
-            assertEquals("install -r " + apk, opening.get(2));
-            assertEquals("shell pm grant " + APP + " android.permission.CAMERA", opening.get(3));
-            assertEquals("shell locksettings set-disabled false", opening.get(10)); // the grants: one more since Android 8's storage (2026-11-22)
+            assertEquals("shell am force-stop " + RELEASED, opening.get(2), "the other package gives up the link port (Q-006)");
+            assertEquals("install -r -t " + apk, opening.get(3));
+            assertEquals("shell pm grant " + APP + " android.permission.CAMERA", opening.get(4));
+            assertEquals("shell locksettings set-disabled false", opening.get(11)); // the grants: one more since Android 8's storage (2026-11-22)
             assertEquals(List.of("shell am force-stop " + APP, "shell rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml",
                     "shell input keyevent KEYCODE_WAKEUP", "shell wm dismiss-keyguard", "shell am start -n " + APP + "/de.droiddrone.flight.MainActivity",
                     "emu redir add udp:" + link.getPort() + ":" + PhoneRig.linkOnThePhone(),
-                    "root", "shell ip netns list"), opening.subList(11, opening.size())); // no router of its own (Android 11 on): nothing more
+                    "root", "shell ip netns list"), opening.subList(12, opening.size())); // no router of its own (Android 11 on): nothing more
             assertTrue(link.getAddress().isLoopbackAddress());
             assertTrue(rig.target().reach().isEmpty(), "the fence needs no way through for the emulator: its plan's reach is none, as ever");
         } finally {
@@ -270,6 +279,39 @@ class PhoneRigEmulatorTest {
         assertEquals("for DRAUPNE Link", PhoneWords.SCREEN_TITLE);
         assertEquals("START", PhoneWords.SCREEN_START);
         assertEquals("Connected to PC", PhoneWords.SCREEN_CONNECTED);
+    }
+
+    /**
+     * Q-006: the update test flies the released app's package on the emulator (its two test builds take every address
+     * there, as the bench build does): the normal build from build/flight, the bench build stopped first.
+     */
+    @Test
+    void theUpdateTestFliesTheReleasedAppsPackageAndTheBenchBuildGivesUpThePort(@TempDir Path build) throws Exception {
+        PhoneRig.Target released = PhoneRig.Target.emulator().flying(PhoneRig.APP);
+        assertEquals(RELEASED, released.app());
+        assertTrue(!released.benchBuild());
+        assertEquals(PhoneRig.Target.emulator().can(), released.can(), "the same emulator, every capability as ever");
+        PhoneRig update = new PhoneRig(null, released, adb, pauses::add, () -> now[0], null);
+        adb.says("install", "Success");
+        Path normal = Files.createDirectories(build.resolve("flight")).resolve("DRAUPNE-Flight-2.3.0-pc.58-beta.apk");
+        Files.write(normal, new byte[]{1});
+        String before = System.getProperty("bench.build");
+        System.setProperty("bench.build", build.toString());
+        try {
+            assertEquals(normal, update.appApk());
+            update.installApp();
+            assertEquals(List.of("shell am force-stop " + APP, "install -r -t " + normal), sent());
+            update.stopTheOther();
+            assertEquals(List.of("shell am force-stop " + APP), sent());
+            rig.stopTheOther();
+            assertEquals(List.of("shell am force-stop " + RELEASED), sent());
+            // no bench build yet: said how to make one
+            String said = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, PhoneRig::benchApk).getMessage();
+            assertTrue(said.contains("flight-app\\build.ps1 -Bench"), said);
+        } finally {
+            if (before == null) System.clearProperty("bench.build");
+            else System.setProperty("bench.build", before);
+        }
     }
 
     @Test

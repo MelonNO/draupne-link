@@ -172,6 +172,10 @@ function Invoke-Night {
             [void]$pending.Add("$($part[4]) - no emulator set up yet (docs/TESTING.md, 'The emulator').")
             continue
         }
+        if ($part[1] -eq '*PhoneNight*' -and -not (Test-BenchBuild)) {
+            [void]$pending.Add("$($part[4]) - $noBenchBuild.")
+            continue
+        }
         if ($hours -lt 0.2) {
             [void]$pending.Add("$($part[4]) - the night's time was up.")
             continue
@@ -202,6 +206,13 @@ function Invoke-Night {
 function Test-Emulator {
     Test-Path (Join-Path $env:LOCALAPPDATA 'DroidDroneBuild\avd\draupne-bench.avd')
 }
+
+# Q-006 (2.3.0-pc.58): the emulator flies the bench build - the released app answers over Tailscale only, and the
+# emulator has none. Without one built, the emulator's scenarios are put off with the way to make it.
+function Test-BenchBuild {
+    [bool](Get-ChildItem (Join-Path $repo 'build\flight-bench') -Filter '*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+$noBenchBuild = 'no bench build of the phone app yet (the emulator flies it since 2.3.0-pc.58: flight-app\build.ps1 -Bench)'
 
 # The emulator the scenarios use is whatever runs as emulator-5584 (bench\PhoneRig starts draupne-bench there when
 # none does). -Avd puts another Android device there for this run - the phone app on Android 8, 11, 13, 15 - and a run
@@ -401,6 +412,10 @@ if ($Run -ne 'report') {
         }
         if ($s -eq 'emulator' -and -not (Test-Emulator)) {
             [void]$pending.Add("The real phone app in the emulator - no emulator set up yet (docs/TESTING.md, 'The emulator').   .\bench.ps1 emulator")
+            continue
+        }
+        if ($s -eq 'emulator' -and -not (Test-BenchBuild)) {
+            [void]$pending.Add("The real phone app in the emulator - $noBenchBuild.   .\bench.ps1 emulator")
             continue
         }
         if ($s -eq 'sitl' -and -not (Test-Wsl)) {

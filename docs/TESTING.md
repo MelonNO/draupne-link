@@ -70,7 +70,11 @@ than half a second, anything the fence refused.
 
 Set up on this PC (2026-11-19): Android SDK emulator, `system-images;android-34;google_apis;x86_64`, the device
 `draupne-bench` in `%LOCALAPPDATA%\DroidDroneBuild\avd`. The suite starts it by itself, without a window (a minute).
-It installs the newest APK in `build\flight\` (`flight-app\build.ps1`). The emulator has no USB, so the phone has
+It installs the newest bench build in `build\flight-bench\` (`flight-app\build.ps1 -Bench`): since 2.3.0-pc.58 (Q-006) the
+released app answers over Tailscale only, and the emulator has none - the bench build's link takes every address in the
+emulator alone, and holds the released app's rule on a real phone. The update test flies the released app's package
+there (its two builds do the same); before an install the other package is stopped, as both want the link port. Make the
+bench build before an emulator run. The emulator has no USB, so the phone has
 no flight controller there - the header says FC LOST on a link that is up (`Pilot.linkUp` takes both). The first
 time, Windows' firewall asks about `adb`: either answer does.
 
@@ -299,7 +303,8 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
 ```
 
 - **Which phone, which app.** From the hardware file: `phone.adb` (its serial), `phone.ip` and `phone.port` (where
-  this PC reaches its link port: adb's cable carries no UDP, so the link goes over Wi-Fi or Tailscale, the bench's
+  this PC reaches its link port: adb's cable carries no UDP, so the link goes over Tailscale - since 2.3.0-pc.58 the
+  phone app answers there only, the bench build too on a real phone: `phone.ip` is the phone's Tailscale address; the bench's
   wire between as with the emulator), and `phone.package` - left out, the bench build
   (`de.droiddrone.flight.pc.bench`, `flight-app\build.ps1 -Bench`, put on the phone once by hand with `adb install
   -t -r`). These four a run may also say itself, and its word goes before the environment's and that before the

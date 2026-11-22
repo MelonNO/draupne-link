@@ -39,7 +39,10 @@ import java.util.stream.Stream;
  * connect to it, with a bad network in between if a scenario wants one. The emulator has no USB: the phone has no
  * flight controller there, and what is tested is everything else - the link, the camera's picture, sleep and wake,
  * updates. Nothing of this path changed when the second one came: the same serial, the same commands in the same
- * order ({@code PhoneRigEmulatorTest} holds it to that).</li>
+ * order ({@code PhoneRigEmulatorTest} holds it to that). Since Q-006 (2.3.0-pc.58: the phone answers over Tailscale
+ * only, and the emulator has no Tailscale) the app flown there is the bench build ({@code flight-app\build.ps1
+ * -Bench}, {@link BenchControl#PACKAGE}), whose link takes every address in the emulator alone; the released app's
+ * package is put there for the update test only, whose builds do the same ({@link #installApp}, {@link #stopTheOther}).</li>
  * <li><b>one real phone on adb</b> (2026-11-21, the hardware week): a production build, so no root; the model that
  * flies, with a SIM. The PC reaches its link port at the address of this bench's hardware file ({@link Hardware}),
  * through the fence's one way out ({@link Fence.Reach}), in a hardware run's JVM only. What the emulator's console
@@ -123,8 +126,9 @@ public final class PhoneRig implements AutoCloseable {
      * The phone a rig drives.
      *
      * @param serial                  as adb names it
-     * @param app                     the package the scenarios fly: the released app's on the emulator; on a real
-     *                                phone the bench build's unless the run says otherwise
+     * @param app                     the package the scenarios fly: the bench build's (on the emulator since Q-006: the
+     *                                released app answers over Tailscale only); on a real phone the bench build's
+     *                                unless the run says otherwise
      * @param link                    where this PC reaches the phone's link port; null when a port is forwarded ({@link Capability#UDP_REDIR})
      * @param releasedAppMayBeChanged the run's own word that the released app on a real phone may be cleared, stopped, installed over
      * @param sdk                     the Android SDK with adb in it
@@ -163,11 +167,19 @@ public final class PhoneRig implements AutoCloseable {
             return System.getProperty("bench.realLocalAppData", System.getenv("LOCALAPPDATA"));
         }
 
-        /** The bench's emulator, as ever. */
+        /**
+         * The bench's emulator, flying the bench build (Q-006: the released app answers over Tailscale only, and the
+         * emulator has none; the bench build's link takes every address there, and only there).
+         */
         public static Target emulator() {
             String local = local();
-            return new Target(SERIAL, Kind.EMULATOR, APP, null, EnumSet.allOf(Capability.class), true,
+            return new Target(SERIAL, Kind.EMULATOR, BenchControl.PACKAGE, null, EnumSet.allOf(Capability.class), true,
                     local == null ? null : Path.of(local, "Android", "Sdk"), local == null ? null : Path.of(local, "DroidDroneBuild", "avd"), null);
+        }
+
+        /** The same phone, flying the other of DRAUPNE Flight's two packages (the update test on the emulator: the released app's). */
+        public Target flying(String otherApp) {
+            return new Target(serial, kind, otherApp, link, can, releasedAppMayBeChanged, sdk, avdHome, apk);
         }
 
         /**
@@ -609,21 +621,50 @@ public final class PhoneRig implements AutoCloseable {
 
     // ------------------------------------------------------------------ the app
 
-    /** The newest phone app this repo has built (flight-app\build.ps1). */
+    /** The newest phone app this repo has built (flight-app\build.ps1): the released app's package. */
     public static Path builtApk() throws IOException {
-        Path dir = Path.of(System.getProperty("bench.build", "build")).resolve("flight");
-        if (!Files.isDirectory(dir)) throw new IllegalStateException("No phone app built yet: run flight-app\\build.ps1 (" + dir + ")");
+        return newest("flight", "flight-app\\build.ps1");
+    }
+
+    /**
+     * The newest bench build this repo has built (flight-app\build.ps1 -Bench): what the emulator flies since Q-006 -
+     * the released app answers over Tailscale only, and the emulator has none.
+     */
+    public static Path benchApk() throws IOException {
+        return newest("flight-bench", "flight-app\\build.ps1 -Bench");
+    }
+
+    private static Path newest(String folder, String build) throws IOException {
+        Path dir = Path.of(System.getProperty("bench.build", "build")).resolve(folder);
+        if (!Files.isDirectory(dir)) throw new IllegalStateException("No phone app built yet: run " + build + " (" + dir + ")");
         try (Stream<Path> files = Files.list(dir)) {
             return files.filter(p -> p.getFileName().toString().endsWith(".apk")).max(Comparator.comparingLong(p -> p.toFile().lastModified()))
-                    .orElseThrow(() -> new IllegalStateException("No .apk in " + dir + ": run flight-app\\build.ps1"));
+                    .orElseThrow(() -> new IllegalStateException("No .apk in " + dir + ": run " + build));
         }
     }
 
-    /** The APK over the app that is there. On a real phone only past the guard, which reads the APK's package first. */
+    /** The build of the package this rig flies: the bench build's newest, or the released app's (build/flight). */
+    public Path appApk() throws IOException {
+        return target.benchBuild() ? benchApk() : builtApk();
+    }
+
+    /**
+     * The APK over the app that is there. On a real phone only past the guard, which reads the APK's package first.
+     * Test-only APKs too ("-t": the bench build is one, on the emulator as on a real phone).
+     */
     public void install(Path apk) {
-        String said = device() ? new String(adbBytes(180, "install", "-r", "-t", apk.toString()), StandardCharsets.UTF_8)
-                : new String(adbBytes(180, "install", "-r", apk.toString()), StandardCharsets.UTF_8);
+        String said = new String(adbBytes(180, "install", "-r", "-t", apk.toString()), StandardCharsets.UTF_8);
         if (!said.contains("Success")) throw new IllegalStateException("The phone app did not install: " + said);
+    }
+
+    /**
+     * The emulator: the other of DRAUPNE Flight's two packages stopped, so that the one this rig flies has the link
+     * port - both want it, and the emulator may have the released app's from an update test or an earlier run. A
+     * real phone's other app is left alone (the guard's rule): there the run's file says which one is flown.
+     */
+    public void stopTheOther() {
+        if (device()) return;
+        shell("am force-stop " + (target.benchBuild() ? APP : BenchControl.PACKAGE));
     }
 
     /**
@@ -637,13 +678,15 @@ public final class PhoneRig implements AutoCloseable {
     }
 
     /**
-     * The app a scenario flies, put on the phone. The emulator gets the newest build of this repo, as ever. A real
-     * phone keeps the app it has - the bench build is put there once by hand ({@code adb install -t}) - unless the
-     * run names an APK ({@code -Pphone.apk=...}); an app that is not there at all stops the scenario.
+     * The app a scenario flies, put on the phone. The emulator gets the newest build of this repo of the package it
+     * flies - the bench build since Q-006 ({@link #appApk}) - and the other package is stopped ({@link #stopTheOther}).
+     * A real phone keeps the app it has - the bench build is put there once by hand ({@code adb install -t}) - unless
+     * the run names an APK ({@code -Pphone.apk=...}); an app that is not there at all stops the scenario.
      */
     public void installApp() throws IOException {
         if (!device()) {
-            install(builtApk());
+            stopTheOther();
+            install(appApk());
             return;
         }
         if (target.apk() != null) {
@@ -872,6 +915,13 @@ public final class PhoneRig implements AutoCloseable {
         if (log.contains(PhoneWords.LINK_PORT_TAKEN)) {
             throw new AssertionError("The phone app could not have its link port (its log: \"" + PhoneWords.LINK_PORT_TAKEN + "\"): is the other DRAUPNE Flight "
                     + "running on this phone? One of the two at a time - both want the same port.");
+        }
+        // Q-006: on a real phone the link is on Tailscale or silent
+        if (log.contains(PhoneWords.LINK_NOT_BOUND)) {
+            say("The phone app could not bind its link port on its Tailscale address (its log: \"" + PhoneWords.LINK_NOT_BOUND + "\"): is the other DRAUPNE "
+                    + "Flight running on this phone? It stays silent and tries again.");
+        } else if (log.contains(PhoneWords.NO_TAILSCALE) && !log.contains(PhoneWords.ON_TAILSCALE)) {
+            say("The phone app says it is not on Tailscale (its log: \"" + PhoneWords.NO_TAILSCALE + "\"): the PC cannot reach it until Tailscale is on.");
         }
         if (!runs) {
             throw new AssertionError("Behind the lock screen START cannot be looked for or pressed, and the app's service has not started by itself within 20 s "
@@ -1420,6 +1470,11 @@ public final class PhoneRig implements AutoCloseable {
         if (!linkSaid) {
             linkSaid = true;
             say("The phone's link port is reached at the hardware file's address, port " + at.getPort() + (Fence.isUp() ? ": the one way the fence has through it." : "."));
+            // Q-006: on a real phone the app answers over Tailscale only - the bench build too (it widens in the emulator alone)
+            if (!de.droiddrone.common.TailscaleOnly.peer(at.getAddress())) {
+                say("WARNING: the hardware file's phone.ip is not a Tailscale address. Since 2.3.0-pc.58 (Q-006) the phone app - the bench build "
+                        + "too, on a real phone - answers over Tailscale only: nothing will answer there. Put the phone's Tailscale address (100.x) in phone.ip.");
+            }
         }
         return at;
     }

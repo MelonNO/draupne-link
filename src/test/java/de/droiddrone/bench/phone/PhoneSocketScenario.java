@@ -80,7 +80,8 @@ class PhoneSocketScenario {
             phone.ensureRunning();
             phone.adb("root"); // for `ss`: another app's sockets are root's to see
             Ui.pause(3000);
-            if (!keepApp) phone.install(PhoneRig.builtApk());
+            phone.stopTheOther(); // Q-006: the bench build flies here; the released app's package, if there, gives up the port
+            if (!keepApp) phone.install(phone.appApk());
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();

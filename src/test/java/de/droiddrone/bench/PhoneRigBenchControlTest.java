@@ -94,9 +94,12 @@ class PhoneRigBenchControlTest {
                 "shell am broadcast" + to + "KILL",
                 "shell am broadcast" + to + "CRASH",
                 "shell am broadcast" + to + "STATS"), adb.sent);
-        // the emulator's way of the first, for the same file
+        // the emulator's way of the first, for the same file (as root: the emulator flies the bench build since Q-006)
         RecordingAdb emulator = new RecordingAdb();
         PhoneRigGuardTest.rig(PhoneRig.Target.emulator(), emulator).stopForgettingRestarts();
-        assertEquals("shell rm -f /data/data/" + PhoneRig.APP + "/shared_prefs/crashGuard.xml", emulator.sent.get(1));
+        assertEquals("shell rm -f /data/data/" + BenchControl.PACKAGE + "/shared_prefs/crashGuard.xml", emulator.sent.get(1));
+        RecordingAdb released = new RecordingAdb();
+        PhoneRigGuardTest.rig(PhoneRig.Target.emulator().flying(PhoneRig.APP), released).stopForgettingRestarts();
+        assertEquals("shell rm -f /data/data/" + PhoneRig.APP + "/shared_prefs/crashGuard.xml", released.sent.get(1));
     }
 }

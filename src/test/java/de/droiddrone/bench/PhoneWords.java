@@ -58,6 +58,12 @@ public final class PhoneWords {
     public static final String NEW_SESSION_SAME_PC = "a new session";
     /** The link socket closed, stuck or opened anew (F-039). */
     public static final String LINK_SOCKET = "Link socket:";
+    /** Q-006: the link socket parked, silent - the phone is not on Tailscale (never in the emulator's bench build) ... */
+    public static final String NO_TAILSCALE = "no Tailscale - the phone answers nothing";
+    /** ... or bound on its Tailscale address ... */
+    public static final String ON_TAILSCALE = "on Tailscale, ";
+    /** ... or that address could not be bound (the other DRAUPNE Flight holds the port): silent, tried again. */
+    public static final String LINK_NOT_BOUND = "could not be bound";
     /** The camera closed while a change of the picture's size was being set up (F-047), met and survived. */
     public static final String CAMERA_CLOSED_MEANWHILE = "the camera was closed meanwhile";
     /** The camera's session set up; the camera closed; the encoder started anew. */
@@ -116,6 +122,9 @@ public final class PhoneWords {
             new Origin(NEW_SESSION, MAIN + "Udp.java", "log(\"" + NEW_SESSION + " \" + packet.getAddress().getHostAddress()"),
             new Origin(NEW_SESSION_SAME_PC, MAIN + "Udp.java", "log(\"The pilot connects again (its link was lost): " + NEW_SESSION_SAME_PC + "\");"),
             new Origin(LINK_SOCKET, MAIN + "Udp.java", "\"" + LINK_SOCKET + " was closed - \"", "\"" + LINK_SOCKET + " nothing left the phone for \""),
+            new Origin(NO_TAILSCALE, MAIN + "Udp.java", "static final String NO_TAILSCALE = \"" + NO_TAILSCALE + "\";", "log(\"Link socket: \" + where(at));"),
+            new Origin(ON_TAILSCALE, MAIN + "Udp.java", ": \"" + ON_TAILSCALE + "\" + at.address.getHostAddress() + \":\" + port;"),
+            new Origin(LINK_NOT_BOUND, MAIN + "Udp.java", "\" " + LINK_NOT_BOUND + " (\" + e + \") - silent, tried again\""),
             new Origin(CAMERA_CLOSED_MEANWHILE, MAIN + "InternalCamera.java", "log(\"createCaptureRequest: " + CAMERA_CLOSED_MEANWHILE + ": \"+ e);"),
             new Origin(CAMERA_CONFIGURED, MAIN + "InternalCamera.java", "log(\"CameraCaptureSession - " + CAMERA_CONFIGURED + "\");"),
             new Origin(CAMERA_CLOSED, MAIN + "InternalCamera.java", "log(\"" + CAMERA_CLOSED + ".\");"),

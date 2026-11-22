@@ -72,7 +72,10 @@ class PhoneUpdateScenario {
 
     @Test
     void thePhoneAppUpdatesFromThePcWithoutAQuestionOnThePhone() throws Exception {
-        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        PhoneRig.Target ofRun = PhoneRig.Target.ofRun();
+        // the emulator flies the bench build since Q-006; this scenario flies the released app's package there - its two
+        // test builds take every address in the emulator, as the bench build does (bench-overlay/update-test, BenchNet)
+        PhoneRig.Target target = ofRun.kind() == PhoneRig.Kind.EMULATOR ? ofRun.flying(PhoneRig.APP) : ofRun;
         Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
         final String APP = target.app();
         if (target.kind() == PhoneRig.Kind.DEVICE) {
@@ -118,6 +121,7 @@ class PhoneUpdateScenario {
                 // over whatever is there: "-d" takes a lower version code (an earlier run's pc.55-test). The app can't be
                 // uninstalled from the shell - it is the phone's device admin (screen lock), and only test admins go.
                 // (A real phone is never taken down a version: there the receiver goes on only over an older or equal one.)
+                phone.stopTheOther(); // the emulator: the bench build of the scenarios before gives up the link port
                 phone.installAnyVersion(receiver);
                 rig.check(phone.version().equals(treeVersion), "the phone runs " + treeVersion + ": " + phone.version());
                 // "Install unknown apps" off before the app opens: Android ends an app whose switch is turned off (the
@@ -255,13 +259,14 @@ class PhoneUpdateScenario {
                             rig.film.remark("The phone's version at the end could not be read: " + e.getMessage());
                         }
                     } else {
-                        // as found for the next scenarios: the normal build in build/flight (a lower version code: "-d")
+                        // the released app's package back to the normal build in build/flight (a lower version code: "-d"),
+                        // so that no test build of it lingers - and stopped: the next scenarios fly the bench build
+                        // (Q-006: the normal build answers over Tailscale only, the emulator has none - it stays silent)
                         try {
                             String said = phone.installAnyVersion(PhoneRig.builtApk());
                             if (!said.contains("Success")) throw new IllegalStateException(said);
-                            rig.check(phone.version().equals(treeVersion), "the normal phone app is back for the next scenarios: " + phone.version());
-                            phone.grantPermissions();
-                            phone.launch();
+                            rig.check(phone.version().equals(treeVersion), "the normal phone app is back: " + phone.version());
+                            phone.forceStop();
                         } catch (RuntimeException e) {
                             rig.film.remark("The normal phone app not put back: " + e.getMessage());
                         }
