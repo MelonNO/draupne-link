@@ -331,6 +331,11 @@ public class DDService extends Service {
         return FcArmedState.of(msp, mavlink);
     }
 
+    /** Q-004: a flight controller is on the port, answering or not - for the screen's armed rule (ArmedTouch). */
+    boolean isFcBoardOnPort() {
+        return FcArmedState.boardOnPort(msp);
+    }
+
     /** Whether a PC has connected (a keyed Connect taken), as the check window asks. */
     boolean isPcConnected() {
         Udp u = udp;

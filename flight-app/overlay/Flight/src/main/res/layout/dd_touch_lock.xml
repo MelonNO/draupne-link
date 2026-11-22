@@ -26,7 +26,9 @@
             android:textSize="30sp"
             android:textStyle="bold" />
 
+        <!-- Q-004: "Armed: locked by itself..." while the lock is on by itself (MainActivity.lockTouches) -->
         <TextView
+            android:id="@+id/tvLockText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"

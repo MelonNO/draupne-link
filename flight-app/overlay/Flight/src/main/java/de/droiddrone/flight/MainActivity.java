@@ -61,6 +61,7 @@ import static de.droiddrone.common.Logcat.log;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import de.droiddrone.common.ArmedTouch;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.SettingsCommon;
@@ -144,9 +145,41 @@ public class MainActivity extends Activity {
      * off (developer options, some battery savers) an animation ends at once, and a single tap would unlock.
      */
     private final android.os.Handler unlockTimer = new android.os.Handler(android.os.Looper.getMainLooper());
-    private final Runnable unlockAfterHold = this::unlockTouches;
+    private final Runnable unlockAfterHold = this::unlockedByHand;
     private static final long UNLOCK_HOLD_MS = 2000;
     private static final String LOCKED_STATE = "touchLocked";
+    private static final String LOCKED_BY_ITSELF_STATE = "touchLockedByItself";
+    /**
+     * Q-004 (the maintainer, 2026-11-22: "While armed the touch lock is on by itself; holding DISCONNECT for 3 s still
+     * works"): when the lock is on and whether a press of Stop counts is ArmedTouch's to say (Common, with its tests);
+     * this screen asks it once a second (updateArmedTouch) and at every touch of Stop (stopTouched).
+     */
+    private final ArmedTouch armedTouch = new ArmedTouch();
+    /** Stop held while armed: since when (elapsedRealtime; 0: no hold runs), counted by a timer as the unlock's hold is. */
+    private long stopHoldSince;
+    /** This touch on Stop began while armed: a hold or nothing, never a click. */
+    private boolean stopGesture;
+    private final android.os.Handler stopHoldTimer = new android.os.Handler(android.os.Looper.getMainLooper());
+    /** The hold's fill on the button, as the unlock box has one; null while no hold runs. */
+    private android.graphics.drawable.ClipDrawable stopFill;
+    /** Until when (elapsedRealtime) Stop says "Armed: hold 3 s" after a tap that did nothing. */
+    private long armedLineUntil;
+    private static final long ARMED_LINE_MS = 2500;
+    private final Runnable stopHoldTick = new Runnable() {
+        @Override
+        public void run() {
+            if (stopHoldSince == 0) return;
+            long held = android.os.SystemClock.elapsedRealtime() - stopHoldSince;
+            if (ArmedTouch.pressCounts(true, held)) {
+                endStopHold();
+                stopHeld();
+                return;
+            }
+            bStartStopService.setText(getString(R.string.dd_stop_holding, ArmedTouch.holdSecondsLeft(held)));
+            if (stopFill != null) stopFill.setLevel((int) (held * 10_000 / ArmedTouch.HOLD_MS));
+            stopHoldTimer.postDelayed(this, 50);
+        }
+    };
     /** pc.21: the service's wake notification opens the app with this over the lock screen, screen on. */
     public static final String ACTION_WAKE = "de.droiddrone.flight.pc.WAKE";
     /** The screen is dimmed and may go off (standby, deep sleep); set once per change, not every second. */
@@ -203,6 +236,7 @@ public class MainActivity extends Activity {
             }
             startStopService();
         });
+        bStartStopService.setOnTouchListener(this::stopTouched); // Q-004: armed, Stop is a 3 s hold - never this click
         etIp = findViewById(R.id.editText_ip);
         etPort = findViewById(R.id.editText_port);
         etKey = findViewById(R.id.editText_key);
@@ -223,8 +257,14 @@ public class MainActivity extends Activity {
         tvOldApp = findViewById(R.id.tvOldApp);
         tvOldApp.setOnClickListener(v -> removeOldApp());
         tvUpdate = findViewById(R.id.tvUpdate);
-        findViewById(R.id.lockScreen).setOnClickListener(v -> lockTouches());
-        if (savedInstanceState != null && savedInstanceState.getBoolean(LOCKED_STATE)) lockTouches();
+        findViewById(R.id.lockScreen).setOnClickListener(v -> {
+            armedTouch.lockedByHand(); // Q-004: the user's own lock stays as it is left, armed or not
+            lockTouches();
+        });
+        if (savedInstanceState != null && savedInstanceState.getBoolean(LOCKED_STATE)) {
+            armedTouch.restore(savedInstanceState.getBoolean(LOCKED_BY_ITSELF_STATE));
+            lockTouches();
+        }
         llPowerRow = findViewById(R.id.llPowerRow);
         tvPowerMode = findViewById(R.id.tvPowerMode);
         bWake = findViewById(R.id.powerWake);
@@ -576,8 +616,11 @@ public class MainActivity extends Activity {
         // happened, so a start that failed doesn't leave it dead
         bStartStopService.setEnabled(DDService.isRunning == serviceWantedRunning || System.currentTimeMillis() - serviceSwitchedAt > 5000);
         if (DDService.isRunning){
-            bStartStopService.setText(getResources().getString(R.string.disconnect));
-            bStartStopService.setBackgroundResource(R.drawable.dd_button_stop);
+            if (stopHoldSince == 0) { // Q-004: a hold on Stop shows its own count and fill (stopHoldTick)
+                bStartStopService.setText(android.os.SystemClock.elapsedRealtime() < armedLineUntil
+                        ? R.string.dd_armed_hold : R.string.disconnect);
+                bStartStopService.setBackgroundResource(R.drawable.dd_button_stop);
+            }
             String wrongKey = Udp.wrongKeyFrom;
             boolean wrongKeyNow = wrongKey != null && System.currentTimeMillis() - Udp.wrongKeyAt < 30000;
             if (DDService.isConnected){
@@ -660,6 +703,7 @@ public class MainActivity extends Activity {
             etKey.setEnabled(false);
             cbConnectOnStartup.setEnabled(false);
         }else{
+            if (stopHoldSince != 0) endStopHold(); // the service went meanwhile: nothing left to hold for
             bStartStopService.setText(getResources().getString(R.string.connect));
             bStartStopService.setBackgroundResource(R.drawable.dd_button_primary);
             setPill(R.string.dd_pill_offline, getColor(R.color.dd_panel_2), colorMuted);
@@ -917,6 +961,13 @@ public class MainActivity extends Activity {
     private void startStopService(){
         Intent intent = new Intent(getApplicationContext(), DDService.class);
         if (DDService.isRunning){
+            // Q-004: armed, the service ends only by Stop held for 3 s (stopHeld) - not by a tap, nor by anything
+            // else that gets here (a permission's answer). It closes the flight controller's port: the failsafe
+            if (armedForTouch()) {
+                log("Stop while armed: only when held " + ArmedTouch.HOLD_MS / 1000 + " s.");
+                showArmedHoldLine();
+                return;
+            }
             stopService(intent);
             serviceWantedRunning = false;
         }else{
@@ -926,6 +977,104 @@ public class MainActivity extends Activity {
         }
         serviceSwitchedAt = System.currentTimeMillis();
         updateUi();
+    }
+
+    // ---- Q-004: armed - the touch lock on by itself, Stop only when held (ArmedTouch has the rules) ----
+
+    /** Armed, for this screen: the flight controller reads ARMED, or is not known while a PC flies it (a board on USB). */
+    private boolean armedForTouch() {
+        DDService s = DDService.instance();
+        return s != null && ArmedTouch.armed(s.fcArmedState(), s.isFcBoardOnPort(), s.isPcConnected());
+    }
+
+    /**
+     * Once a second, and when the screen comes up: the lock on by itself while armed - also in an app that has just
+     * opened itself again - and off by itself 5 s after the flight controller reads disarmed. A lock put on by hand
+     * is left alone. A few volatile reads on this screen's thread.
+     */
+    private void updateArmedTouch() {
+        DDService s = DDService.instance();
+        long now = android.os.SystemClock.elapsedRealtime();
+        int todo = s == null ? armedTouch.look(ArmedTouch.UNKNOWN, false, false, now)
+                : armedTouch.look(s.fcArmedState(), s.isFcBoardOnPort(), s.isPcConnected(), now);
+        if (todo == ArmedTouch.LOCK) {
+            log("Armed: the screen locks by itself.");
+            lockTouches();
+        } else if (todo == ArmedTouch.UNLOCK) {
+            log("Disarmed: the screen unlocks by itself.");
+            unlockTouches();
+        }
+    }
+
+    /** The unlock box was held 2 s. */
+    private void unlockedByHand() {
+        armedTouch.unlockedByHand(android.os.SystemClock.elapsedRealtime());
+        unlockTouches();
+    }
+
+    /**
+     * A touch on Stop. Begun while armed it is a hold or nothing, never the button's click: the button counts 3, 2, 1
+     * and fills, and only ArmedTouch.HOLD_MS held ends the service (stopHoldTick); let go before, slid off the button
+     * or a second finger: nothing but one short line. Not armed: false - the click, as ever.
+     */
+    private boolean stopTouched(View v, MotionEvent e) {
+        int action = e.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            stopGesture = DDService.isRunning && armedForTouch();
+            if (stopGesture) {
+                // the card scrolls: a finger that drifts in three seconds must not hand the touch to the scrolling
+                if (v.getParent() != null) v.getParent().requestDisallowInterceptTouchEvent(true);
+                beginStopHold();
+            }
+            return stopGesture;
+        }
+        if (!stopGesture) return false;
+        boolean outside = e.getX() < 0 || e.getY() < 0 || e.getX() > v.getWidth() || e.getY() > v.getHeight();
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+                || action == MotionEvent.ACTION_POINTER_DOWN || (action == MotionEvent.ACTION_MOVE && outside)) {
+            if (stopHoldSince != 0) { // before the three seconds were up
+                endStopHold();
+                showArmedHoldLine();
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) stopGesture = false;
+        }
+        return true; // to its end this touch is the hold's: it never turns into a click
+    }
+
+    private void beginStopHold() {
+        stopHoldSince = android.os.SystemClock.elapsedRealtime();
+        armedLineUntil = 0;
+        stopFill = new android.graphics.drawable.ClipDrawable(new android.graphics.drawable.ColorDrawable(0x88FCD405),
+                android.view.Gravity.START, android.graphics.drawable.ClipDrawable.HORIZONTAL);
+        bStartStopService.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
+                getDrawable(R.drawable.dd_button_stop), stopFill}));
+        stopHoldTimer.removeCallbacks(stopHoldTick);
+        stopHoldTick.run();
+    }
+
+    /** The hold is over, held long enough or not: the button as it was. */
+    private void endStopHold() {
+        stopHoldSince = 0;
+        stopHoldTimer.removeCallbacks(stopHoldTick);
+        stopFill = null;
+        bStartStopService.setBackgroundResource(R.drawable.dd_button_stop);
+        bStartStopService.setText(R.string.disconnect);
+    }
+
+    /** Stop was held for 3 s while armed: somebody means it. */
+    private void stopHeld() {
+        if (!DDService.isRunning) return;
+        log("Stop held " + ArmedTouch.HOLD_MS / 1000 + " s while armed: the service ends.");
+        stopService(new Intent(getApplicationContext(), DDService.class));
+        serviceWantedRunning = false;
+        serviceSwitchedAt = System.currentTimeMillis();
+        updateUi();
+    }
+
+    /** A tap on Stop while armed did nothing: the button says why for a moment (updateUi puts "Stop" back). */
+    private void showArmedHoldLine() {
+        armedLineUntil = android.os.SystemClock.elapsedRealtime() + ARMED_LINE_MS;
+        bStartStopService.setText(R.string.dd_armed_hold);
     }
 
     private boolean checkPermissions(){
@@ -1011,6 +1160,7 @@ public class MainActivity extends Activity {
         main.setKeepScreenOn(true);
         powerLookLow = false; // the line above undid it; updateUi dims again if the mode wants
         updateUi();
+        updateArmedTouch(); // Q-004: armed as the screen comes up (the app opened itself again in flight): locked
         uiTimer = new Timer();
         TimerTask tt = new TimerTask() {
             private int ticks;
@@ -1026,6 +1176,7 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         updateUi();
+                        updateArmedTouch();
                         updateLockStatus();
                     }
                 });
@@ -1053,6 +1204,8 @@ public class MainActivity extends Activity {
         if (touchLock != null) return;
         touchLock = getLayoutInflater().inflate(R.layout.dd_touch_lock, null);
         addContentView(touchLock, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // Q-004: on by itself (armed), it says so - and that it goes off by itself
+        ((TextView) touchLock.findViewById(R.id.tvLockText)).setText(armedTouch.byItself() ? R.string.dd_locked_armed : R.string.dd_locked_text);
         touchLock.setOnTouchListener((v, e) -> true); // every touch outside the box ends here
         View fill = touchLock.findViewById(R.id.unlockFill);
         touchLock.findViewById(R.id.unlockBox).setOnTouchListener((v, e) -> {
@@ -1162,6 +1315,7 @@ public class MainActivity extends Activity {
     protected void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean(LOCKED_STATE, touchLock != null);
+        outState.putBoolean(LOCKED_BY_ITSELF_STATE, armedTouch.byItself());
     }
 
     @Override
@@ -1190,6 +1344,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy(){
         unlockTimer.removeCallbacks(unlockAfterHold);
+        stopHoldTimer.removeCallbacks(stopHoldTick);
         super.onDestroy();
     }
 

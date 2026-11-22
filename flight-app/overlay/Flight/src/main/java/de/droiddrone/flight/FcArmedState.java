@@ -76,10 +76,7 @@ final class FcArmedState {
      * guards, never for a stick frame.
      */
     private static int unread(Msp msp, long now) {
-        int status = msp == null ? Serial.STATUS_NOT_INITIALIZED : msp.portStatus();
-        int port = status == Serial.STATUS_NOT_INITIALIZED ? de.droiddrone.common.FcUnread.PORT_CLOSED
-                : status == Serial.STATUS_DEVICE_NOT_CONNECTED ? de.droiddrone.common.FcUnread.PORT_NOTHING
-                : de.droiddrone.common.FcUnread.PORT_BOARD;
+        int port = port(msp);
         long since = nothingSinceMs;
         if (port != de.droiddrone.common.FcUnread.PORT_NOTHING) {
             if (since != 0) nothingSinceMs = 0;
@@ -89,6 +86,22 @@ final class FcArmedState {
         }
         long armedAt = lastArmedMs;
         return de.droiddrone.common.FcUnread.state(port, now - since, PowerMode.isSleepMode(), armedAt == 0 ? -1 : now - armedAt);
+    }
+
+    /** What the flight controller's port says, as FcUnread names it: closed, nothing on USB, or a board. */
+    private static int port(Msp msp) {
+        int status = msp == null ? Serial.STATUS_NOT_INITIALIZED : msp.portStatus();
+        return status == Serial.STATUS_NOT_INITIALIZED ? de.droiddrone.common.FcUnread.PORT_CLOSED
+                : status == Serial.STATUS_DEVICE_NOT_CONNECTED ? de.droiddrone.common.FcUnread.PORT_NOTHING
+                : de.droiddrone.common.FcUnread.PORT_BOARD;
+    }
+
+    /**
+     * Q-004: a flight controller is on the port - found on USB, asked for, opened, failing - whether it answers or
+     * not. The screen's armed rule (ArmedTouch) counts "not known" only then: with no board on USB nothing changes.
+     */
+    static boolean boardOnPort(Msp msp) {
+        return port(msp) == de.droiddrone.common.FcUnread.PORT_BOARD;
     }
 
     /**

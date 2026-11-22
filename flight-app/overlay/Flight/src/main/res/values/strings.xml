@@ -67,6 +67,10 @@
     <string name="dd_locked_text">Touches ignored. The PC link and flight controller keep running.</string>
     <string name="dd_unlock">HOLD 2 S
 TO UNLOCK</string>
+    <!-- Q-004: armed - the lock is on by itself, Stop only when held -->
+    <string name="dd_locked_armed">Armed: locked by itself. Unlocks after disarm.</string>
+    <string name="dd_armed_hold">Armed: hold 3 s</string>
+    <string name="dd_stop_holding">Hold… %1$d</string>
     <string name="dd_hint_props">Props off on the bench. Keep the app running in flight.</string>
 
     <!-- pc.21: power modes (PowerMode) -->
