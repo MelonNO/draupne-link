@@ -372,6 +372,11 @@ public final class BetaflightUsb implements AutoCloseable {
         return wire.available() <= 0;
     }
 
+    /** Armed now, as MSP_STATUS says: for a write Betaflight answers OK while armed and drops (F-079). */
+    public boolean armed() throws IOException {
+        return MotorTest.armed(msp(de.droiddrone.common.FcCommon.MSP_STATUS, null));
+    }
+
     /** What firmware answers on this port over MSP ("BTFL", "INAV", ...), without entering the CLI (no restart). */
     public String firmware() throws IOException {
         return new String(msp(2 /* MSP_FC_VARIANT */, null), StandardCharsets.US_ASCII).trim();

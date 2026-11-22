@@ -21,7 +21,7 @@ final class LevelBoard {
     private final byte[] uid;
     private final List<Integer> requests = new ArrayList<>();
     private int calibrations, attitudes, opens;
-    private boolean gone;
+    private boolean gone, armed;
 
     /** @param id the last byte of its id: board {@code id} of MotorTestRig.id */
     LevelBoard(int id) {
@@ -118,16 +118,26 @@ final class LevelBoard {
         };
     }
 
+    /** Armed (by its radio): MSP_STATUS says so, and a calibration is answered OK but not made - as Betaflight does (msp.c). */
+    synchronized void arm() {
+        armed = true;
+    }
+
     /** Called with the board held. */
     private byte[] answer(int code) {
         if (code == 2) return "BTFL".getBytes(StandardCharsets.US_ASCII); // MSP_FC_VARIANT
         if (code == 160) return uid.clone(); // MSP_UID
+        if (code == 101) { // MSP_STATUS: ARM is the first mode flag
+            byte[] status = new byte[11];
+            status[6] = (byte) (armed ? 1 : 0);
+            return status;
+        }
         if (code == Orientation.MSP_ATTITUDE) {
             attitudes++;
             return new byte[6]; // flat, heading 0
         }
         if (code == DroneSetup.MotorsPage.MSP_ACC_CALIBRATION) {
-            calibrations++;
+            if (!armed) calibrations++;
             return new byte[0];
         }
         return null;

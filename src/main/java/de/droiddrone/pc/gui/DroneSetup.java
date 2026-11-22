@@ -2446,8 +2446,15 @@ final class DroneSetup {
             level.set(State.PENDING, "Calibrating. Keep it still...");
         }
 
-        /** MSP_ACC_CALIBRATION, Betaflight's ~2 s of samples, then flat must read flat (within 3 degrees). */
+        /**
+         * MSP_ACC_CALIBRATION, Betaflight's ~2 s of samples, then flat must read flat (within 3 degrees). Not on an
+         * armed board (F-079): Betaflight answers OK then and calibrates nothing, and the row said "Calibrated".
+         */
         private void calibrate(BetaflightUsb fc) throws IOException, InterruptedException {
+            if (fc.armed()) {
+                javax.swing.SwingUtilities.invokeLater(() -> level.set(State.WARN, BetaflightUsb.ARMED));
+                return;
+            }
             fc.msp(MSP_ACC_CALIBRATION, null);
             Thread.sleep(2500);
             de.droiddrone.pc.setup.Orientation.Attitude a = de.droiddrone.pc.setup.Orientation.parse(

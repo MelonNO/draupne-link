@@ -74,6 +74,25 @@ class DroneSetupLevelTest {
         assertEquals("WARN: Flight controller lost: not calibrated. Calibrate again.", rig.shows(MotorsPageRig.LEVEL));
     }
 
+    /**
+     * F-079: Betaflight answers MSP_ACC_CALIBRATION OK while armed and does nothing (msp.c) - the row said
+     * "Calibrated: reads flat." for a level never taken. Now an armed board is not asked, and the row says why.
+     */
+    @Test
+    void anArmedBoardIsNotCalibratedAndTheRowSaysItIsArmed() throws Exception {
+        open();
+        LevelBoard board = plug("MADEUP1");
+        Waits.await(() -> board.attitudes() >= 1, 20_000, "the live view to follow the board");
+        board.arm();
+        rig.press("CALIBRATE");
+        Waits.waitForOnSwing(() -> rig.says(MotorsPageRig.LEVEL).equals("The drone is armed. Disarm it first."), 15_000,
+                "the row to say the board is armed");
+        assertEquals("WARN: The drone is armed. Disarm it first.", rig.shows(MotorsPageRig.LEVEL));
+        assertFalse(board.requests().contains(DroneSetup.MotorsPage.MSP_ACC_CALIBRATION), "not asked: " + board.requests());
+        int before = board.attitudes();
+        Waits.await(() -> board.attitudes() >= before + 3, 10_000, "the live view to go on with the same board");
+    }
+
     @Test
     void withABoardThereCalibrateLevelsThatBoard() throws Exception {
         open();
