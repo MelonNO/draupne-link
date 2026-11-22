@@ -95,10 +95,23 @@ public final class Pilot {
         rig.radio.sticks(0, 0, 0, value);
     }
 
-    /** STANDBY MODE: the link ended on purpose, the phone resting. */
+    /**
+     * STANDBY MODE: the link ended on purpose, the phone resting. In a link's first 3 s, before its flight controller
+     * has been heard or the phone counted as having none (FC LOST comes after that grace), whether the drone is armed
+     * is not known, and not known counts as armed (F-062): the app asks first. That question alone is answered Standby
+     * mode, as a pilot would on the ground, and the film says so; the emulator's phone has no flight controller, and a
+     * scenario that ends its link right after the link came back meets it. "ARMED" or "may still be flying" is not
+     * answered here: after a pilot's STANDBY in a scenario that is a fault, and the wait for PILOT UAV fails on it.
+     */
     public void standby() {
         ui.waitForControl("STANDBY MODE", 5_000); // the card's words follow LINK READY at its next round (STOP before)
         ui.click("STANDBY MODE");
+        long end = System.currentTimeMillis() + 2000;
+        while (System.currentTimeMillis() < end && !ui.has("Keep flying") && !ui.has("PILOT UAV")) Ui.pause(100);
+        if (ui.has("Keep flying") && ui.sees("Not known yet if the drone is armed")) {
+            rig.film.remark("STANDBY MODE asked first (\"Not known yet if the drone is armed\", the link's first seconds): answered Standby mode.");
+            ui.click("Standby mode"); // the question's button: its window is in front, so found before the LINK card's STANDBY MODE
+        }
         ui.waitForControl("PILOT UAV", 20_000);
     }
 
