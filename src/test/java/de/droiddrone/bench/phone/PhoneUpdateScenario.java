@@ -173,7 +173,23 @@ class PhoneUpdateScenario {
                     ui.until("UPDATE PHONE APP again", 30_000, () -> ui.has("UPDATE PHONE APP") && Ui.edt(() -> ui.find("UPDATE PHONE APP").isEnabled()));
 
                     // ---- B. allowed once by hand, as on a drone's phone that is set up: the update goes through
+                    String pidBefore = phone.pid();
                     phone.shell("appops set " + APP + " REQUEST_INSTALL_PACKAGES allow");
+                    // Android 11 ends the app when its "Install unknown apps" is turned ON as well (2026-11-22, draupne-a30:
+                    // the link was gone for ~100 s and the update asked meanwhile went nowhere); Android 12 on ends it only
+                    // when the switch is turned off, Android 8 never. So the app is opened again here and the link waited
+                    // for, on every Android - where the app was not ended that changes nothing. (The PC counts a link lost
+                    // after 2 s without a word: the pause lets it see an ended app before the wait for the link begins.)
+                    Ui.pause(4000);
+                    String pidAfter = phone.pid();
+                    boolean ended = pidBefore.isEmpty() || !pidAfter.equals(pidBefore);
+                    rig.film.remark("\"Install unknown apps\" allowed while linked: " + (ended ? "Android ended the app (its process " + (pidBefore.isEmpty() ? "?" : pidBefore)
+                            + " -> " + (pidAfter.isEmpty() ? "none" : pidAfter) + "), as Android 11 does" : "the app kept running (process " + pidAfter + ")")
+                            + ". The app is opened again and the PC's link waited for before UPDATE PHONE APP, on every Android.");
+                    phone.launch();
+                    phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
+                    ui.until("the PC's link back after \"Install unknown apps\" was allowed", 120_000, pilot::linkUp);
+                    ui.until("UPDATE PHONE APP offered again", 30_000, () -> ui.has("UPDATE PHONE APP") && Ui.edt(() -> ui.find("UPDATE PHONE APP").isEnabled()));
                     if (phone.device()) phone.reverseAgain(); // adb's way back to this PC's server, should the cable have been out
                     long t0 = System.currentTimeMillis();
                     ui.click("UPDATE PHONE APP");
