@@ -41,6 +41,27 @@ class LinkCardTest {
         assertEquals("REGAINING CONTROL...", PowerController.connectText(true, false, false, false, false, true, -1), "always listening");
     }
 
+    /**
+     * I-010 (the maintainer: "before the link is up, call the button STOP, not STANDBY MODE"): while PILOT UAV waits for
+     * the phone the button only stops trying. STANDBY MODE from the connection's first LINK READY - and still when that
+     * link is lost again (F-074's rule).
+     */
+    @Test
+    void beforeTheLinkIsUpTheButtonSaysStop() {
+        assertEquals("STOP", PowerController.connectText(true, false, false, false, false, false, -1, false, false), "connecting, never up");
+        assertEquals("STANDBY MODE", PowerController.connectText(true, false, false, false, false, false, -1, false, true), "up, or up and lost again");
+        assertEquals("PILOT UAV", PowerController.connectText(false, false, false, false, false, false, -1, false, false), "nothing connected");
+        assertEquals("STOP WATCHING", PowerController.connectText(true, true, false, false, true, false, -1, false, false), "watching keeps its words");
+        assertEquals("REGAINING CONTROL IN 0:05", PowerController.connectText(true, false, false, false, false, true, 5_000, false, false),
+                "a sleeper waited for keeps its countdown");
+        assertEquals("STOP OBSERVING", PowerController.connectText(false, false, true, true, false, false, -1, false, false));
+        // the texts that name the button say what it reads
+        assertEquals("STOP", MainWindow.endLinkButton(false, false));
+        assertEquals("STANDBY MODE", MainWindow.endLinkButton(false, true));
+        assertEquals("STOP WATCHING", MainWindow.endLinkButton(true, false));
+        assertEquals("Stops trying to reach the phone", PowerController.STOP_TIP);
+    }
+
     @Test
     void modeWords() {
         assertEquals("OVERWATCH", PowerController.modeWord(ControlLink.POWER_OVERWATCH));

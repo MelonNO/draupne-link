@@ -1527,8 +1527,8 @@ public class MainWindow extends JFrame {
         // locked while connected: it shows (stripes, padlock), and a click on it says why, under it (never over the video).
         // No controller: the same kind of notice says so
         ((TacticalButton) calibrateButton).setShowLocked(true);
-        LockedNotice calibrateLocked = new LockedNotice(calibrateButton, video, "CALIBRATE IS LOCKED",
-                "Connected: STANDBY MODE first. No sticks may reach the drone while calibrating.");
+        // I-010: by the words of the button that ends the link now (STOP before the link is up)
+        Map<String, LockedNotice> calibrateLocked = new HashMap<>();
         LockedNotice noController = new LockedNotice(calibrateButton, video, "NO CONTROLLER",
                 "Plug the radio in by USB, choose 'USB Joystick (HID)' on it, then CALIBRATE again.");
         calibrateButton.addActionListener(e -> {
@@ -1537,16 +1537,18 @@ public class MainWindow extends JFrame {
                 return;
             }
             logLine("CALIBRATE: plug the radio in by USB, choose 'USB Joystick (HID)'.");
-            calibrateLocked.dismiss();
+            calibrateLocked.values().forEach(LockedNotice::dismiss);
             if (!noController.pop()) calibrate(); // no room for the notice: calibrate() says it in a message box
         });
         calibrateButton.addMouseListener(new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (calibrateButton.isEnabled()) return;
-                logLine("CALIBRATE locked while connected: " + endLinkButton() + " first.");
+                String end = endLinkButton();
+                logLine("CALIBRATE locked while connected: " + end + " first.");
                 noController.dismiss();
-                calibrateLocked.pop();
+                calibrateLocked.computeIfAbsent(end, b -> new LockedNotice(calibrateButton, video, "CALIBRATE IS LOCKED",
+                        "Connected: " + b + " first. No sticks may reach the drone while calibrating.")).pop();
             }
         });
         topLeft.add(calibrateButton); // 1.0.56: RC check moved to TOOLS (the pilot)
@@ -2851,14 +2853,21 @@ public class MainWindow extends JFrame {
     /** The phone list and CONNECT AS: only while not connected (1.0.39, the pilot) - the room goes to the minimap. */
     private JComponent linkFields;
 
-    /** 1.0.64: the button that ends this link, by its name on the card (the texts said "disconnect": no such button). */
-    private String endLinkButton() {
+    /**
+     * 1.0.64: the button that ends this link, by its name on the card (the texts said "disconnect": no such button).
+     * I-010: STOP until this connection's first LINK READY; a sleeper waited for keeps the words it had.
+     */
+    String endLinkButton() {
         Connection c = connection;
-        return endLinkButton(c != null && c.getLink().isSpectator());
+        return endLinkButton(c != null && c.getLink().isSpectator(), c == null || c.getLink().wasEverReady() || power.phoneAsleep);
     }
 
     static String endLinkButton(boolean watching) {
-        return watching ? "STOP WATCHING" : "STANDBY MODE";
+        return endLinkButton(watching, true);
+    }
+
+    static String endLinkButton(boolean watching, boolean linkWasUp) {
+        return watching ? "STOP WATCHING" : PowerController.endText(linkWasUp);
     }
 
     private void setLinkEditable(boolean editable) {
@@ -4578,7 +4587,7 @@ public class MainWindow extends JFrame {
             // armed now or within the lost-drone window: never a click away from cutting this PC's own sticks
             // (F-062: nor while its link hasn't read yet whether its drone is armed)
             Dialogs.message(this, "This PC flies another drone (or did moments ago: it may still be flying).\n"
-                    + "Land it, press STANDBY MODE, then PILOT UAV on " + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
+                    + "Land it, press " + endLinkButton() + ", then PILOT UAV on " + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         // 1.0.50 (the pilot): no confirm - CONNECT on the card connects (the 1.0.49 question is gone); a PC that may
@@ -4692,12 +4701,15 @@ public class MainWindow extends JFrame {
             missedSaid = missed;
         }
         String text = PowerController.connectText(c != null, c != null && c.getLink().isSpectator(), observation != null, observerRole(),
-                ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()), waiting, wakeInMs(), missed > 0);
+                ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()), waiting, wakeInMs(), missed > 0, c == null || c.getLink().wasEverReady());
         if (!text.equals(connectButton.getText())) {
             connectButton.setText(text);
             // what a press does while it waits (it read like a status, and a press let the phone sleep on)
-            String tip = waiting && !c.getLink().isSpectator() ? "Press: stop waiting - the phone sleeps on" : null;
+            String tip = waiting && !c.getLink().isSpectator() ? "Press: stop waiting - the phone sleeps on"
+                    : PowerController.STOP.equals(text) ? PowerController.STOP_TIP : null;
             if (!java.util.Objects.equals(tip, connectButton.getToolTipText())) connectButton.setToolTipText(tip);
+            // I-010: CALIBRATE's lock names the button as it reads now (STOP, then STANDBY MODE once the link is up)
+            if (!calibrateButton.isEnabled()) calibrateButton.setToolTipText("Locked while connected: " + endLinkButton() + " first");
         }
     }
 
@@ -5566,7 +5578,7 @@ public class MainWindow extends JFrame {
         // flies: an observation (no sticks, streams only) ends first and CONNECT AS goes to Pilot below
         if (observation != null) stopObservation();
         if (connection != null) {
-            Dialogs.message(this, "Connected: STANDBY MODE first, then PILOT UAV on " + phone + ".",
+            Dialogs.message(this, "Connected: " + endLinkButton() + " first, then PILOT UAV on " + phone + ".",
                     "Connected", JOptionPane.INFORMATION_MESSAGE);
             return;
         }

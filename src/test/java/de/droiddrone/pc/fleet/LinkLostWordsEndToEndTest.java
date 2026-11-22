@@ -41,14 +41,19 @@ class LinkLostWordsEndToEndTest {
         drone.start(0);
         wire = new Wire(InetAddress.getLoopbackAddress(), drone.port());
         link = new ControlLink(config, InetAddress.getLoopbackAddress(), wire.port(), 0);
+        wire.rule((toPhone, d, len) -> Wire.Rule.LOST); // nothing through yet: the link can't be up
         link.start();
         assertEquals("Waiting for the phone... (DRAUPNE Flight open? On Tailscale? Same key?)",
                 Connection.describe(link, ControlLink.State.CONNECTING), "no link up yet: the questions");
+        assertFalse(link.wasEverReady(), "I-010: no link up yet - the LINK card's button says STOP");
+        wire.clear();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+        assertTrue(link.wasEverReady(), "I-010: up - STANDBY MODE");
 
         wire.rule((toPhone, d, len) -> Wire.Rule.LOST); // the cut
         waitFor(() -> link.getState() == ControlLink.State.CONNECTING, 8000, "the link counted lost", log);
         assertEquals("Link lost - reconnecting.", Connection.describe(link, link.getState()));
+        assertTrue(link.wasEverReady(), "I-010: up once and lost - STANDBY MODE still, not STOP");
 
         wire.clear();
         waitFor(() -> link.getState() == ControlLink.State.READY, 10_000, "the link back", log);

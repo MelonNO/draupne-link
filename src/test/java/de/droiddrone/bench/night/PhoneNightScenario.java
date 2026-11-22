@@ -214,8 +214,7 @@ class PhoneNightScenario {
                         if (phone.sleepsOnBattery()) phone.plugged(); // a round that went wrong asleep must not leave the next one dozing
                         long until = System.currentTimeMillis() + 6 * 60_000L;
                         while (!ui.has("PILOT UAV") && System.currentTimeMillis() < until) {
-                            if (ui.has("STANDBY MODE")) ui.click("STANDBY MODE");
-                            if (ui.has("Keep flying")) ui.click("Standby mode");
+                            Pilot.endLink(ui); // STANDBY MODE, or STOP for a link that never came up
                             Ui.pause(5000);
                         }
                         if (!ui.has("PILOT UAV")) {

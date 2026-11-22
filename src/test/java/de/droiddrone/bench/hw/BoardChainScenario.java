@@ -89,7 +89,7 @@ class BoardChainScenario {
                     // the app finds the phone and connects, as in every hardware scenario
                     ui.until("the real phone, online, in the PHONE list", 90_000, () -> chosenPhone(ui).contains("online"));
                     ui.click("PILOT UAV");
-                    ui.waitForControl("STANDBY MODE", 30_000);
+                    pilot.connecting(30_000);
                     ui.until("the link up", 60_000, pilot::linkUp);
                     ui.until("the app to show the flight controller: LINK READY, not FC LOST", 60_000, () -> ui.has("LINK READY"));
                     ui.shot("PILOT UAV: the link is up and the app has the real flight controller's word");

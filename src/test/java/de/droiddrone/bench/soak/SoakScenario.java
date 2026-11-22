@@ -142,7 +142,9 @@ class SoakScenario {
                     for (VirtualDrone d : rig.fleet.drones()) d.link().clear();
                     Ui.pause(3000);
                     try {
+                        // STANDBY MODE, or STOP when the try went wrong before the link was up (I-010)
                         if (ui.has("STANDBY MODE")) ui.click("STANDBY MODE");
+                        else if (Pilot.showsStop(ui)) ui.click(Pilot.STOP);
                         ui.waitForControl("PILOT UAV", 90_000);
                     } catch (Throwable stuck) {
                         rig.check(false, "the app could not be brought back to PILOT UAV after that: " + stuck.getMessage());

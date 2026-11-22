@@ -21,8 +21,32 @@ public final class Pilot {
     /** PILOT UAV on the phone that is chosen, and the link up. */
     public void connect() {
         ui.click("PILOT UAV");
-        ui.waitForControl("STANDBY MODE", 20_000);
+        connecting(20_000);
         ui.until("LINK READY in the header", 20_000, this::linkUp);
+        ui.waitForControl("STANDBY MODE", 5_000);
+    }
+
+    /** The LINK card's top button before the link is up (I-010; STANDBY MODE from the first LINK READY on). */
+    public static final String STOP = "STOP";
+
+    /** PILOT UAV taken: the LINK card's top button says STOP, or STANDBY MODE when the link is up already. */
+    public void connecting(long ms) {
+        ui.until("STOP (or STANDBY MODE) on the LINK card", ms, () -> showsStop(ui) || ui.has("STANDBY MODE"));
+    }
+
+    /** A button that says exactly STOP shows (Ui.has would also take "STOP WATCHING" when there is none). */
+    public static boolean showsStop(Ui ui) {
+        return ui.all(STOP).stream().anyMatch(c -> STOP.equalsIgnoreCase(Ui.edt(() -> Ui.textOf(c))));
+    }
+
+    /**
+     * Brings the app back towards "nothing connected" as a pilot would: STANDBY MODE, or STOP for a link that never
+     * came up (I-010); the question that may follow answered Standby mode.
+     */
+    public static void endLink(Ui ui) {
+        if (ui.has("STANDBY MODE")) ui.click("STANDBY MODE");
+        else if (showsStop(ui)) ui.click(STOP);
+        if (ui.has("Keep flying")) ui.click("Standby mode");
     }
 
     /**
@@ -73,6 +97,7 @@ public final class Pilot {
 
     /** STANDBY MODE: the link ended on purpose, the phone resting. */
     public void standby() {
+        ui.waitForControl("STANDBY MODE", 5_000); // the card's words follow LINK READY at its next round (STOP before)
         ui.click("STANDBY MODE");
         ui.waitForControl("PILOT UAV", 20_000);
     }

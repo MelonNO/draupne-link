@@ -65,6 +65,11 @@ final class DroneSetup {
             }
 
             @Override
+            public String endLinkButton() {
+                return main.endLinkButton();
+            }
+
+            @Override
             public String setting(String key) {
                 return main.config().getString(key);
             }
@@ -953,7 +958,7 @@ final class DroneSetup {
         /** CALIBRATE COMPASS: the calibration window takes the USB port; the page reads again once it is closed. */
         private void calibrateCompassNow() {
             if (main.isLinkActive()) {
-                compassPart.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                compassPart.set(State.WARN, main.endLinkButton() + " first: runs over USB, on the bench.");
                 return;
             }
             compassCalOpen = true;
@@ -1925,7 +1930,7 @@ final class DroneSetup {
         private void escsNow(boolean silence) {
             if (escBusy || escWanted != 0) return;
             if (main.isLinkActive()) {
-                escRow.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                escRow.set(State.WARN, main.endLinkButton() + " first: runs over USB, on the bench.");
                 return;
             }
             if (MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen() || OrientationCheckDialog.isOpen() || searching || searchWanted) {
@@ -1981,7 +1986,7 @@ final class DroneSetup {
         private void findGpsNow() {
             if (searching || searchWanted) return;
             if (main.isLinkActive()) {
-                gps.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                gps.set(State.WARN, main.endLinkButton() + " first: runs over USB, on the bench.");
                 return;
             }
             if (MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen() || OrientationCheckDialog.isOpen()) {
@@ -2196,6 +2201,11 @@ final class DroneSetup {
             /** The drone link is open: what runs over USB waits for STANDBY MODE. */
             boolean isLinkActive();
 
+            /** I-010: the LINK card's button that ends the link, as it reads now (STOP until the link is up). */
+            default String endLinkButton() {
+                return MainWindow.endLinkButton(false);
+            }
+
             /** A saved setting, or null. */
             String setting(String key);
 
@@ -2407,7 +2417,7 @@ final class DroneSetup {
          */
         private void calibrateLevel() {
             if (main.isLinkActive()) {
-                level.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                level.set(State.WARN, main.endLinkButton() + " first: runs over USB, on the bench.");
                 return;
             }
             BetaflightUsb open = liveFc;
@@ -2446,7 +2456,7 @@ final class DroneSetup {
 
         private void checkMotorsNow() {
             if (main.isLinkActive()) {
-                motors.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                motors.set(State.WARN, main.endLinkButton() + " first: runs over USB, on the bench.");
                 return;
             }
             motors.set(State.PENDING, "Motor test open.");
@@ -2466,7 +2476,7 @@ final class DroneSetup {
         /** CHECK IT: the guided check takes the USB port (the live view lets go of it meanwhile). */
         private void checkOrientationNow() {
             if (main.isLinkActive()) {
-                orientation.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                orientation.set(State.WARN, main.endLinkButton() + " first: runs over USB, on the bench.");
                 return;
             }
             orientation.set(State.PENDING, "Check open.");

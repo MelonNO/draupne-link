@@ -133,8 +133,7 @@ class SleepCycleScenario {
                         ui.shot("cycle " + (cycle + 1) + " went wrong");
                         long until = System.currentTimeMillis() + 8 * 60_000L;
                         while (!ui.has("PILOT UAV") && System.currentTimeMillis() < until) {
-                            if (ui.has("STANDBY MODE")) ui.click("STANDBY MODE");
-                            if (ui.has("Keep flying")) ui.click("Standby mode");
+                            Pilot.endLink(ui); // STANDBY MODE, or STOP for a link that never came up
                             Ui.pause(5000);
                         }
                         if (!ui.has("PILOT UAV")) {

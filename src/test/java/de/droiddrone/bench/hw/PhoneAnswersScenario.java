@@ -47,7 +47,7 @@ class PhoneAnswersScenario {
 
                 // PILOT UAV: the link, the camera's picture and the flight controller's word, all through the fence
                 ui.click("PILOT UAV");
-                ui.waitForControl("STANDBY MODE", 30_000);
+                pilot.connecting(30_000);
                 ui.until("the link up (LINK READY, or FC LOST when the phone has no flight controller)", 60_000, pilot::linkUp);
                 boolean board = ui.has("LINK READY");
                 rig.film.remark(board ? "The link is up and the flight controller answers." : "The link is up; the phone has no flight controller (FC LOST).");

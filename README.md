@@ -35,7 +35,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - Hardware decoding, pop-out video, F11 full screen, OSD layout editor.
 
 **Power modes** (disarmed; arming ends them)
-- **STANDBY MODE** (when connected): camera off, back in about 2 s.
+- **STANDBY MODE** (once the link is up): camera off, back in about 2 s. Until then the button is **STOP**.
 - **DEEP SLEEP:** phone sleeps, checks in every 0/1/2/5 min (0 = always listening). PILOT UAV brings it back at its next check-in.
 - Mode changes on a sleeping phone are queued and sent at its next check-in, without connecting.
 - **OVERWATCH:** asleep, camera watching. See [Overwatch](#overwatch).

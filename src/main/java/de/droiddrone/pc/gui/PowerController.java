@@ -772,16 +772,22 @@ final class PowerController {
     /**
      * The LINK card's top button (1.0.52, the pilot: "only ever three buttons"): PILOT UAV to fly; STANDBY MODE while
      * connected (the phone is left in standby); REGAINING CONTROL IN m:ss while a sleeping phone is waited for (pressing
-     * it lets the phone sleep on). Watching and observing keep their own words.
+     * it lets the phone sleep on). Watching and observing keep their own words. This one is for a link that has been up.
      */
     static String connectText(boolean connected, boolean spectatorLink, boolean observing, boolean observerRole, boolean spectatorRole,
                               boolean waitingForWake, long wakeInMs) {
-        return connectText(connected, spectatorLink, observing, observerRole, spectatorRole, waitingForWake, wakeInMs, false);
+        return connectText(connected, spectatorLink, observing, observerRole, spectatorRole, waitingForWake, wakeInMs, false, true);
     }
 
     /** As above; missed: the phone didn't check in when it should have (1.0.64) - the button says so while it counts on. */
     static String connectText(boolean connected, boolean spectatorLink, boolean observing, boolean observerRole, boolean spectatorRole,
                               boolean waitingForWake, long wakeInMs, boolean missed) {
+        return connectText(connected, spectatorLink, observing, observerRole, spectatorRole, waitingForWake, wakeInMs, missed, true);
+    }
+
+    /** As above; linkWasUp: this connection's link has been READY once - before that the button is {@link #STOP} (I-010). */
+    static String connectText(boolean connected, boolean spectatorLink, boolean observing, boolean observerRole, boolean spectatorRole,
+                              boolean waitingForWake, long wakeInMs, boolean missed, boolean linkWasUp) {
         if (observing) return "STOP OBSERVING";
         if (!connected) return observerRole ? "OBSERVE" : spectatorRole ? "WATCH" : "PILOT UAV";
         if (spectatorLink) return "STOP WATCHING";
@@ -791,8 +797,22 @@ final class PowerController {
             long s = Math.max(1, (wakeInMs + 999) / 1000);
             return (missed ? "MISSED CHECK - NEXT " : "REGAINING CONTROL IN ") + s / 60 + ":" + String.format(java.util.Locale.ROOT, "%02d", s % 60);
         }
-        return "STANDBY MODE";
+        return endText(linkWasUp);
     }
+
+    /**
+     * I-010 (the maintainer: "before the link is up, call the button STOP, not STANDBY MODE"): while PILOT UAV waits for
+     * the phone the button only stops trying - no standby is sent, nothing is asked (no link was up: ArmedCheck.CLEAR).
+     * STANDBY MODE from the connection's first LINK READY on, and also when that link is lost again (F-074's rule: the
+     * words of "not up yet" only before the first link).
+     */
+    static String endText(boolean linkWasUp) {
+        return linkWasUp ? "STANDBY MODE" : STOP;
+    }
+
+    static final String STOP = "STOP";
+    /** I-010: STOP's tooltip - what a press does. */
+    static final String STOP_TIP = "Stops trying to reach the phone";
 
     /** The mode the chosen phone is in now, or -1 when unknown. */
     static int shownPowerMode(ControlLink link, Asleep chosenAsleep, boolean asleep, boolean overwatching) {
