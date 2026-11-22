@@ -267,7 +267,7 @@ final class CompassCalibrationDialog extends JFrame {
                     retryAt = System.currentTimeMillis() + 1500;
                     String msg = e.getMessage();
                     ui(() -> {
-                        usb.set(State.BAD, "Lost: " + msg);
+                        usb.set(State.BAD, OrientationCheckDialog.lostLine(msg));
                         start.setEnabled(false);
                     });
                     main.logLine("Compass calibration: lost the flight controller (" + msg + ").");

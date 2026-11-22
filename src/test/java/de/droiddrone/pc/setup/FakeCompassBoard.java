@@ -23,7 +23,7 @@ public final class FakeCompassBoard {
     private String saved, ram;
     private double roll, pitch;
     private int nose;
-    private boolean cli, gone;
+    private boolean cli, gone, armed, armingLocked;
     private final StringBuilder line = new StringBuilder();
     private final List<String> cliSeen = new ArrayList<>();
     private int saves, restarts, attitudes;
@@ -72,6 +72,20 @@ public final class FakeCompassBoard {
         gone = false;
     }
 
+    /** Armed (by its radio): MSP_STATUS says so, and a '#' is not heard (Betaflight 4.4.1's tasks.c) - until disarmed. */
+    public synchronized void arm() {
+        armed = true;
+    }
+
+    public synchronized boolean armed() {
+        return armed;
+    }
+
+    /** Betaflight's arming block "MSP" (MSP_SET_ARMING_DISABLED) holds. */
+    public synchronized boolean armingLocked() {
+        return armingLocked;
+    }
+
     // ------------------------------------------------------------------ what happened, what it holds
 
     /** align_mag as saved: what Betaflight has after its next restart. */
@@ -117,7 +131,7 @@ public final class FakeCompassBoard {
 
     private void restart() {
         ram = saved;
-        cli = false;
+        cli = armed = armingLocked = false; // the arming block "MSP" is in memory only
         line.setLength(0);
         if (current != null) current.alive = false;
         current = null;
@@ -161,12 +175,13 @@ public final class FakeCompassBoard {
                         if (alive) typed(this, (char) b);
                     }
                 } else if (data.length == 1 && data[0] == '#') {
+                    if (armed) return; // Betaflight looks at no '#' while armed
                     cli = true;
                     line.setLength(0);
                     send("\r\nEntering CLI Mode, type 'exit' to return, or 'help'\r\n\r\n# ");
                 } else {
                     for (MspFrames.Frame f : frames.feed(data, data.length)) {
-                        byte[] reply = msp(f.code);
+                        byte[] reply = msp(f.code, f.payload);
                         byte[] frame = MspFrames.v1Request(f.code, reply);
                         frame[2] = reply == null ? MspFrames.ERROR : MspFrames.RESPONSE;
                         for (byte x : frame) out.add(x);
@@ -207,10 +222,15 @@ public final class FakeCompassBoard {
     }
 
     /** The answer's payload; null is Betaflight's error answer. Called with the board held. */
-    private byte[] msp(int code) {
+    private byte[] msp(int code, byte[] payload) {
         if (code == 2) return "BTFL".getBytes(StandardCharsets.US_ASCII); // MSP_FC_VARIANT
         if (code == 160) return uid.clone(); // MSP_UID
-        if (code == 101) return s16(125, 0, 1 | 1 << 2, 0, 0, 0); // MSP_STATUS: the accelerometer and a compass
+        if (code == 101) return s16(125, 0, 1 | 1 << 2, armed ? 1 : 0, 0, 0); // MSP_STATUS: the accelerometer and a compass; ARM first of the modes
+        if (code == 99) { // MSP_SET_ARMING_DISABLED: not 0 blocks arming (and disarms), 0 takes the block off
+            armingLocked = payload != null && payload.length > 0 && payload[0] != 0;
+            if (armingLocked) armed = false;
+            return new byte[0];
+        }
         if (code == Orientation.MSP_BOARD_ALIGNMENT_CONFIG) return s16(0, 0, 0);
         if (code == Orientation.MSP_ATTITUDE) {
             attitudes++;

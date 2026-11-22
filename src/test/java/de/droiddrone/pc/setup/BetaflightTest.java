@@ -191,10 +191,24 @@ class BetaflightTest {
         }
     }
 
+    /** The CLI's way in asks first (F-078): MSP_STATUS - not armed - then MSP_SET_ARMING_DISABLED; both answered. */
+    static void notArmed(FakeWire wire) {
+        wire.reply(0, mspAnswer(101, new byte[22]));
+        wire.reply(0, mspAnswer(99, new byte[0]));
+    }
+
+    /** Betaflight's MSP v1 answer ("$M>") as the text FakeWire sends. */
+    static String mspAnswer(int command, byte[] payload) {
+        byte[] f = BetaflightUsb.mspFrame(command, payload);
+        f[2] = '>';
+        return new String(f, java.nio.charset.StandardCharsets.ISO_8859_1);
+    }
+
     @Test
     void aPromptInsideDiffAllIsNotTheEnd() throws Exception {
         FakeWire wire = new FakeWire();
-        wire.reply(0, "\r\nEntering CLI Mode, type 'exit' to return, or 'help'\r\n\r\n# "); // to '#'
+        notArmed(wire);
+        wire.reply(0,"\r\nEntering CLI Mode, type 'exit' to return, or 'help'\r\n\r\n# "); // to '#'
         wire.reply(0, "# diff all\r\n# ",                      // a chunk ending in "# ": the "# feature" line's start
                 25, "feature\r\nfeature GPS\r\n\r\n# ");       // the rest, a moment later
         try (BetaflightUsb fc = BetaflightUsb.onWire(wire)) {
@@ -222,6 +236,7 @@ class BetaflightTest {
     @Test
     void aCutOffAnswerIsAnError() throws Exception {
         FakeWire wire = new FakeWire();
+        notArmed(wire);
         wire.reply(0, "\r\nEntering CLI Mode, type 'exit' to return, or 'he");
         try (BetaflightUsb fc = BetaflightUsb.onWire(wire)) {
             fc.enterCli(); // the banner never comes

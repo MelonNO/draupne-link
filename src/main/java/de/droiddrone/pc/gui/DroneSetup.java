@@ -1489,8 +1489,7 @@ final class DroneSetup {
                 boolean mspRx = BetaflightPlan.isMspReceiver(featureMask);
                 String receiverNow = BetaflightPlan.receiverNames(featureMask);
                 boolean switchRx = !mspRx && mayApply && !abandoned;
-                if (switchRx) fc.setFeatureMask(BetaflightPlan.mspReceiverMask(featureMask));
-                fc.enterCli();
+                enterCli(fc, switchRx, featureMask);
                 SetupPlanner.Result r = SetupPlanner.plan(fc::command, new SetupPlanner.Fc(modesOffered, featureMask, magFound, gpsFound),
                         new SetupPlanner.Wanted(cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, gpsWanted));
                 if (r.compassRead() != null) rememberCompass(r.compassRead());
@@ -1546,6 +1545,24 @@ final class DroneSetup {
             } catch (IOException e) {
                 return new Read(port.systemName(), e.getMessage(), cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, ports, gpsWanted);
             }
+        }
+
+        /**
+         * CONFIRM's receiver switch (over MSP: the CLI hears none), then the CLI - the switch only once the board said
+         * it is not armed, with arming blocked (F-078: it was sent to an armed board, before any check).
+         */
+        static void enterCli(BetaflightUsb fc, boolean switchRx, int featureMask) throws IOException {
+            fc.enterCli(switchRx ? () -> fc.setFeatureMask(BetaflightPlan.mspReceiverMask(featureMask)) : null);
+        }
+
+        /**
+         * The USB row after a read that failed: why, and what to do - the same error again and again says replug,
+         * but not for an armed board (F-078: replugging doesn't disarm it; the page reads again once it is disarmed).
+         */
+        static String readProblem(String error, int sameErrorCount) {
+            return error + (sameErrorCount >= SAME_ERROR_LIMIT && !BetaflightUsb.ARMED.equals(error)
+                    ? "<br><b>Replug the drone's USB.</b>"
+                    : "<br>Retrying, or press <b>Retry</b>.");
         }
 
         /** A CLI reply's first line, short, for the log; "(ok)" when Betaflight printed nothing. */
@@ -1658,9 +1675,7 @@ final class DroneSetup {
                 nextTry = now + 2000;
                 sameErrorCount = r.error().equals(lastError) ? sameErrorCount + 1 : 1;
                 lastError = r.error();
-                usb.set(State.BAD, r.error() + (sameErrorCount >= SAME_ERROR_LIMIT
-                        ? "<br><b>Replug the drone's USB.</b>"
-                        : "<br>Retrying, or press <b>Retry</b>."));
+                usb.set(State.BAD, readProblem(r.error(), sameErrorCount));
                 return;
             }
             lastError = null;

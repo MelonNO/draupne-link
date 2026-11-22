@@ -70,6 +70,12 @@ public final class BetaflightUsb implements AutoCloseable {
     private final Wire wire;
     /** The CLI is open: closing the port then sends "exit", so the board isn't left in CLI mode. */
     private boolean inCli;
+    /** Betaflight answered the '#': its CLI is open, and leaving it ("exit" or "save") restarts Betaflight (cli.c). */
+    private boolean cliAnswered;
+    /** "exit" or "save" went to an open CLI: Betaflight restarts, which takes the arming block off. */
+    private boolean restarting;
+    /** The arming block "MSP" is set by this connection and was not on before: taken off at close if no restart comes. */
+    private boolean blockOurs;
     /** The port is with the ESCs (the passthrough): closing it ends that first, so the board is not left there. */
     private EscLink escs;
 
@@ -227,11 +233,67 @@ public final class BetaflightUsb implements AutoCloseable {
 
     // ------------------------------------------------------------------ CLI
 
-    /** Enters the CLI (Betaflight answers '#' with a banner and the "# " prompt). */
+    /** Betaflight's MSP_SET_ARMING_DISABLED: 1 sets the arming block "MSP" (and disarms an armed board), 0 takes it off. */
+    static final int MSP_SET_ARMING_DISABLED = 99;
+    /** The arming block "MSP" among MSP_STATUS' arming-disable flags (Betaflight 4.4's runtime_config.h). */
+    static final int ARMING_DISABLED_MSP = 1 << 16;
+
+    /** An MSP write to make before the CLI opens (the CLI hears no MSP). */
+    public interface BeforeCli {
+        void run() throws IOException;
+    }
+
+    /** Enters the CLI (Betaflight answers '#' with a banner and the "# " prompt): {@link #enterCli(BeforeCli)}, nothing first. */
     public String enterCli() throws IOException {
+        return enterCli(null);
+    }
+
+    /**
+     * Enters the CLI, for every CLI write of the app (F-078). Betaflight 4.4.1 ignores '#' while armed (tasks.c,
+     * msp_serial.c), and opens its CLI about 100 ms after one without looking again - arming is blocked only once it
+     * is open (cli.c). So MSP_STATUS is read first: armed, nothing is sent and the pilot is told ({@link #ARMED}).
+     * Not armed, arming is blocked (MSP_SET_ARMING_DISABLED, 1 - it would disarm an armed board, so never before that
+     * reading), then {@code first} runs - an MSP write that must reach no armed board either, such as CONFIRM's
+     * receiver switch - and the '#' goes. Every way out of Betaflight's CLI restarts it ("exit" always; "save" too,
+     * as the app uses it), which takes the block off; when the CLI never opened, close() takes it off.
+     * @param first null, or the MSP write to make just before the '#'
+     */
+    public String enterCli(BeforeCli first) throws IOException {
+        if (inCli) throw new IOException("The CLI is open already");
+        byte[] status = msp(de.droiddrone.common.FcCommon.MSP_STATUS, null);
+        if (MotorTest.armed(status)) throw new IOException(ARMED);
+        int flags = armingDisableFlags(status);
+        boolean blockedBefore = flags != -1 && (flags & ARMING_DISABLED_MSP) != 0; // somebody else's: left as it is
+        msp(MSP_SET_ARMING_DISABLED, new byte[]{1});
+        blockOurs |= !blockedBefore;
+        if (first != null) first.run();
         inCli = true; // from the first byte: a cut-off banner still leaves the board in the CLI
         write("#");
-        return readUntilPrompt(3000);
+        try {
+            String banner = readUntilPrompt(3000);
+            cliAnswered = true;
+            return banner;
+        } catch (NoAnswer e) {
+            throw e; // nothing came: no CLI (close still says "exit", in case), and the block is taken off at close
+        } catch (IOException e) {
+            cliAnswered = true; // a part of the banner: the CLI is open
+            throw e;
+        }
+    }
+
+    /** MSP_STATUS' arming-disable flags (after the extra flight-mode bytes and the flag count); -1 when not there. */
+    static int armingDisableFlags(byte[] status) {
+        if (status.length < 16) return -1;
+        int at = 17 + (status[15] & 0x0f);
+        if (status.length < at + 4) return -1;
+        return (status[at] & 0xff) | (status[at + 1] & 0xff) << 8 | (status[at + 2] & 0xff) << 16 | (status[at + 3] & 0xff) << 24;
+    }
+
+    /** Nothing at all came back. */
+    private static final class NoAnswer extends IOException {
+        NoAnswer() {
+            super("No answer from the flight controller - is it running Betaflight?");
+        }
     }
 
     /** The CLI is open (and would be left with "exit" on close). */
@@ -258,10 +320,14 @@ public final class BetaflightUsb implements AutoCloseable {
         close();
     }
 
-    /** "save": stores the settings; the FC reboots and this port goes away. */
+    /**
+     * "save": stores the settings; the FC reboots and this port goes away. (Betaflight 4.4.1 stays in its CLI only
+     * after a failed "batch", which the app never starts - and arming stays blocked there until a restart.)
+     */
     public void saveAndReboot() throws IOException {
         write("save\n");
         inCli = false; // the board restarts: no "exit" to send
+        restarting = cliAnswered;
         try {
             Thread.sleep(500);
         } catch (InterruptedException ignored) {
@@ -282,7 +348,7 @@ public final class BetaflightUsb implements AutoCloseable {
             if (endsWithPrompt(s) && quietFor(PROMPT_SETTLE_MS)) return s;
         }
         String s = out.toString(StandardCharsets.US_ASCII);
-        if (s.isEmpty()) throw new IOException("No answer from the flight controller - is it running Betaflight?");
+        if (s.isEmpty()) throw new NoAnswer();
         // part of an answer: never read settings from it (or decide what to write)
         throw new IOException("The flight controller's answer was cut off - try again");
     }
@@ -400,19 +466,35 @@ public final class BetaflightUsb implements AutoCloseable {
         return escs;
     }
 
-    /** Lets go of the port; with the CLI open, "exit" goes first so the board isn't left in CLI mode (it restarts). */
+    /**
+     * Lets go of the port; with the CLI open, "exit" goes first so the board isn't left in CLI mode (it restarts).
+     * The arming block this connection set is taken off when no restart comes to do it (F-078: a CLI that never
+     * opened, or an error between the block and the '#'). The port is let go of whatever happens.
+     */
     @Override
     public void close() {
-        if (escs != null && !escs.closed() && wire.isOpen()) escs.close();
-        if (inCli && wire.isOpen()) {
-            inCli = false;
-            try {
-                write("exit\n");
-                Thread.sleep(300);
-            } catch (IOException | InterruptedException ignored) {
-                // the port may be gone already
+        try {
+            if (escs != null && !escs.closed() && wire.isOpen()) escs.close();
+            if (inCli && wire.isOpen()) {
+                inCli = false;
+                restarting |= cliAnswered;
+                try {
+                    write("exit\n");
+                    Thread.sleep(300);
+                } catch (IOException | InterruptedException ignored) {
+                    // the port may be gone already
+                }
             }
+            if (blockOurs && !restarting && wire.isOpen()) {
+                blockOurs = false;
+                try {
+                    msp(MSP_SET_ARMING_DISABLED, new byte[]{0});
+                } catch (IOException | RuntimeException ignored) {
+                    // the port is gone (Betaflight lost its power: the block with it), or the CLI took it after all
+                }
+            }
+        } finally {
+            wire.close();
         }
-        wire.close();
     }
 }

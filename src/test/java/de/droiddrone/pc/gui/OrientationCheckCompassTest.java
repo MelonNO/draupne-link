@@ -83,6 +83,23 @@ class OrientationCheckCompassTest {
         assertEquals(List.of("set align_mag = CW90FLIP", "save"), board.writes());
     }
 
+    /**
+     * F-078: SAVE on a board armed meanwhile. Betaflight hears no '#' while armed: the pilot read "No answer from the
+     * flight controller". Now nothing is sent, the window says it is armed, and the question stands.
+     */
+    @Test
+    void saveOnAnArmedBoardWritesNothingAndSaysItIsArmed() throws Exception {
+        FakeCompassBoard board = wrongWayRound();
+        board.arm();
+        rig.press("SAVE");
+        Waits.waitFor(() -> rig.row(OrientationCheckRig.USB).equals("BAD: The drone is armed. Disarm it first."), 15_000,
+                "the window to say the board is armed: " + rig.row(OrientationCheckRig.USB));
+        assertEquals(List.of(), board.writes(), "nothing set or saved: " + board.cli());
+        assertTrue(board.armed(), "and the check did not disarm it");
+        assertEquals("CW0", board.saved());
+        Waits.waitFor(() -> rig.offers("SAVE"), 5000, "the question to stand");
+    }
+
     @Test
     void keepOldWritesNothingAndSaysSo() throws Exception {
         FakeCompassBoard board = wrongWayRound();

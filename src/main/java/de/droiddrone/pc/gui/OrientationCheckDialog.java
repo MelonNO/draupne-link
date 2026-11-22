@@ -424,7 +424,16 @@ final class OrientationCheckDialog extends JFrame {
                     }
                     if (fixWanted) {
                         fixWanted = false;
-                        writeFix(fc);
+                        try {
+                            writeFix(fc);
+                        } catch (IOException e) {
+                            if (!armed(e)) throw e;
+                            ui(() -> { // nothing sent: the question stands, the board stays open
+                                usb.set(State.BAD, BetaflightUsb.ARMED);
+                                fix.setEnabled(true);
+                            });
+                            continue;
+                        }
                         fc = null; // Betaflight restarts
                         retryAt = System.currentTimeMillis() + timing.restartMs();
                         ui(() -> usb.set(State.PENDING, "Betaflight restarts..."));
@@ -458,7 +467,9 @@ final class OrientationCheckDialog extends JFrame {
                                 save.setEnabled(true);
                                 keepOld.setEnabled(true);
                             });
-                            throw e;
+                            if (!armed(e)) throw e;
+                            ui(() -> usb.set(State.BAD, BetaflightUsb.ARMED)); // nothing sent: the board stays open
+                            continue;
                         }
                         fc = null; // Betaflight restarts
                         retryAt = System.currentTimeMillis() + timing.restartMs();
@@ -491,7 +502,7 @@ final class OrientationCheckDialog extends JFrame {
                     fc = null;
                     retryAt = System.currentTimeMillis() + 1500;
                     String msg = e.getMessage();
-                    ui(() -> usb.set(State.BAD, "Lost: " + msg));
+                    ui(() -> usb.set(State.BAD, lostLine(msg)));
                 }
             }
             // closed half way through a compass search: the old value back before the port is let go of
@@ -977,6 +988,19 @@ final class OrientationCheckDialog extends JFrame {
             main.logLine("Betaflight backup failed: " + e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * The USB row when the flight controller was let go of after an error. Shared with the compass calibration. An
+     * armed board is said as it is (F-078): it is there, and nothing was sent to it.
+     */
+    static String lostLine(String why) {
+        return BetaflightUsb.ARMED.equals(why) ? why : "Lost: " + why;
+    }
+
+    /** A write refused because the board is armed (BetaflightUsb.enterCli): nothing was sent, the port is still open. */
+    private static boolean armed(Exception e) {
+        return e instanceof IOException && BetaflightUsb.ARMED.equals(e.getMessage());
     }
 
     /**
