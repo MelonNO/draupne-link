@@ -80,7 +80,7 @@ final class DroneSetup {
             }
 
             @Override
-            public void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, Runnable onClosed) {
+            public void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, java.util.function.Consumer<String> onClosed) {
                 OrientationCheckDialog.open(owner, main, board, onPassed, onClosed);
             }
         };
@@ -2174,8 +2174,12 @@ final class DroneSetup {
              */
             void motorTest(java.awt.Window owner, SetupBoard board, java.util.function.Consumer<Boolean> onClosed);
 
-            /** Opens the guided orientation check for this flight controller (null: as for the motor test). */
-            void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, Runnable onClosed);
+            /**
+             * Opens the guided orientation check for this flight controller (null: as for the motor test); onClosed
+             * once its window is closed and has let go of the USB port - with a line when closing put the compass's
+             * old alignment back (a compass search left half way, Q-001), else with null.
+             */
+            void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, java.util.function.Consumer<String> onClosed);
         }
 
         private final Host main;
@@ -2437,8 +2441,10 @@ final class DroneSetup {
             main.orientationCheck(javax.swing.SwingUtilities.getWindowAncestor(orientation), board.get(), () -> {
                 passed[0] = true;
                 orientation.set(State.OK, "Checked: correct.");
-            }, () -> {
-                if (!passed[0]) orientation.set(State.WARN, "Not finished. <b>Check it</b> before flying.");
+            }, putBack -> {
+                // closed half way through its compass search: the old alignment is back (or could not be), said here
+                if (putBack != null) orientation.set(State.WARN, putBack + " <b>Check it</b> before flying.");
+                else if (!passed[0]) orientation.set(State.WARN, "Not finished. <b>Check it</b> before flying.");
             });
         }
     }

@@ -60,14 +60,19 @@ final class MotorsPageRig implements AutoCloseable {
         }
 
         @Override
-        public void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, Runnable onClosed) {
+        public void orientationCheck(java.awt.Window owner, SetupBoard board, Runnable onPassed, java.util.function.Consumer<String> onClosed) {
             orientationChecks++;
             orientationCheckFor = board;
+            orientationCheckClosed = onClosed;
         }
     };
-    /** How often the step opened the orientation check, and for which flight controller. */
+    /**
+     * How often the step opened the orientation check, for which flight controller, and what to tell it when that
+     * window closes: the line about the compass's old alignment put back, or null.
+     */
     volatile int orientationChecks;
     volatile SetupBoard orientationCheckFor;
+    volatile java.util.function.Consumer<String> orientationCheckClosed;
     DroneSetup.MotorsPage page;
     WizardDialog wizard;
 
