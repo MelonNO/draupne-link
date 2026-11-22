@@ -97,7 +97,8 @@ class PhoneScenario {
                 List<String> asked = new ArrayList<>();
                 for (int i = 0; i < 8; i++) {
                     List<String> texts = phone.texts();
-                    String yes = texts.stream().filter(t -> t.equals("While using the app") || t.equals("Allow") || t.equals("Only this time")).findFirst().orElse(null);
+                    // Android 8 and 9 write it ALLOW (2026-11-22)
+                    String yes = texts.stream().filter(t -> t.equals("While using the app") || t.equalsIgnoreCase("Allow") || t.equals("Only this time")).findFirst().orElse(null);
                     if (yes == null) break;
                     asked.add(texts.stream().filter(t -> t.startsWith("Allow ")).findFirst().orElse("?"));
                     phone.tap(yes);

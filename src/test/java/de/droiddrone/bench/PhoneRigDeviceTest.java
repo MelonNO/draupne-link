@@ -188,6 +188,7 @@ class PhoneRigDeviceTest {
                 "shell pm grant " + BENCH + " android.permission.ACCESS_FINE_LOCATION",
                 "shell pm grant " + BENCH + " android.permission.ACCESS_COARSE_LOCATION",
                 "shell pm grant " + BENCH + " android.permission.POST_NOTIFICATIONS",
+                "shell pm grant " + BENCH + " android.permission.WRITE_EXTERNAL_STORAGE",
                 "shell dpm set-active-admin --user 0 " + BENCH + "/de.droiddrone.flight.PowerAdminReceiver"), sent());
         rig.launch(); // the phone's clock for the log, the screen woken, its lock looked at (unlocked here: nothing sent to it), the app opened
         assertEquals(List.of("shell date '+%m-%d %H:%M:%S.000'", "shell input keyevent KEYCODE_WAKEUP", "shell dumpsys window", "shell dumpsys lock_settings",

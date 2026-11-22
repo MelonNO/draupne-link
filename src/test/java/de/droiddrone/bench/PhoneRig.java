@@ -671,9 +671,14 @@ public final class PhoneRig implements AutoCloseable {
      * <p>
      * On a real phone the same grants (no phone maker's dialog is tapped through) and the screen lock's permission,
      * for the app the guard lets be changed; its own lock screen is left exactly as it is.
+     * <p>
+     * Storage (2026-11-22, the first run on Android 8): the app asks for it on Android 8 and 9 alone (its manifest's
+     * maxSdkVersion 28), and until it is answered its first screen waits behind Android's question - the PC never saw
+     * the phone. On a newer Android pm only says the app has not asked for it, as Android 8 says of the notifications'
+     * permission, which it does not know: what pm answers is not read.
      */
     public void grantPermissions() {
-        for (String p : List.of("CAMERA", "RECORD_AUDIO", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "POST_NOTIFICATIONS")) {
+        for (String p : List.of("CAMERA", "RECORD_AUDIO", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "POST_NOTIFICATIONS", "WRITE_EXTERNAL_STORAGE")) {
             shell("pm grant " + target.app() + " android.permission." + p);
         }
         shell("dpm set-active-admin --user 0 " + target.app() + "/de.droiddrone.flight.PowerAdminReceiver");
@@ -1359,7 +1364,38 @@ public final class PhoneRig implements AutoCloseable {
         String said = adb("emu", "redir", "add", "udp:" + host + ":" + phonePort);
         if (said.toLowerCase().contains("ko") || said.toLowerCase().contains("error")) throw new IllegalStateException("The emulator did not forward the port: " + said);
         forwarded.add(host);
+        throughTheRouter(phonePort);
         return host;
+    }
+
+    /** Phone ports already led through the emulator's own router by {@link #throughTheRouter} (it keeps its rule until it is restarted). */
+    private final List<Integer> ledThrough = new ArrayList<>();
+
+    /**
+     * The Android 8 to 10 images of the emulator (2026-11-22, draupne-a26: every scenario with the Windows app failed,
+     * the PC never saw the phone): Android sits behind a router of the emulator's own, a network namespace "router" with
+     * 10.0.2.15 on one side and the phone's Wi-Fi (192.168.232.2) and mobile data on the other. The console's forward
+     * ends at 10.0.2.15, in that router, and a packet from this PC never reached the app; Android 11 on has no such
+     * router. Where there is one, it is told (as root, which the emulator has) to pass the phone's port on to the
+     * phone's Wi-Fi address - once, however many scenarios ask. Elsewhere root and the one look are all that is sent
+     * (without root the router cannot even be seen: the first scenario of a run, before any other asked for root, was
+     * left out); an emulator held to a real phone's rules (no root) is not looked at.
+     */
+    private void throughTheRouter(int phonePort) {
+        if (!can(Capability.ROOT) || ledThrough.contains(phonePort)) return;
+        ledThrough.add(phonePort);
+        root();
+        if (shell("ip netns list").lines().noneMatch(l -> l.trim().startsWith("router"))) return;
+        Matcher wifi = Pattern.compile("inet (\\d+\\.\\d+\\.\\d+\\.\\d+)/").matcher(shell("ip -4 -o addr show wlan0"));
+        if (!wifi.find()) {
+            say("The emulator has a router of its own, but no Wi-Fi address to lead port " + phonePort + " to: the PC may not reach the phone.");
+            return;
+        }
+        String rule = "PREROUTING -i eth0 -p udp --dport " + phonePort + " -j DNAT --to-destination " + wifi.group(1) + ":" + phonePort;
+        if (!shell("ip netns exec router iptables -t nat -C " + rule + " 2>&1; echo rc=$?").contains("rc=0")) {
+            shell("ip netns exec router iptables -t nat -A " + rule);
+        }
+        say("The emulator's own router (Android 8 to 10): its port " + phonePort + " led on to the phone at " + wifi.group(1) + ".");
     }
 
     /**

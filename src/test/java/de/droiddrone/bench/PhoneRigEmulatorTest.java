@@ -81,6 +81,7 @@ class PhoneRigEmulatorTest {
                 "shell pm grant " + APP + " android.permission.ACCESS_FINE_LOCATION",
                 "shell pm grant " + APP + " android.permission.ACCESS_COARSE_LOCATION",
                 "shell pm grant " + APP + " android.permission.POST_NOTIFICATIONS",
+                "shell pm grant " + APP + " android.permission.WRITE_EXTERNAL_STORAGE", // Android 8 and 9 (2026-11-22)
                 "shell dpm set-active-admin --user 0 " + APP + "/de.droiddrone.flight.PowerAdminReceiver",
                 "shell locksettings set-disabled false"), sent());
 
@@ -155,9 +156,9 @@ class PhoneRigEmulatorTest {
 
         int phonePort = PhoneRig.linkOnThePhone();
         int host = rig.forwardUdp(phonePort);
-        assertEquals(List.of("emu redir add udp:" + host + ":" + phonePort), sent());
+        assertEquals(List.of("emu redir add udp:" + host + ":" + phonePort, "root", "shell ip netns list"), sent()); // no router of its own: nothing more
         int second = rig.forwardUdp(phonePort);
-        sent();
+        assertEquals(List.of("emu redir add udp:" + second + ":" + phonePort), sent(), "looked once");
 
         rig.close(); // the forwarded ports given back, and nothing else
         assertEquals(List.of("emu redir del udp:" + host, "emu redir del udp:" + second), sent());
@@ -165,6 +166,30 @@ class PhoneRigEmulatorTest {
         assertEquals(List.of(), sent());
         assertEquals(List.of(), adb.followed, "no log tap on the emulator");
         assertEquals(List.of(), rig.refusals());
+    }
+
+    /**
+     * Android 8 to 10's emulator (2026-11-22, draupne-a26): Android behind the emulator's own router - the forwarded
+     * port is led on through it to the phone's Wi-Fi address, once; a rule already there is not added again.
+     */
+    @Test
+    void anOlderEmulatorsOwnRouterLetsTheForwardedPortThrough() {
+        adb.says("shell ip netns list", "router\n").says("shell ip -4 -o addr show wlan0", "3: wlan0    inet 192.168.232.2/21 brd 192.168.239.255 scope global wlan0\n")
+                .says("shell ip netns exec router iptables -t nat -C", "iptables: Bad rule (does a matching rule exist in that chain?).\nrc=1\n");
+        int phonePort = PhoneRig.linkOnThePhone();
+        int host = rig.forwardUdp(phonePort);
+        String rule = "PREROUTING -i eth0 -p udp --dport " + phonePort + " -j DNAT --to-destination 192.168.232.2:" + phonePort;
+        assertEquals(List.of("emu redir add udp:" + host + ":" + phonePort, "root", "shell ip netns list", "shell ip -4 -o addr show wlan0",
+                "shell ip netns exec router iptables -t nat -C " + rule + " 2>&1; echo rc=$?", "shell ip netns exec router iptables -t nat -A " + rule), sent());
+        int second = rig.forwardUdp(phonePort);
+        assertEquals(List.of("emu redir add udp:" + second + ":" + phonePort), sent(), "led through once");
+
+        // a rig of its own on the same emulator (the next scenario): the rule the router has is not added again
+        PhoneRig next = new PhoneRig(null, PhoneRig.Target.emulator(), adb, pauses::add, () -> now[0], null);
+        adb.says("shell ip netns exec router iptables -t nat -C", "rc=0\n");
+        int third = next.forwardUdp(phonePort);
+        assertEquals(List.of("emu redir add udp:" + third + ":" + phonePort, "root", "shell ip netns list", "shell ip -4 -o addr show wlan0",
+                "shell ip netns exec router iptables -t nat -C " + rule + " 2>&1; echo rc=$?"), sent());
     }
 
     /** What the scenarios did in their own lines before - adb root, the crash guard's file, kill -9, am crash, ss, install -d - is sent as they sent it. */
@@ -191,10 +216,11 @@ class PhoneRigEmulatorTest {
             assertEquals("root", opening.get(1));
             assertEquals("install -r " + apk, opening.get(2));
             assertEquals("shell pm grant " + APP + " android.permission.CAMERA", opening.get(3));
-            assertEquals("shell locksettings set-disabled false", opening.get(9));
+            assertEquals("shell locksettings set-disabled false", opening.get(10)); // the grants: one more since Android 8's storage (2026-11-22)
             assertEquals(List.of("shell am force-stop " + APP, "shell rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml",
                     "shell input keyevent KEYCODE_WAKEUP", "shell wm dismiss-keyguard", "shell am start -n " + APP + "/de.droiddrone.flight.MainActivity",
-                    "emu redir add udp:" + link.getPort() + ":" + PhoneRig.linkOnThePhone()), opening.subList(10, opening.size()));
+                    "emu redir add udp:" + link.getPort() + ":" + PhoneRig.linkOnThePhone(),
+                    "root", "shell ip netns list"), opening.subList(11, opening.size())); // no router of its own (Android 11 on): nothing more
             assertTrue(link.getAddress().isLoopbackAddress());
             assertTrue(rig.target().reach().isEmpty(), "the fence needs no way through for the emulator: its plan's reach is none, as ever");
         } finally {

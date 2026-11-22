@@ -176,9 +176,20 @@ class PhoneUpdateScenario {
                     ui.until("the PC asks first", 10_000, () -> ui.sees(newVersion));
                     ui.shot("the PC asks first");
                     ui.click("Yes");
-                    // downloading, checking, installing: Android's question must not come, the new app must
+                    // downloading, checking, installing: Android's question must not come, the new app must. Before
+                    // Android 12 it comes all the same (no app may update itself without it there): the PC must say to
+                    // tap Update on the phone, and on the emulator the tap is given, as by a pilot beside the phone
+                    // (2026-11-22, the first run on Android 8). A real phone's installer is never tapped by the bench.
+                    int sdk = -1;
+                    try {
+                        sdk = Integer.parseInt(phone.shell("getprop ro.build.version.sdk").trim());
+                    } catch (RuntimeException e) {
+                        rig.film.remark("The phone's Android version could not be read: " + e.getMessage());
+                    }
+                    boolean asks = sdk > 0 && sdk < 31;
+                    if (asks) rig.film.remark("Android " + sdk + " (API) asks before an app updates itself, as every Android before 12 does: one tap on the phone.");
                     String question = "";
-                    boolean updated = false;
+                    boolean updated = false, tapped = false;
                     long until = System.currentTimeMillis() + 240_000;
                     while (!updated && System.currentTimeMillis() < until) {
                         Ui.pause(2000);
@@ -187,12 +198,27 @@ class PhoneUpdateScenario {
                             question = front;
                             phone.shot("Android's installer in front");
                         }
+                        if (asks && !question.isEmpty() && !tapped && !phone.device()) {
+                            String install = phone.texts().stream().filter(t -> t.equalsIgnoreCase("Install") || t.equalsIgnoreCase("Update")).findFirst().orElse(null);
+                            if (install != null) {
+                                ui.shot("Android asks on the phone: the PC's word for it");
+                                phone.tap(install);
+                                tapped = true;
+                                rig.film.remark("Android's question answered on the phone: " + install);
+                            }
+                        }
                         updated = newVersion.equals(phone.version());
                     }
                     long installedS = (System.currentTimeMillis() - t0) / 1000;
                     rig.check(served[0] >= 1, "the phone downloaded the newer app from the address the PC sent (" + served[0] + " time(s))");
-                    rig.check(updated, "the phone runs " + newVersion + (updated ? ", " + installedS + " s after UPDATE PHONE APP" : " - not within 4 min: " + phone.version()));
-                    rig.check(question.isEmpty(), "Android asked nothing on the phone (\"Update this app?\")" + (question.isEmpty() ? "" : ": " + question));
+                    rig.check(updated, "the phone runs " + newVersion + (updated ? ", " + installedS + " s after UPDATE PHONE APP" + (tapped ? " and one tap on the phone" : "")
+                            : " - not within 4 min: " + phone.version()));
+                    if (asks) {
+                        rig.check(!question.isEmpty(), "Android asked once on the phone, as before Android 12" + (question.isEmpty() ? ": it did not" : ""));
+                        rig.check(rig.log().stream().anyMatch(l -> l.contains("tap Update on its screen")), "and the PC said to tap Update on the phone");
+                    } else {
+                        rig.check(question.isEmpty(), "Android asked nothing on the phone (\"Update this app?\")" + (question.isEmpty() ? "" : ": " + question));
+                    }
                     boolean back = false;
                     try {
                         ui.until("the link back by itself", 120_000, pilot::linkUp);

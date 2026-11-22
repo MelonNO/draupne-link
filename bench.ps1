@@ -8,6 +8,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 night -Until 07:30    the night: sleep and wake, one long flight, the phone app, flights - until then
   .\bench.ps1 ui -Tests *Fly*       one suite (self ui link edge emulator sitl findings), or some of its scenarios
   .\bench.ps1 ui -Screen 1093x584   the app on a screen that small (a 1366 x 768 laptop at 125 %)
+  .\bench.ps1 emulator -Avd draupne-a26   the phone app on another Android (draupne-a26 / a30 / a33 / a35: 8 / 11 / 13 / 15)
   .\bench.ps1 report -Root <folder> the report of a run's folder written again
   .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
@@ -30,7 +31,9 @@ param(
     [string]$Tests = '',
     [string]$Scale = '',
     [string]$Screen = '',
-    [string]$Root = ''
+    [string]$Root = '',
+    # the emulator's Android device for this run (its folder under %LOCALAPPDATA%\DroidDroneBuild\avd); left out: draupne-bench
+    [string]$Avd = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
@@ -200,6 +203,53 @@ function Test-Emulator {
     Test-Path (Join-Path $env:LOCALAPPDATA 'DroidDroneBuild\avd\draupne-bench.avd')
 }
 
+# The emulator the scenarios use is whatever runs as emulator-5584 (bench\PhoneRig starts draupne-bench there when
+# none does). -Avd puts another Android device there for this run - the phone app on Android 8, 11, 13, 15 - and a run
+# without it gets draupne-bench back: one left there by a run with -Avd is ended first, so a night never flies the
+# phone app on another Android by mistake. Only the bench's own devices run on that port; nothing else is ended.
+$emulatorSerial = 'emulator-5584'
+function Set-BenchEmulator {
+    $want = $(if ($Avd) { $Avd } else { 'draupne-bench' })
+    $avdHome = Join-Path $env:LOCALAPPDATA 'DroidDroneBuild\avd'
+    if (-not (Test-Path (Join-Path $avdHome "$want.avd"))) { throw "No Android device $want in $avdHome" }
+    $sdk = Join-Path $env:LOCALAPPDATA 'Android\Sdk'
+    $adb = Join-Path $sdk 'platform-tools\adb.exe'
+    if (-not (Test-Path $adb)) { return }
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    # adb's first line, as text ("" when it says nothing - with no emulator there it writes to stderr alone)
+    function Get-AdbWord([string[]]$words) { $line = & $adb -s $emulatorSerial @words 2>$null | Select-Object -First 1; return "$line".Trim() }
+    try {
+        $now = Get-AdbWord @('emu', 'avd', 'name')
+        if ($now -and $now -ne $want) {
+            Write-Host ("{0:HH:mm:ss}  The emulator runs {1}, this run wants {2}: {1} is ended ..." -f (Get-Date), $now, $want)
+            & $adb -s $emulatorSerial emu kill 2>$null | Out-Null
+            $gone = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $gone -and (Get-AdbWord @('get-state')) -eq 'device') { Start-Sleep -Seconds 2 }
+            Start-Sleep -Seconds 3
+            $now = ''
+        }
+        if (-not $now -and $Avd) {
+            Write-Host ("{0:HH:mm:ss}  The emulator: {1} started ..." -f (Get-Date), $want)
+            $env:ANDROID_AVD_HOME = $avdHome
+            Start-Process -FilePath (Join-Path $sdk 'emulator\emulator.exe') -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runRoot 'emulator.log') `
+                -RedirectStandardError (Join-Path $runRoot 'emulator.log.err') -ArgumentList @('-avd', $want, '-no-window', '-no-audio', '-no-boot-anim',
+                '-gpu', 'swiftshader_indirect', '-camera-back', 'emulated', '-camera-front', 'emulated', '-no-snapshot', '-port', '5584') | Out-Null
+            $up = (Get-Date).AddMinutes(6)
+            while ((Get-Date) -lt $up -and (Get-AdbWord @('shell', 'getprop', 'sys.boot_completed')) -ne '1') { Start-Sleep -Seconds 3 }
+            if ((Get-AdbWord @('shell', 'getprop', 'sys.boot_completed')) -ne '1') { throw "The emulator $want did not start within 6 minutes (emulator.log)" }
+            Start-Sleep -Seconds 4
+        }
+        if ($Avd) {
+            $android = Get-AdbWord @('shell', 'getprop', 'ro.build.version.release')
+            [void]$results.Add("emulator`t$want`tAndroid $android")
+            Write-Host "          the emulator: $want, Android $android"
+        }
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+}
+
 function Test-Wsl {
     try {
         $names = & wsl.exe -l -q 2>$null
@@ -342,6 +392,7 @@ if ($Run -ne 'report') {
         'full'  { $order = @('self', 'ui', 'link', 'edge', 'findings', 'emulator', 'sitl', 'soak') }
         default { $order = @($Run) }
     }
+    if (($order | Where-Object { $_ -in @('emulator', 'night') }) -or $Avd) { Set-BenchEmulator }
     foreach ($s in $order) {
         if ($s -eq 'night') {
             if (-not $Until -and -not $Tests) { throw "The night needs its end: .\bench.ps1 night -Until 07:30" }

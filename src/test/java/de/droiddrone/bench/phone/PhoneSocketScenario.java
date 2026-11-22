@@ -42,11 +42,19 @@ import java.util.regex.Pattern;
 class PhoneSocketScenario {
     private static final Pattern SEND_Q = Pattern.compile("UNCONN\\s+\\d+\\s+(\\d+)\\s+\\S*:(\\d+)\\s");
 
-    /** What waits to leave the app's link socket, bytes (-1: not readable). */
+    /** A line of the kernel's own socket tables: local address:port (hex), then tx_queue:rx_queue (hex). */
+    private static final Pattern PROC_LINE = Pattern.compile("^\\s*\\d+:\\s+[0-9A-Fa-f]+:([0-9A-Fa-f]{4})\\s+\\S+\\s+\\S+\\s+([0-9A-Fa-f]+):[0-9A-Fa-f]+", Pattern.MULTILINE);
+
+    /**
+     * What waits to leave the app's link socket, bytes (-1: not readable). Read with ss; where ss lists no socket at
+     * all (Android 8's, even as root, 2026-11-22) from the kernel's own tables, which say the same.
+     */
     private static long sendQueue(PhoneRig phone, int port) {
         try {
             Matcher m = SEND_Q.matcher(phone.shell("ss -u -a -n 2>&1"));
             while (m.find()) if (Integer.parseInt(m.group(2)) == port) return Long.parseLong(m.group(1));
+            Matcher p = PROC_LINE.matcher(phone.shell("cat /proc/net/udp /proc/net/udp6 2>/dev/null"));
+            while (p.find()) if (Integer.parseInt(p.group(1), 16) == port) return Long.parseLong(p.group(2), 16);
             return -1;
         } catch (RuntimeException e) {
             return -1;

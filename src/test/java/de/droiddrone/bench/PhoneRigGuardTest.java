@@ -340,6 +340,7 @@ class PhoneRigGuardTest {
                 new String[]{"shell", "pm path " + app},
                 new String[]{"shell", "pm clear " + app},
                 new String[]{"shell", "pm grant " + app + " android.permission.POST_NOTIFICATIONS"},
+                new String[]{"shell", "pm grant " + app + " android.permission.WRITE_EXTERNAL_STORAGE"},
                 new String[]{"shell", "dpm set-active-admin --user 0 " + app + "/de.droiddrone.flight.PowerAdminReceiver"},
                 new String[]{"shell", "input keyevent KEYCODE_WAKEUP"},
                 new String[]{"shell", "input keyevent KEYCODE_BACK"},
