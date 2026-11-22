@@ -106,4 +106,20 @@ class LinkCardTest {
         assertEquals("RC OUTPUT: OFF - PHONE UPDATING", MainWindow.rcOffLine("PHONE UPDATING"));
         assertEquals("RC OUTPUT: OFF - LOWER THROTTLE TO ENABLE", MainWindow.rcOffLine(null), "as it was while nothing is known");
     }
+
+    /**
+     * I-003 (the bench's fly-arm-switch-known, fly, observation, 1.0.71): the video said "RC OFF - ARM SWITCH OFF" (a
+     * state, not what to do) and, with the arm switch not read, ARM SWITCH NOT READ - RUN DRONE SETUP while the card
+     * said FC: DISARMED - READY TO ARM.
+     */
+    @Test
+    void theVideoSaysWhatToDoAndTheCardWhatTheVideoSays() {
+        assertEquals("RC OFF - TURN ARM OFF", OsdRenderer.rcOffText("ARM SWITCH OFF"));
+        assertEquals("RC OFF - THROTTLE DOWN", OsdRenderer.rcOffText("THROTTLE DOWN"));
+        assertEquals("RC OFF - THROTTLE DOWN", OsdRenderer.rcOffText(null));
+        assertEquals("RC OFF - THROTTLE DOWN, ARM OFF", OsdRenderer.rcOffText("THROTTLE DOWN, ARM OFF"));
+        assertEquals("RC OFF - NO RADIO", OsdRenderer.rcOffText("NO RADIO"));
+        assertEquals("FC: DISARMED - READY TO ARM", MainWindow.readyToArmText(false));
+        assertEquals("FC: READY TO ARM - ARM SWITCH NOT READ", MainWindow.readyToArmText(true));
+    }
 }

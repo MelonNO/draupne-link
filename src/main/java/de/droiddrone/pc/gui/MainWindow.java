@@ -3721,11 +3721,20 @@ public class MainWindow extends JFrame {
         } else if (fc.armed()) {
             setLabel(fcStateLabel, "FC: ARMED" + (fc.activeModes().size() > 1 ? "  ·  " + String.join(" ", fc.activeModes()) : ""), Theme.BAD);
         } else if (fc.blockers().isEmpty()) {
-            setLabel(fcStateLabel, "FC: DISARMED - READY TO ARM", Theme.OK);
+            boolean unread = session != null && session.isArmSwitchUnknown(); // I-003: as the OSD's ARM SWITCH NOT READ
+            setLabel(fcStateLabel, readyToArmText(unread), unread ? Theme.WARN : Theme.OK);
         } else {
             setLabel(fcStateLabel, "FC: ARMING BLOCKED BY " + fc.blockers().stream().map(FcTelemetry.Blocker::osdName)
                     .reduce((a, b) -> a + ", " + b).orElse("") + "  (TOOLS > RC CHECK)", Theme.WARN); // F-043: all in capitals
         }
+    }
+
+    /**
+     * The card's line for a disarmed FC with nothing blocking: I-003 - with the radio's arm switch not read (no Drone
+     * setup), it said READY TO ARM in green while the OSD said ARM SWITCH NOT READ - RUN DRONE SETUP.
+     */
+    static String readyToArmText(boolean armSwitchUnread) {
+        return armSwitchUnread ? "FC: READY TO ARM - ARM SWITCH NOT READ" : "FC: DISARMED - READY TO ARM";
     }
 
     /** "%APPDATA%\DraupneLink\..." rather than a full path with the Windows user name in it. */

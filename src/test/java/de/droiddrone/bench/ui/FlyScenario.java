@@ -50,7 +50,9 @@ class FlyScenario {
             pilot.throttle(-1);
             pilot.until("the drone to come down", 30_000, () -> drone.readout().altM() < 0.5);
             pilot.disarm(drone);
-            ui.until("FC: DISARMED on the controller card", 5000, () -> ui.sees("FC: DISARMED"));
+            // I-003: with the arm switch not read (this scenario's pilot has not run Drone setup) the card says
+            // FC: READY TO ARM - ARM SWITCH NOT READ where it said FC: DISARMED - READY TO ARM
+            ui.until("FC: DISARMED on the controller card", 5000, () -> ui.sees("FC: DISARMED") || ui.sees("FC: READY TO ARM"));
             ui.shot("landed and disarmed");
 
             pilot.standby();

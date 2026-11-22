@@ -880,6 +880,15 @@ final class OsdRenderer {
 
     // ------------------------------------------------------------------ warnings
 
+    /**
+     * The OSD's RC OFF warning: what the sticks wait for, said as what to do (I-003: "RC OFF - ARM SWITCH OFF" read as
+     * a state; now "RC OFF - TURN ARM OFF", as "RC OFF - THROTTLE DOWN").
+     */
+    static String rcOffText(String waiting) {
+        if (waiting == null) return "RC OFF - THROTTLE DOWN";
+        return "RC OFF - " + ("ARM SWITCH OFF".equals(waiting) ? "TURN ARM OFF" : waiting);
+    }
+
     private void warnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>();
         if (observer) {
@@ -900,7 +909,7 @@ final class OsdRenderer {
         boolean failsafe = s != null && s.blockers().stream().anyMatch(b -> b.osdName().equals("FAILSAFE"));
         boolean rcGap = !failsafe && s != null && s.armed() && s.blockers().stream().anyMatch(b -> b.osdName().equals("RXLOSS"));
         if (failsafe) big.add("FAILSAFE");
-        if (d.linkReady() && !d.rcLive()) big.add("RC OFF - " + (d.rcWaiting() == null ? "THROTTLE DOWN" : d.rcWaiting()));
+        if (d.linkReady() && !d.rcLive()) big.add(rcOffText(d.rcWaiting()));
         // the phone's own word: its last stick write to the FC is old while this PC sends (the way there is broken)
         if (d.linkReady() && d.rcLive() && d.sticksLost() && !d.linkStalled()) big.add("NO STICKS AT FC");
         if (d.radioFrozen()) big.add("RADIO FROZEN?");
