@@ -611,10 +611,49 @@ final class MapWindow extends JFrame {
         chooser.setDialogTitle("Import KML");
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML", "kml"));
         if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        java.nio.file.Path file = chooser.getSelectedFile().toPath();
+        // read and parsed on a thread of its own (a file at IMPORT's limits takes a second or two, and this window
+        // is the map of a flight); IMPORT waits meanwhile
+        tools.importButton.setEnabled(false);
+        offSwing("kml-import", () -> Kml.readImport(file), (parsed, failed) -> {
+            tools.importButton.setEnabled(true);
+            if (parsed == null) {
+                Dialogs.message(this, AsText.label("Import failed: " + failed), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
+            } else {
+                imported(parsed);
+            }
+        });
+    }
+
+    /**
+     * Work that must not hold the window: done on a thread of its own, then its result - or, null with it, why there
+     * is none, a short line - handed to the Swing thread.
+     */
+    static <T> void offSwing(String threadName, java.util.concurrent.Callable<T> work, java.util.function.BiConsumer<T, String> then) {
+        Thread t = new Thread(() -> {
+            T result = null;
+            String failed = null;
+            try {
+                result = work.call();
+                if (result == null) failed = "nothing read";
+            } catch (StackOverflowError | OutOfMemoryError e) {
+                failed = "too big to read";
+            } catch (Exception e) {
+                failed = e.getMessage() == null || e.getMessage().isBlank() ? e.getClass().getSimpleName() : e.getMessage();
+            }
+            T r = result;
+            String why = failed;
+            SwingUtilities.invokeLater(() -> then.accept(r, why));
+        }, threadName);
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** An import's drawings and pins onto the map - each of the two files written once - and the map moved to them. */
+    private void imported(Kml.Parsed parsed) {
         try {
-            Kml.Parsed parsed = Kml.read(java.nio.file.Files.readString(chooser.getSelectedFile().toPath(), java.nio.charset.StandardCharsets.UTF_8));
             graphics.addAll(parsed.items());
-            for (Pins.Pin p : parsed.pins()) pins.add(p.name(), p.lat(), p.lon());
+            pins.addAll(parsed.pins());
             double s = 90, n = -90, w = 180, e = -180;
             int points = 0;
             for (MapGraphics.Item it : parsed.items()) {
@@ -639,8 +678,8 @@ final class MapWindow extends JFrame {
             }
             Dialogs.message(this, importedText(parsed.items().size(), parsed.pins().size()),
                     "Import", javax.swing.JOptionPane.INFORMATION_MESSAGE);
-        } catch (java.io.IOException | RuntimeException e) {
-            Dialogs.message(this, "Import failed: " + e.getMessage(), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
+        } catch (RuntimeException e) {
+            Dialogs.message(this, AsText.label("Import failed: " + e.getMessage()), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
     }
 

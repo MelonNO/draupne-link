@@ -101,8 +101,85 @@ public final class Kml {
                 .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
-    /** Reads a KML text: DRAUPNE's items by their ExtendedData, anybody's lines, polygons and points otherwise. */
+    /**
+     * What IMPORT takes of one file. 10 MB: the app writes some 110 bytes a pin and 0.5 KB a drawing plus 22 bytes a
+     * point, so its own export at the placemark limit is under 1 MB, and another program's with styles and
+     * descriptions a few times that; read whole and held as a tree, a 9 MB file took 45 MB of memory and half a
+     * second (2026-11-22, a busy PC). 5 000 placemarks (pins, drawings and symbols together): a busy overlay has tens
+     * to a few hundred, and every pin within 10 km is worked out for the live picture on each paint - 0.7 ms a
+     * picture for 500 pins, 2.9 ms for 5 000, 6.3 ms for 10 000 (the same day). 100 elements deep: KML's own
+     * nesting is about 10, folders in folders a few more.
+     */
+    public static final long MAX_IMPORT_BYTES = 10L << 20;
+    public static final int MAX_IMPORT_PLACEMARKS = 5_000, MAX_DEPTH = 100;
+
+    /**
+     * IMPORT's read of a file: refused over {@link #MAX_IMPORT_BYTES} before any of it is taken in, over
+     * {@link #MAX_IMPORT_PLACEMARKS} or {@link #MAX_DEPTH} as soon as the count passes, each with a short line as the
+     * exception's message. Not for the Swing thread: a file at the limits takes a second or two.
+     * @throws IllegalArgumentException over a limit, or not KML
+     */
+    public static Parsed readImport(java.nio.file.Path file) throws java.io.IOException {
+        String tooBig = "file over " + (MAX_IMPORT_BYTES >> 20) + " MB";
+        if (java.nio.file.Files.size(file) > MAX_IMPORT_BYTES) throw new IllegalArgumentException(tooBig);
+        byte[] bytes;
+        try (java.io.InputStream in = java.nio.file.Files.newInputStream(file)) {
+            bytes = in.readNBytes((int) MAX_IMPORT_BYTES + 1); // never more than the limit, should the file grow meanwhile
+        }
+        if (bytes.length > MAX_IMPORT_BYTES) throw new IllegalArgumentException(tooBig);
+        return read(bytes, MAX_IMPORT_PLACEMARKS);
+    }
+
+    /**
+     * Reads a KML text: DRAUPNE's items by their ExtendedData, anybody's lines, polygons and points otherwise. Any
+     * count of placemarks (the app's own drawings file grows with every import); refused when nested deeper than
+     * {@link #MAX_DEPTH}.
+     */
     public static Parsed read(String kml) {
+        return read(kml.getBytes(StandardCharsets.UTF_8), Integer.MAX_VALUE);
+    }
+
+    /** A limit passed while the file is looked through: the look ends there. */
+    private static final class OverLimit extends org.xml.sax.SAXException {
+        OverLimit(String line) {
+            super(line);
+        }
+    }
+
+    /**
+     * The file looked through once without keeping any of it: how deep it nests and how many placemarks it has,
+     * ended at the first one over. The reading below walks the tree by recursion (a text's parts, element by
+     * element), so a text nested deep enough ended in a StackOverflowError.
+     */
+    private static void checkLimits(byte[] xml, int maxPlacemarks) {
+        try {
+            javax.xml.parsers.SAXParserFactory f = javax.xml.parsers.SAXParserFactory.newInstance();
+            f.setNamespaceAware(false);
+            f.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            f.newSAXParser().parse(new ByteArrayInputStream(xml), new org.xml.sax.helpers.DefaultHandler() {
+                private int depth, placemarks;
+
+                @Override
+                public void startElement(String uri, String localName, String qName, org.xml.sax.Attributes attributes) throws OverLimit {
+                    if (++depth > MAX_DEPTH) throw new OverLimit("nested over " + MAX_DEPTH + " deep");
+                    if ("Placemark".equals(qName) && ++placemarks > maxPlacemarks) throw new OverLimit("over " + maxPlacemarks + " placemarks");
+                }
+
+                @Override
+                public void endElement(String uri, String localName, String qName) {
+                    depth--;
+                }
+            });
+        } catch (OverLimit e) {
+            throw new IllegalArgumentException(e.getMessage());
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Not a KML file: " + e.getMessage(), e);
+        }
+    }
+
+    private static Parsed read(byte[] xml, int maxPlacemarks) {
+        checkLimits(xml, maxPlacemarks);
         List<MapGraphics.Item> items = new ArrayList<>();
         List<Pins.Pin> pins = new ArrayList<>();
         Document doc;
@@ -112,7 +189,7 @@ public final class Kml {
             f.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
             f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
             f.setExpandEntityReferences(false);
-            doc = f.newDocumentBuilder().parse(new ByteArrayInputStream(kml.getBytes(StandardCharsets.UTF_8)));
+            doc = f.newDocumentBuilder().parse(new ByteArrayInputStream(xml));
         } catch (Exception e) {
             throw new IllegalArgumentException("Not a KML file: " + e.getMessage(), e);
         }

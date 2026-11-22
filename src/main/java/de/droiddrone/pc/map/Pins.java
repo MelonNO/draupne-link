@@ -154,6 +154,28 @@ public final class Pins {
     }
 
     /**
+     * Several pins at once (an import's), each as {@link #add} takes it - dropped now, a name on one line, the next
+     * free name for one without - and the file written once for all of them: written per pin, the whole file again
+     * each time, an import of thousands took minutes.
+     */
+    public synchronized void addAll(List<Pin> more) {
+        if (more.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        for (Pin p : more) {
+            String name = p.name() == null || p.name().isBlank() ? nextName() : oneLine(p.name());
+            pins.add(new Pin(name, p.lat(), p.lon(), now, false));
+        }
+        save();
+    }
+
+    /** How often the file was written (tests). */
+    synchronized int saves() {
+        return saves;
+    }
+
+    private int saves;
+
+    /**
      * A name on one line: pins.txt keeps a pin a line, its parts split by tabs - a KML's name over two lines split the
      * pin, and the next start moved the whole file aside as broken.
      */
@@ -249,6 +271,7 @@ public final class Pins {
 
     private void save() {
         if (file == null || keepOff) return;
+        saves++;
         StringBuilder sb = new StringBuilder();
         for (Pin p : pins) sb.append(p.name().replace('\t', ' ')).append('\t')
                 .append(String.format(Locale.ROOT, "%.7f", p.lat())).append('\t').append(String.format(Locale.ROOT, "%.7f", p.lon()))
