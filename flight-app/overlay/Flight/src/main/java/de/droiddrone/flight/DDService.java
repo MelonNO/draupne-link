@@ -728,8 +728,7 @@ public class DDService extends Service {
      */
     private void wakeScreen() {
         try {
-            Intent intent = new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_WAKE)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            Intent intent = MainActivity.wakeIntent(this); // the app's own WAKE: with its token
             PendingIntent full = PendingIntent.getActivity(this, 1, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification wake = new NotificationCompat.Builder(this, WAKE_CHANNEL_ID)
                     .setContentTitle(getString(R.string.app_name))

@@ -58,8 +58,7 @@ public class AppReplacedReceiver extends BroadcastReceiver {
             if (manager == null) return;
             manager.createNotificationChannel(new NotificationChannel(DDService.WAKE_CHANNEL_ID,
                     context.getString(R.string.dd_wake_channel), NotificationManager.IMPORTANCE_HIGH)); // kept as it was if it exists
-            Intent open = new Intent(context, MainActivity.class).setAction(MainActivity.ACTION_WAKE)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            Intent open = MainActivity.wakeIntent(context); // the app's own WAKE: with its token
             PendingIntent full = PendingIntent.getActivity(context, 2, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification n = new NotificationCompat.Builder(context, DDService.WAKE_CHANNEL_ID)
                     .setContentTitle(context.getString(R.string.app_name))

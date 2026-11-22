@@ -182,6 +182,34 @@ public class MainActivity extends Activity {
     };
     /** pc.21: the service's wake notification opens the app with this over the lock screen, screen on. */
     public static final String ACTION_WAKE = "de.droiddrone.flight.pc.WAKE";
+    /** The app's own WAKE carries its token (WakeIntent): another app's WAKE opens it behind the lock, as a plain start. */
+    static final String EXTRA_WAKE_TOKEN = "de.droiddrone.flight.pc.WAKE_TOKEN";
+    private static volatile String wakeToken;
+    /** Over the lock screen for the showing it was woken for only (WakeIntent.OverLock): the activity's thread's. */
+    private final de.droiddrone.common.WakeIntent.OverLock overLock = new de.droiddrone.common.WakeIntent.OverLock();
+
+    /** The app's WAKE intent - the service's after a sleep, and the one after an update or an error - with its token. */
+    static Intent wakeIntent(android.content.Context c) {
+        return new Intent(c, MainActivity.class).setAction(ACTION_WAKE).putExtra(EXTRA_WAKE_TOKEN, wakeToken(c))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+    }
+
+    /** The token of the app's own WAKE: made once, kept in the app's own storage (it outlives the process). */
+    static String wakeToken(android.content.Context c) {
+        String t = wakeToken;
+        if (t != null) return t;
+        synchronized (MainActivity.class) {
+            if (wakeToken != null) return wakeToken;
+            android.content.SharedPreferences p = c.getApplicationContext().getSharedPreferences("dd_wake", android.content.Context.MODE_PRIVATE);
+            t = p.getString("token", null);
+            if (t == null || t.length() != 2 * de.droiddrone.common.WakeIntent.TOKEN_BYTES) {
+                t = de.droiddrone.common.WakeIntent.newToken(new java.security.SecureRandom());
+                p.edit().putString("token", t).commit();
+            }
+            wakeToken = t;
+            return t;
+        }
+    }
     /** The screen is dimmed and may go off (standby, deep sleep); set once per change, not every second. */
     private boolean powerLookLow;
     private View llPowerRow;
@@ -547,11 +575,17 @@ public class MainActivity extends Activity {
 
     /**
      * Opened by the service's wake notification after a sleep check: over the lock screen, with the screen turned
-     * on - the pilot sees the phone is back without touching it. Only then: a plain start stays behind the lock.
+     * on - the pilot sees the phone is back without touching it. Only then: a plain start stays behind the lock. Only
+     * the app's own WAKE (its token, WakeIntent), and for that showing only (cleared again in onStop).
      */
     private void showOverLockScreen(Intent intent){
         if (intent == null || !ACTION_WAKE.equals(intent.getAction())) return;
+        if (!de.droiddrone.common.WakeIntent.own(wakeToken(this), intent.getStringExtra(EXTRA_WAKE_TOKEN))) {
+            log("A WAKE not from this app: opened as a plain start, behind the lock screen");
+            return;
+        }
         log("Opened to wake the phone: over the lock screen");
+        overLock.woken();
         if (Build.VERSION.SDK_INT >= 27) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
@@ -1161,6 +1195,7 @@ public class MainActivity extends Activity {
         powerLookLow = false; // the line above undid it; updateUi dims again if the mode wants
         updateUi();
         updateArmedTouch(); // Q-004: armed as the screen comes up (the app opened itself again in flight): locked
+        overLock.resumed(); // a WAKE's showing is on the screen now (WakeIntent.OverLock)
         uiTimer = new Timer();
         TimerTask tt = new TimerTask() {
             private int ticks;
@@ -1321,6 +1356,25 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart(){
         super.onStart();
+    }
+
+    /**
+     * The screen a WAKE brought up over the lock screen has been shown and is left now (the screen off, another app in
+     * front): the lock screen is in front of the app again from here (WakeIntent.OverLock). The next WAKE of the app's
+     * own - the PC waking it, the app opening itself again - puts it over the lock screen anew.
+     */
+    @Override
+    protected void onStop(){
+        super.onStop();
+        if (overLock.stopped()) {
+            if (Build.VERSION.SDK_INT >= 27) {
+                setShowWhenLocked(false);
+                setTurnScreenOn(false);
+            } else {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+            }
+            log("The wake's showing is over: behind the lock screen again");
+        }
     }
 
     /**
