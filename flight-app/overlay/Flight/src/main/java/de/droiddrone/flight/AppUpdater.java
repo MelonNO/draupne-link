@@ -104,12 +104,35 @@ final class AppUpdater {
         File apk = new File(d, "update.apk");
         try {
             download(found, apk, text -> { }, percent, disarmed, "FC not known disarmed: download stopped");
+            checkNewerBuild(c, apk); // the APK's own word, not the version the PC named (UpdateSource)
             if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("FC not known disarmed: not installed");
             installing.run();
             RemoteUpdate.pending(c, true); // opens again by itself once updated
             install(c, apk, true, disarmed);
         } finally {
             if (apk.exists() && !apk.delete()) log("Could not delete " + apk);
+        }
+    }
+
+    /**
+     * The downloaded file is a newer build of this app: its package and its own version code, read from the APK
+     * (Android's archive reader), against the installed app's (UpdateSource.newer). Otherwise it is not installed.
+     */
+    @SuppressWarnings("deprecation")
+    private static void checkNewerBuild(Context c, File apk) throws IOException {
+        android.content.pm.PackageManager pm = c.getPackageManager();
+        android.content.pm.PackageInfo file = pm.getPackageArchiveInfo(apk.getPath(), 0);
+        long fileCode = file == null ? -1 : Build.VERSION.SDK_INT >= 28 ? file.getLongVersionCode() : file.versionCode;
+        long ownCode;
+        try {
+            android.content.pm.PackageInfo own = pm.getPackageInfo(c.getPackageName(), 0);
+            ownCode = Build.VERSION.SDK_INT >= 28 ? own.getLongVersionCode() : own.versionCode;
+        } catch (android.content.pm.PackageManager.NameNotFoundException e) {
+            throw new IOException("this app's own version unknown");
+        }
+        if (!de.droiddrone.common.UpdateSource.newer(file == null ? null : file.packageName, fileCode, c.getPackageName(), ownCode)) {
+            throw new IOException(file == null ? "the download is no APK" : !c.getPackageName().equals(file.packageName) ? "the APK is another app"
+                    : "the APK is not newer (build " + fileCode + ", installed " + ownCode + ")");
         }
     }
 

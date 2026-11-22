@@ -19,6 +19,7 @@ import java.io.IOException;
 
 import de.droiddrone.common.GuardedCopy;
 import de.droiddrone.common.PacketIds;
+import de.droiddrone.common.UpdateSource;
 import de.droiddrone.common.UpdateWithdraw;
 
 import static de.droiddrone.common.Logcat.log;
@@ -26,9 +27,10 @@ import static de.droiddrone.common.Logcat.log;
 /**
  * pc.32: the update asked for by the connected PC (DRAUPNE Link 1.0.41, the pilot: "a remote update for connected
  * phones"). REMOTE_UPDATE [0x77][version UTF][APK url UTF][its SHA-256 UTF], unnumbered, sent again until the
- * phone's PHONE_UPDATE record answers. The phone takes it only for a newer version and only with the flight
- * controller known to be disarmed (installing ends this app, and the sticks with it); it downloads the APK, checks the
- * SHA-256 and installs it like the in-app update ({@link AppUpdater}) - without a tap on Android 12 and later once
+ * phone's PHONE_UPDATE record answers. The phone takes it only from this project's release downloads, only for a newer
+ * build - the APK's own version code, read from the file (UpdateSource) - and only with the flight controller known to
+ * be disarmed (installing ends this app, and the sticks with it); it downloads the APK, checks the SHA-256 and
+ * installs it like the in-app update ({@link AppUpdater}) - without a tap on Android 12 and later once
  * this app installed its own last update, else Android's "update this app?" prompt on the phone. When it is done the
  * app opens again by itself ({@link AppReplacedReceiver}) and listens for the PC, which reconnects.
  */
@@ -38,6 +40,8 @@ final class RemoteUpdate {
     static final int IDLE = 0, DOWNLOADING = 1, INSTALLING = 2, TAP_NEEDED = 3, FAILED = 4, REFUSED_ARMED = 5, CURRENT = 6;
     /** F-058: what the PC shows after "update failed - " when the app may not install apps (the PC knows the words). */
     static final String INSTALLS_NOT_ALLOWED = "allow \"Install unknown apps\" for DRAUPNE Flight on the phone, once by hand";
+    /** What the PC shows after "update failed - " for an address that is not the project's release downloads (UpdateSource). */
+    static final String NOT_FROM_RELEASES = "not from the project's release downloads";
     /** A state other than IDLE is reported this long after it last changed (the PC shows the last one). */
     private static final long REPORT_MS = 30_000;
     /**
@@ -67,6 +71,13 @@ final class RemoteUpdate {
     /** The PC's REMOTE_UPDATE. Never blocks: the download runs on a thread of its own. */
     static void request(Context c, String version, String url, String sha256, Msp msp, Mavlink mavlink) {
         if (busy || c == null || version == null || url == null || sha256 == null) return;
+        // only from this project's release downloads (UpdateSource); what is installed is decided by the APK's own
+        // version code, read from the file after the download (AppUpdater) - the version named here can only refuse
+        if (!UpdateSource.fromReleases(url)) {
+            if (state != FAILED || !NOT_FROM_RELEASES.equals(text)) log("Remote update to " + version + " refused: not from the project's release downloads");
+            set(FAILED, 0, NOT_FROM_RELEASES);
+            return;
+        }
         String current = MainActivity.versionName;
         if (current != null && !UpdateCheck.isNewer(version, current)) {
             set(CURRENT, 100, current);
