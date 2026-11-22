@@ -16,7 +16,8 @@ import java.awt.Window;
  * A drone lost while armed, and what this PC then holds back (2026-11-19 evening). The other way a map loads nothing
  * "though the computer has internet" - on purpose: for ten minutes after a link that last said ARMED went quiet, a
  * drone here may be flying, and nothing is fetched so the sticks and the picture have the network. The scenario
- * loses a drone in the air for good, ends its link as a pilot would, and checks that the PC says so (the LINK card's
+ * loses a drone in the air for good, presses LOST DRONE and keeps trying when it asks (Q-002: the drone was armed as
+ * the link went), ends its link as a pilot would, and checks that the PC says so (the LINK card's
  * "Downloads wait: ...", IT'S DOWN - RESUME), that the map fetches nothing meanwhile, and that it fetches again the
  * moment the pilot says the drone is down.
  */
@@ -42,6 +43,17 @@ class LostArmedScenario {
             ui.until("the PC to count the link lost", 20_000, () -> !ui.has("LINK READY"));
             ui.until("LOST DRONE to be offered", 30_000, () -> ui.has("LOST DRONE"));
             ui.shot("the link lost in the air: LOST DRONE is offered");
+
+            // Q-002: LOST DRONE on a drone that was armed as the link went asks first ("Keep trying" the default) - it
+            // may be on its way home, and ending the link ends the tries to get it back. Kept: the link is not ended
+            ui.click("LOST DRONE");
+            ui.until("LOST DRONE asks first", 10_000, () -> ui.has("Keep trying"));
+            rig.check(ui.has("End link - lost"), "the question offers End link - lost beside Keep trying");
+            ui.shot("LOST DRONE asks first: armed when the link was lost");
+            ui.click("Keep trying");
+            Ui.pause(1000);
+            rig.check(rig.logged("LOST DRONE: not ended - still trying"), "Keep trying: the log says the link was not ended");
+            rig.check(!rig.logged("LOST DRONE: link to "), "and the link to the drone was not ended");
 
             // the pilot ends the link without marking the drone lost
             ui.click("STANDBY MODE");
