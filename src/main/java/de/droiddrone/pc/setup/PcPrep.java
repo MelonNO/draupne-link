@@ -171,14 +171,103 @@ public final class PcPrep {
         return Path.of(System.getenv().getOrDefault("ProgramData", "C:\\ProgramData"), "DraupneLink", "setup.log");
     }
 
+    /** The log's folder was looked at this run, and is this app's own to write in. */
+    private static Boolean logFolderReady;
+
+    /**
+     * A line into the log. These tasks run as administrator or SYSTEM, and any user may make a folder in ProgramData:
+     * so the log's folder is made for administrators and SYSTEM alone, or checked to be theirs ({@link #logFolderScript},
+     * once a run), and the line is added only to a log that is a file ({@link #append}). Otherwise nothing is logged.
+     */
     private static void log(String line) {
         try {
             Path file = logFile();
-            Files.createDirectories(file.getParent());
-            Files.writeString(file, LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME).substring(0, 19)
-                            + "  " + line + System.lineSeparator(), StandardCharsets.UTF_8,
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (IOException ignored) {
+            synchronized (PcPrep.class) {
+                if (logFolderReady == null) {
+                    Shell.Result r = Shell.powershell(Duration.ofSeconds(60), logFolderScript(file.getParent(), SID_ADMINISTRATORS,
+                            List.of(SID_SYSTEM, SID_ADMINISTRATORS), SID_USERS));
+                    logFolderReady = logFolderReady(r);
+                    if (!logFolderReady) System.err.println("setup.log not written: " + r.output().strip());
+                }
+            }
+            if (!logFolderReady) return;
+            append(file, LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME).substring(0, 19)
+                    + "  " + line + System.lineSeparator());
+        } catch (IOException | RuntimeException ignored) {
+        }
+    }
+
+    /** Windows' own names for SYSTEM, the Administrators group and the Users group: the same in every language. */
+    static final String SID_SYSTEM = "S-1-5-18", SID_ADMINISTRATORS = "S-1-5-32-544", SID_USERS = "S-1-5-32-545";
+
+    /**
+     * The script that makes the log's folder, or looks at the one there, and says "OK" or why not ("REFUSED: ...").
+     * <ul>
+     * <li>None there: made with its rights in one step - full control for {@code full}, reading for {@code read},
+     * nothing taken over from ProgramData's own rights (those let every user add files to a folder in it), its owner
+     * {@code owner}.</li>
+     * <li>One there: refused when it is a link (a junction, a symbolic link: the log would be written where it leads),
+     * no folder, or owned by somebody not in {@code full}; else brought to the same rights - an install from before
+     * made it with ProgramData's.</li>
+     * </ul>
+     * By SID, never by name: the names differ with Windows' language.
+     */
+    static String logFolderScript(Path dir, String owner, List<String> full, String read) {
+        List<String> all = new java.util.ArrayList<>(full);
+        all.add(owner);
+        all.add(read);
+        for (String sid : all) if (!sid.matches("S-1-[0-9]+(-[0-9]+)+")) throw new IllegalArgumentException("not a SID: " + sid);
+        StringBuilder s = new StringBuilder("$ErrorActionPreference = 'Stop'\n");
+        s.append("$d = ").append(Shell.psQuote(dir.toString())).append('\n');
+        s.append("$sid = { param($v) New-Object System.Security.Principal.SecurityIdentifier($v) }\n");
+        s.append("$rule = { param($v, $rights) New-Object System.Security.AccessControl.FileSystemAccessRule((& $sid $v), $rights, "
+                + "'ContainerInherit, ObjectInherit', 'None', 'Allow') }\n");
+        s.append("$acl = New-Object System.Security.AccessControl.DirectorySecurity\n");
+        s.append("$acl.SetAccessRuleProtection($true, $false)\n");
+        s.append("$acl.SetOwner((& $sid '").append(owner).append("'))\n");
+        for (String sid : full) s.append("$acl.AddAccessRule((& $rule '").append(sid).append("' 'FullControl'))\n");
+        s.append("$acl.AddAccessRule((& $rule '").append(read).append("' 'ReadAndExecute'))\n");
+        s.append("$item = Get-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue\n");
+        s.append("if (-not $item) { [System.IO.Directory]::CreateDirectory($d, $acl) | Out-Null; 'OK'; exit 0 }\n");
+        s.append("if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { 'REFUSED: a link'; exit 0 }\n");
+        s.append("if (-not $item.PSIsContainer) { 'REFUSED: not a folder'; exit 0 }\n");
+        s.append("$is = $item.GetAccessControl('Owner').GetOwner([System.Security.Principal.SecurityIdentifier]).Value\n");
+        s.append("if (@('").append(String.join("', '", full)).append("') -notcontains $is) { 'REFUSED: owner ' + $is; exit 0 }\n");
+        s.append("[System.IO.Directory]::SetAccessControl($d, $acl)\n");
+        s.append("'OK'\n");
+        return s.toString();
+    }
+
+    /** The script ran and its last word is OK. */
+    static boolean logFolderReady(Shell.Result r) {
+        if (!r.ok() || r.output() == null) return false;
+        String[] lines = r.output().strip().split("\\R");
+        return lines[lines.length - 1].strip().equals("OK");
+    }
+
+    /**
+     * Adds text to the log: only when its folder is no link and the log is a file or not there yet - never through a
+     * link in its place, and never following one when it is opened.
+     */
+    static void append(Path file, String text) throws IOException {
+        java.nio.file.LinkOption itself = java.nio.file.LinkOption.NOFOLLOW_LINKS;
+        if (isLink(file.getParent())) throw new IOException(file.getParent() + " is a link: nothing written");
+        if (Files.exists(file, itself) && (isLink(file) || !Files.isRegularFile(file, itself))) {
+            throw new IOException(file + " is a link or no file: nothing written");
+        }
+        try (java.nio.channels.SeekableByteChannel out = Files.newByteChannel(file,
+                java.util.Set.of(StandardOpenOption.CREATE, StandardOpenOption.APPEND, itself))) {
+            out.write(java.nio.ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8)));
+        }
+    }
+
+    /** A junction, a symbolic link, a mount point: what Windows marks as a reparse point (FILE_ATTRIBUTE_REPARSE_POINT), itself looked at. */
+    static boolean isLink(Path p) throws IOException {
+        try {
+            Object attributes = Files.getAttribute(p, "dos:attributes", java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            return attributes instanceof Integer a && (a & 0x400) != 0;
+        } catch (UnsupportedOperationException | IllegalArgumentException e) {
+            return Files.isSymbolicLink(p); // not Windows
         }
     }
 
