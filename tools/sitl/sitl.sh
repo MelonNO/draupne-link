@@ -232,7 +232,11 @@ status() {
     local pid; pid=$(running_pid)
     local folder; folder=$(cat "$CURRENT" 2>/dev/null)
     if [ -z "$pid" ]; then
-        say "not running${folder:+ (supervisor of $folder between two starts)}"
+        if [ -n "$folder" ] && flock -n "$LOCK" true 2>/dev/null; then
+            rm -f "$CURRENT" # no supervisor holds the lock: left behind by one that was ended outright (wsl --terminate)
+            folder=""
+        fi
+        say "not running${folder:+ (its supervisor is starting it again in $folder)}"
         return 1
     fi
     local v; v=$(cat "$folder/version.txt" 2>/dev/null)
