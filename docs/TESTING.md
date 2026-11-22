@@ -461,6 +461,11 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   shows; `-Pesc=silence` also switches the beacons off in the same visit; `-Pesc=beeper` is silent (the phone app's
   beeper silence written to the board's memory, read back, put back; nothing saved); `-Pesc=spin` turns each motor
   for 0.8 s and is only for when the pilot asks for it.
+- How fast a real Betaflight board takes MSP from its USB, the PC sending what the phone sends: `gradlew mspRateProbe
+  [-Pport=COM9] [-Prates=250,100,50] [-Pseconds=10] [-Prequests=42] [-Pmix=phone|attitude]` - stick frames at each
+  rate (0: none, a baseline) with the phone's requests between them, every answer timed (sent, answered, lost, delay
+  median / 90 % / max). Arming blocked throughout, idle sticks only; at the end STOP to the motors and the arming block
+  as it was. Enter stops it early; Ctrl+C may end it hard (the block then stays until the board restarts).
 - The app's doors for the stand-ins (the app never opens them itself): `Outside` (web, programs, browser,
   Explorer), `Joystick.use`, `BetaflightUsb.use`, the system properties `draupne.appData` and
   `draupne.bench.madeUpSaves`.

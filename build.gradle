@@ -274,6 +274,18 @@ tasks.register('escProbe', JavaExec) {
     args((project.findProperty('esc') ?: 'read').toString(), (project.findProperty('port') ?: '').toString())
 }
 
+// By hand, on ONE real Betaflight board on USB (src/test/java/de/droiddrone/pc/setup/MspRateProbe): the PC sends what the
+// phone sends (stick frames at each rate, its requests between them) and times every answer - whether sticks queue up
+// at the board. Arming blocked throughout, idle sticks only, STOP to the motors at the end. Enter stops early.
+tasks.register('mspRateProbe', JavaExec) {
+    group = 'verification'
+    description = "Times the MSP answers of the flight controller on USB at several stick rates (-Pport=COM9 -Prates=250,100,50 -Pseconds=10 -Prequests=42 -Pmix=phone|attitude)"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.pc.setup.MspRateProbe'
+    standardInput = System.in
+    args(['port', 'rates', 'seconds', 'requests', 'mix'].collect { (project.findProperty(it) ?: '').toString() })
+}
+
 // ---- R1 BEGIN: the hardware rig's board tools (src/test/java/de/droiddrone/bench/hw) -------------------------------------
 // By hand, on ONE real flight controller on USB, around tests that write to it. -Pport=COM9 names the port; without
 // it the one flight controller found is taken (boardSafe: every one found).
