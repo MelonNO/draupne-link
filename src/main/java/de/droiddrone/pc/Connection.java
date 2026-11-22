@@ -82,8 +82,15 @@ public class Connection {
 
 
     public String describe(ControlLink.State state) {
+        return describe(link, state);
+    }
+
+    /** The log's line for the link's state. */
+    public static String describe(ControlLink link, ControlLink.State state) {
         return switch (state) {
             case CONNECTING -> link.isWatchOnly() ? "Waiting for the pilot PC... (connected? Allow spectators on?)"
+                    // F-074: the questions until this connection's first link; a link that was up is lost
+                    : link.wasEverReady() ? "Link lost - reconnecting."
                     : "Waiting for the phone... (DRAUPNE Flight open? On Tailscale? Same key?)";
             case CONFIGURING -> "Connected. Sending settings...";
             case READY -> "Settings accepted - link ready.";

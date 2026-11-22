@@ -190,10 +190,27 @@ class LinkReviewRoundTest {
     /** CONNECTING all through the countdown to a sleeper's check-in: WAKING. */
     @Test
     void thePillSaysWakingWhileASleeperIsWaitedFor() {
-        assertEquals("WAKING", MainWindow.waitingPill(ControlLink.State.CONNECTING, true));
-        assertEquals("WAKING", MainWindow.waitingPill(ControlLink.State.CONFIGURING, true));
-        assertEquals("CONNECTING", MainWindow.waitingPill(ControlLink.State.CONNECTING, false));
-        assertEquals("WAITING FOR PHONE", MainWindow.waitingPill(ControlLink.State.CONFIGURING, false));
+        assertEquals("WAKING", MainWindow.waitingPill(ControlLink.State.CONNECTING, true, false));
+        assertEquals("WAKING", MainWindow.waitingPill(ControlLink.State.CONFIGURING, true, false));
+        assertEquals("WAKING", MainWindow.waitingPill(ControlLink.State.CONNECTING, true, true), "a sleeper waited for is no loss");
+        assertEquals("CONNECTING", MainWindow.waitingPill(ControlLink.State.CONNECTING, false, false));
+        assertEquals("WAITING FOR PHONE", MainWindow.waitingPill(ControlLink.State.CONFIGURING, false, false));
+    }
+
+    /**
+     * F-074 (the bench's rescue-link-lost, 1.0.71): a link that was up, lost in flight, said CONNECTING in yellow, the
+     * card FC: NO STATUS YET, while the video said LINK LOST. F-019's rule: CONNECTING until the first link, LINK LOST
+     * after one was up. (The log's line: LinkLostWordsEndToEndTest.)
+     */
+    @Test
+    void aLinkThatWasUpIsLostInTheHeaderAndTheCard() {
+        assertEquals("LINK LOST", MainWindow.waitingPill(ControlLink.State.CONNECTING, false, true));
+        assertEquals("LINK LOST", MainWindow.waitingPill(ControlLink.State.CONFIGURING, false, true), "the phone heard again, settings not through yet");
+        assertEquals("FC: NO STATUS YET", MainWindow.fcNoStatus(false, false, false), "before the first link");
+        assertEquals("FC: NO STATUS YET", MainWindow.fcNoStatus(true, true, false), "the first link up, its first status on its way");
+        assertEquals("FC: NO DATA", MainWindow.fcNoStatus(true, false, false), "the link lost before a status came");
+        assertEquals("FC: NO DATA", MainWindow.fcNoStatus(true, false, true), "the link lost");
+        assertEquals("FC: NO DATA", MainWindow.fcNoStatus(true, true, true), "back, the status from before the loss old");
     }
 
     /** "Waiting for the phone... (DRAUPNE Flight open? On Tailscale? Same key?)" in the log, of a phone that sleeps as asked. */

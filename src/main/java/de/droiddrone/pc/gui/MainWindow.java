@@ -3715,7 +3715,9 @@ public class MainWindow extends JFrame {
             setLabel(fcStateLabel, "FC: NOT ON THE PHONE - CHECK THE USB DATA CABLE", Theme.BAD);
         } else if (fc == null || MonoClock.ms() - fc.receivedAt() > 3000 || !fc.armedKnown()) {
             // F-062: nor a status read before the mode names came - it said DISARMED - READY TO ARM of a drone in the air
-            setLabel(fcStateLabel, connection == null ? " " : "FC: NO STATUS YET", Theme.MUTED);
+            ControlLink l = connection == null ? null : connection.getLink();
+            setLabel(fcStateLabel, l == null ? " " : fcNoStatus(l.wasEverReady(), l.getState() == ControlLink.State.READY,
+                    fc != null && fc.armedKnown()), Theme.MUTED);
         } else if (fc.armed()) {
             setLabel(fcStateLabel, "FC: ARMED" + (fc.activeModes().size() > 1 ? "  ·  " + String.join(" ", fc.activeModes()) : ""), Theme.BAD);
         } else if (fc.blockers().isEmpty()) {
@@ -5959,7 +5961,14 @@ public class MainWindow extends JFrame {
             }
             case VERSION_MISMATCH -> setPill("VERSION MISMATCH", Theme.BAD, Theme.BG);
             case CLOSED -> setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
-            default -> setPill(waitingPill(state, !link.isSpectator() && power.awaitingWake), Theme.WARN, Theme.BG);
+            default -> {
+                // F-074: LINK LOST in red once this connection's link was up - not of a phone that sleeps as asked
+                FcTelemetry.PhonePower said = link.getTelemetry().getPhonePower();
+                boolean lost = !link.isSpectator() && !link.isWatchOnly() && link.wasEverReady()
+                        && !sleepsAsMeant(state, power.awaitingWake, power.wanted, said == null ? -1 : said.mode());
+                String text = waitingPill(state, !link.isSpectator() && power.awaitingWake, lost);
+                setPill(text, text.equals(LINK_LOST) ? Theme.BAD : Theme.WARN, Theme.BG);
+            }
         }
         refreshLostDrone(link, state);
         if (!slow) return; // 1.0.64: the card's texts at the slow pace
@@ -5983,9 +5992,20 @@ public class MainWindow extends JFrame {
      * The pill while the link isn't up yet. 1.0.64: WAKING while a sleeping phone is waited for (it said CONNECTING all
      * through the countdown to its check-in).
      */
-    static String waitingPill(ControlLink.State state, boolean awaitingWake) {
+    static String waitingPill(ControlLink.State state, boolean awaitingWake, boolean lost) {
         if (awaitingWake) return "WAKING";
+        if (lost) return LINK_LOST; // F-074 (F-019's rule): CONNECTING until the first link, LINK LOST after one was up
         return state == ControlLink.State.CONNECTING ? "CONNECTING" : "WAITING FOR PHONE";
+    }
+
+    static final String LINK_LOST = "LINK LOST";
+
+    /**
+     * F-074: the controller card's FC line with no fresh status - NO STATUS YET until this connection's first link and
+     * first status; NO DATA once the link was up and is lost, or the status it had stopped coming.
+     */
+    static String fcNoStatus(boolean everReady, boolean linkUp, boolean statusSeen) {
+        return everReady && (!linkUp || statusSeen) ? "FC: NO DATA" : "FC: NO STATUS YET";
     }
 
     /**
