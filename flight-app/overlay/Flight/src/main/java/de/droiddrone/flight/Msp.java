@@ -177,6 +177,11 @@ public class Msp {
         return rxMap != null;
     }
 
+    /** F-068: what the flight controller's port says (Serial's status), for FcArmedState while nothing has answered. */
+    int portStatus(){
+        return serial.getStatus();
+    }
+
     /** DRAUPNE Link: whether the flight controller reports ARM on (its mode flags, read every half second). */
     public boolean isArmed(){
         return isInitialized && isArmed;

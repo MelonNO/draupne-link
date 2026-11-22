@@ -23,19 +23,25 @@ package de.droiddrone.flight;
  * false whenever it didn't know: while the FC came back after a USB glitch, before its mode ids were read, when its
  * status replies stopped coming (the writer skips requests on a slow USB link), and always on a MAVLink FC. Now a
  * guard acts only on a fresh {@link #DISARMED}; {@link #UNKNOWN} counts as armed.
+ * <p>
+ * F-068: with no flight controller answering, DISARMED only when there is no board on USB at all or the port was
+ * closed for a sleep - a board that has not answered yet (an app that has just started, in the air perhaps) is
+ * UNKNOWN (FcUnread, in Common, has the rule and its tests).
  */
 final class FcArmedState {
     static final int DISARMED = 0, ARMED = 1, UNKNOWN = 2;
     /**
-     * No flight controller connected: UNKNOWN if it was seen armed this recently (its USB link fell off in the air),
-     * else DISARMED - a phone on the bench with no FC can still go to standby.
+     * No board on USB: UNKNOWN if it was seen armed this recently (its USB link fell off in the air), else DISARMED -
+     * a phone on the bench with no FC can still go to standby.
      */
-    static final long ARMED_MEMORY_MS = 60_000;
+    static final long ARMED_MEMORY_MS = de.droiddrone.common.FcUnread.ARMED_MEMORY_MS;
     /** A MAVLink heartbeat (about one a second) older than this says nothing any more. */
     static final long MAVLINK_FRESH_MS = 3000;
     private static volatile long lastArmedMs;
     private static volatile long mavlinkAtMs;
     private static volatile boolean mavlinkArmed;
+    /** F-068: since when every look here found the port saying "no board on USB" (elapsedRealtime), 0: it does not. */
+    private static volatile long nothingSinceMs;
 
     private FcArmedState() {
     }
@@ -52,13 +58,37 @@ final class FcArmedState {
         int state;
         if (msp != null && msp.isInitialized()) {
             state = msp.armedState(now);
+            if (nothingSinceMs != 0) nothingSinceMs = 0;
         } else if (mavlink != null && mavlink.isInitialized()) {
             state = now - mavlinkAtMs <= MAVLINK_FRESH_MS ? (mavlinkArmed ? ARMED : DISARMED) : UNKNOWN;
+            if (nothingSinceMs != 0) nothingSinceMs = 0;
         } else {
-            state = lastArmedMs != 0 && now - lastArmedMs < ARMED_MEMORY_MS ? UNKNOWN : DISARMED;
+            state = unread(msp, now);
         }
         if (state == ARMED) lastArmedMs = now;
         return state;
+    }
+
+    /**
+     * F-068: no flight controller answers - by what its port says (FcUnread). Before: DISARMED unless this app had
+     * seen it armed within the minute, so an app that had just started said DISARMED of a drone in the air until the
+     * flight controller's first answers came, and for good when they never came. A few volatile reads; asked by the
+     * guards, never for a stick frame.
+     */
+    private static int unread(Msp msp, long now) {
+        int status = msp == null ? Serial.STATUS_NOT_INITIALIZED : msp.portStatus();
+        int port = status == Serial.STATUS_NOT_INITIALIZED ? de.droiddrone.common.FcUnread.PORT_CLOSED
+                : status == Serial.STATUS_DEVICE_NOT_CONNECTED ? de.droiddrone.common.FcUnread.PORT_NOTHING
+                : de.droiddrone.common.FcUnread.PORT_BOARD;
+        long since = nothingSinceMs;
+        if (port != de.droiddrone.common.FcUnread.PORT_NOTHING) {
+            if (since != 0) nothingSinceMs = 0;
+            since = now;
+        } else if (since == 0) {
+            nothingSinceMs = since = now;
+        }
+        long armedAt = lastArmedMs;
+        return de.droiddrone.common.FcUnread.state(port, now - since, PowerMode.isSleepMode(), armedAt == 0 ? -1 : now - armedAt);
     }
 
     /**

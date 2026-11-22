@@ -138,4 +138,25 @@ class FleetModeEndToEndTest {
         waitFor(() -> log.stream().anyMatch(l -> l.contains("refused: a pilot is connected")), 3000, "refused");
         assertEquals(VirtualDrone.NORMAL, drone.mode());
     }
+
+    /**
+     * F-068: a phone app that has just started anew has not read its flight controller yet - it may be in the air.
+     * Not known is not disarmed: the mode is refused (and its countdown never drops a stick frame) until the flight
+     * controller has answered; the PC's next repeat is taken then.
+     */
+    @Test
+    void aPhoneAppThatHasJustStartedRefusesItUntilItHasReadItsFlightController() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        start(config);
+        drone.restartApp();
+        waitFor(() -> log.stream().anyMatch(l -> l.contains("phone app back")), 6000, "the phone app back", log);
+        byte[] standby = de.droiddrone.common.FleetProtocol.request(config.getKey(),
+                new de.droiddrone.common.FleetProtocol.Request(0x1234, ControlLink.POWER_STANDBY, 5, 0, 0, 0, pc.getLocalPort()));
+        send(standby);
+        waitFor(() -> log.stream().anyMatch(l -> l.contains("refused: FC not known disarmed")), 1000, "refused: the flight controller is not read yet", log);
+        assertEquals(VirtualDrone.NORMAL, drone.mode());
+        Thread.sleep(VirtualDrone.FC_READ_MS);
+        send(standby); // the PC repeats what was not taken
+        waitFor(() -> drone.mode() == VirtualDrone.STANDBY, 3000, "taken once the flight controller is read", log);
+    }
 }

@@ -363,6 +363,7 @@ public final class VirtualDrone {
                     broken = false;
                     link.clear();
                 }
+                fcUnreadUntil = System.currentTimeMillis() + FC_READ_MS; // F-068: the new app has not read its flight controller yet
                 openSocket(keep);
                 log.accept("phone app back: new session on next Connect");
             } catch (IOException e) {
@@ -738,10 +739,22 @@ public final class VirtualDrone {
         idleFeeding = feed;
     }
 
-    /** The FC is known DISARMED (FcArmedState): no FC data counts as not known. */
+    /**
+     * The FC is known DISARMED (FcArmedState): no FC data counts as not known - and so does a flight controller the
+     * app has not read yet (F-068): a phone app that has just started knows nothing of it for a second or two.
+     */
     boolean fcDisarmed() {
-        return !fcLost && !fc.isArmed();
+        return fcRead() && !fc.isArmed();
     }
+
+    /** The app has its flight controller's answers: it is there, and read since the app started ({@link #FC_READ_MS}). */
+    private boolean fcRead() {
+        return !fcLost && System.currentTimeMillis() >= fcUnreadUntil;
+    }
+
+    /** F-068: an app started anew has its flight controller's first answers after about this long (the phone: 1 - 2 s). */
+    static final long FC_READ_MS = 1500;
+    private volatile long fcUnreadUntil;
 
     // ------------------------------------------------------------------ the session's packets (the buffer thread)
 
@@ -962,7 +975,7 @@ public final class VirtualDrone {
             out.writeInt((int) Math.round(fc.latDeg() * 1e7));
             out.writeInt((int) Math.round(fc.lonDeg() * 1e7));
             out.writeShort(0);
-            out.writeByte(fcLost ? 2 : fc.isArmed() ? 1 : 0);
+            out.writeByte(!fcRead() ? 2 : fc.isArmed() ? 1 : 0); // 2: not known (no FC data, or not read yet: F-068)
             boolean flown = isConnected();
             out.writeByte(flown ? 1 : 0);
             InetAddress pilot = flown ? udpSender.getIp() : null;
