@@ -187,6 +187,12 @@ public class MainActivity extends Activity {
     private static volatile String wakeToken;
     /** Over the lock screen for the showing it was woken for only (WakeIntent.OverLock): the activity's thread's. */
     private final de.droiddrone.common.WakeIntent.OverLock overLock = new de.droiddrone.common.WakeIntent.OverLock();
+    /**
+     * F-083: the main screen in front now, and when it last came up (created, a WAKE, resumed; the uptime clock, 0 when
+     * never in this process) - whether a wake notice opened it (WakeNotice).
+     */
+    static volatile boolean inFront;
+    static volatile long cameUpAt;
 
     /** The app's WAKE intent - the service's after a sleep, and the one after an update or an error - with its token. */
     static Intent wakeIntent(android.content.Context c) {
@@ -231,8 +237,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState){
         super.onCreate(savedInstanceState);
+        cameUpAt = android.os.SystemClock.elapsedRealtime(); // F-083: opening (WakeNotice's check)
         CrashGuard.install(this); // pc.55: an error that ends the app opens it again
         AppReplacedReceiver.opened(this);
+        WakeNotice.sayAllowed(this); // F-083: Android 14+ may not let the app open itself
         AppUpdater.withdrawLeftOver(getApplicationContext()); // F-070b: an update's install an earlier run left waiting
         String ended = CrashGuard.last(this);
         if (!ended.isEmpty()) log("The app was last ended by: " + ended);
@@ -1175,6 +1183,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume(){
         super.onResume();
+        cameUpAt = android.os.SystemClock.elapsedRealtime();
+        inFront = true;
         if (!PowerMode.isSleepMode()) { // pc.23: a sleeping phone does nothing it needn't - no GitHub
             checkOldApp();
             checkForUpdate();
@@ -1213,6 +1223,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause(){
         super.onPause();
+        inFront = false;
         isPaused = true;
         if (uiTimer != null) {
             uiTimer.cancel();
@@ -1374,6 +1385,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        cameUpAt = android.os.SystemClock.elapsedRealtime(); // F-083: a WAKE reached it (WakeNotice's check)
         setIntent(intent);
         handleUsbAttached(intent);
         showOverLockScreen(intent);

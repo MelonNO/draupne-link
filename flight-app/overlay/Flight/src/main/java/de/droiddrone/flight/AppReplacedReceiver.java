@@ -18,7 +18,6 @@ import android.app.PendingIntent;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.os.PowerManager;
 
 import androidx.core.app.NotificationCompat;
 
@@ -26,7 +25,7 @@ import static de.droiddrone.common.Logcat.log;
 
 /**
  * pc.32: this app was just updated. After a remote update ({@link RemoteUpdate}) it opens again by itself - the same
- * full-screen notification and bright wake lock as a wake from deep sleep, the sanctioned way to start an activity from
+ * full-screen notification as a wake from deep sleep ({@link WakeNotice}), the sanctioned way to start an activity from
  * the background - and listens for the PC, which reconnects. After an update the pilot started on the phone, nothing.
  */
 public class AppReplacedReceiver extends BroadcastReceiver {
@@ -51,16 +50,24 @@ public class AppReplacedReceiver extends BroadcastReceiver {
         }
     }
 
-    /** The app in front again from the background, the screen lit: after an update by the PC, and after an error ended it (pc.55, CrashGuard). */
-    static void openAgain(Context context, int text) {
+    /**
+     * The app in front again from the background: after an update by the PC, and after an error ended it (pc.55,
+     * CrashGuard). F-083: the notice meets the screen as it is - nothing lights it before Android has looked; the
+     * screen is lit only if the app is not up 2 s later (WakeNotice). done runs after that.
+     */
+    static void openAgain(Context context, int text, Runnable done) {
+        Notification n;
         try {
             NotificationManager manager = context.getSystemService(NotificationManager.class);
-            if (manager == null) return;
+            if (manager == null) {
+                WakeNotice.finish(done);
+                return;
+            }
             manager.createNotificationChannel(new NotificationChannel(DDService.WAKE_CHANNEL_ID,
                     context.getString(R.string.dd_wake_channel), NotificationManager.IMPORTANCE_HIGH)); // kept as it was if it exists
             Intent open = MainActivity.wakeIntent(context); // the app's own WAKE: with its token
             PendingIntent full = PendingIntent.getActivity(context, 2, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-            Notification n = new NotificationCompat.Builder(context, DDService.WAKE_CHANNEL_ID)
+            n = new NotificationCompat.Builder(context, DDService.WAKE_CHANNEL_ID)
                     .setContentTitle(context.getString(R.string.app_name))
                     .setContentText(context.getString(text))
                     .setSmallIcon(R.drawable.baseline_rocket_launch_24)
@@ -70,24 +77,14 @@ public class AppReplacedReceiver extends BroadcastReceiver {
                     .setFullScreenIntent(full, true)
                     .setAutoCancel(true)
                     .build();
-            // pc.55: the one from last time goes first. A notification that is still there is only changed by a new
-            // one of its number, and a changed notification opens nothing: the second time the app was to come back
-            // by itself it did not (seen in the emulator, 2026-11-20)
-            manager.cancel(NOTIFICATION_ID);
-            manager.notify(NOTIFICATION_ID, n);
         } catch (Exception e) {
             log("Updated notification error: " + e);
+            WakeNotice.finish(done);
+            return;
         }
-        try {
-            PowerManager pm = context.getSystemService(PowerManager.class);
-            if (pm != null) {
-                @SuppressWarnings("deprecation")
-                PowerManager.WakeLock bright = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK
-                        | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, "DRAUPNE:updated");
-                bright.acquire(5000);
-            }
-        } catch (Exception e) {
-            log("Updated wake lock error: " + e);
-        }
+        // pc.55: the one from last time goes first (WakeNotice cancels it). A notification that is still there is only
+        // changed by a new one of its number, and a changed notification opens nothing: the second time the app was to
+        // come back by itself it did not (seen in the emulator, 2026-11-20)
+        WakeNotice.post(context, NOTIFICATION_ID, n, text == R.string.dd_updated_text ? "updated" : "opening again", done);
     }
 }

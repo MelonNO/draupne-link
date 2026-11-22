@@ -137,7 +137,9 @@ final class CrashGuard {
      * The app in front from the background - after an error ended it, and after an update the PC asked for
      * (AppReplacedReceiver; pc.55: that one posted its notification over a lit screen, where it is only a notification -
      * the updated app stayed closed and the drone out of reach). A lit, unlocked screen is locked first where the app
-     * may lock it; then the full-screen notification opens it.
+     * may lock it; then the full-screen notification opens it. F-083: and nothing lights the screen before Android has
+     * looked at the notification - the app's own wake lock did, and on a phone with no lock screen the lit screen was
+     * an unlocked one: a banner (WakeNotice). done runs once the notice's check is over, about 2 s after it.
      */
     static void bringToFront(Context context, int text, Runnable done) {
         boolean lockedNow = false;
@@ -157,8 +159,7 @@ final class CrashGuard {
             log("Opening again: the screen's state: " + e);
         }
         if (!lockedNow) {
-            AppReplacedReceiver.openAgain(context, text);
-            done.run();
+            AppReplacedReceiver.openAgain(context, text, done); // done runs after its check (F-083: WakeNotice)
             return;
         }
         // the lock takes a moment (about a second in the emulator): asked for too early, the full-screen intent
@@ -180,11 +181,7 @@ final class CrashGuard {
                     main.postDelayed(this, 150);
                     return;
                 }
-                try {
-                    AppReplacedReceiver.openAgain(context, text);
-                } finally {
-                    done.run();
-                }
+                AppReplacedReceiver.openAgain(context, text, done); // runs done in every case, after its check
             }
         }, 300);
     }

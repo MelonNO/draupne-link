@@ -747,9 +747,10 @@ public class DDService extends Service {
 
     /**
      * The screen on and the app in front of the lock screen: a notification with a full-screen intent to
-     * MainActivity (the sanctioned way to start an activity from the background), and a bright wake lock as a
-     * second way to light the screen on phones that hold the full-screen intent back. The notification goes
-     * after 15 s; the activity stays.
+     * MainActivity (the sanctioned way to start an activity from the background). F-083: posted with the screen as
+     * it is - a bright wake lock beside it lit the screen before Android looked, and with no lock screen that made it
+     * a banner; the screen is lit only when the app is not up 2 s later (WakeNotice), for phones that hold the
+     * full-screen intent back. The notification goes after 15 s; the activity stays.
      */
     private void wakeScreen() {
         try {
@@ -765,24 +766,11 @@ public class DDService extends Service {
                     .setFullScreenIntent(full, true)
                     .setAutoCancel(true)
                     .build();
+            WakeNotice.post(this, WAKE_NOTIFICATION_ID, wake, "woken", null);
             NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.notify(WAKE_NOTIFICATION_ID, wake);
-                mainHandler.postDelayed(() -> manager.cancel(WAKE_NOTIFICATION_ID), 15000);
-            }
+            if (manager != null) mainHandler.postDelayed(() -> manager.cancel(WAKE_NOTIFICATION_ID), 15000);
         } catch (Exception e) {
             log("Wake notification error: " + e);
-        }
-        try {
-            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            if (pm != null) {
-                @SuppressWarnings("deprecation")
-                PowerManager.WakeLock bright = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK
-                        | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, "DRAUPNE:wakeScreen");
-                bright.acquire(5000);
-            }
-        } catch (Exception e) {
-            log("Screen wake lock error: " + e);
         }
     }
 
