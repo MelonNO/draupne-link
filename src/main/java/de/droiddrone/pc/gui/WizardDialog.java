@@ -120,8 +120,13 @@ class WizardDialog extends JDialog {
                 String f = failure;
                 SwingUtilities.invokeLater(() -> {
                     error = f == null ? null : "Something went wrong: " + f;
-                    if (w != null) w.jobDone();
-                    done.accept(r);
+                    try {
+                        done.accept(r);
+                    } finally {
+                        // F-073: after the result is in - counted before it, the last check's page still counted as
+                        // shown ("STEP 1 OF 9", then "STEP 2 OF 8")
+                        if (w != null) w.jobDone();
+                    }
                 });
             });
         }
@@ -323,6 +328,11 @@ class WizardDialog extends JDialog {
      */
     static String counterText(int shownIndex, int shownTotal, boolean totalKnown, String section) {
         return "STEP " + (shownIndex + 1) + (totalKnown ? " OF " + shownTotal : "") + (section.isEmpty() ? "" : "   ·   " + section);
+    }
+
+    /** What the step count says now (for the tests). */
+    String stepCounterText() {
+        return stepCounter.getText();
     }
 
     private void showStep(Page page) {
