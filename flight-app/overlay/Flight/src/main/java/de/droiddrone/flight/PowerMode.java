@@ -253,6 +253,15 @@ final class PowerMode {
         p.acquireWindowLock(p.service, PACKET_LOCK_MS);
     }
 
+    /**
+     * Listening in deep sleep with no lock of its own, where a packet's handling takes {@link #PACKET_LOCK_MS}: only
+     * then does Udp check a packet's key for it (SleepWake) - a few volatile reads, nothing for a stick frame.
+     */
+    static boolean listeningAsleep() {
+        PowerMode p = current;
+        return p != null && p.alarmHellos() && p.checking && p.burstDone;
+    }
+
     /** pc.50: a name query's answer is built and sent on another thread: awake this long for it. */
     private static final long REPLY_LOCK_MS = 1000;
 

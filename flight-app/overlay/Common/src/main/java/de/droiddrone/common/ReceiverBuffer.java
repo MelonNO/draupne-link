@@ -31,6 +31,7 @@
  *  The timers (the 4 s session timeout, the ping every 0.5 s, the buffer size's window of one ping) counted calls of
  *  processTimer, one a millisecond as long as the loop's 1 ms sleep was 1 ms: a busy phone or Windows' timer made
  *  the 4 s timeout 6 s or more. They count the clock's milliseconds now (at most MAX_STEP_MS a call).
+ *  The unnumbered packets waiting for the buffer thread are held to MAX_UNNUMBERED (the oldest dropped, DropOldest).
  */
 
 package de.droiddrone.common;
@@ -51,6 +52,15 @@ public class ReceiverBuffer {
     private final int disconnectTimeMs = 4000;
     private final ConcurrentHashMap<Short, SavedPacket> numberedBuffer = new ConcurrentHashMap<>();
     private final ConcurrentLinkedQueue<SavedPacket> unnumberedBuffer = new ConcurrentLinkedQueue<>();
+    /**
+     * DRAUPNE Link: the most unnumbered packets waiting for the buffer thread, which takes them every millisecond or so:
+     * over half a minute of the PC's (a ping and a few small packets a second) or of the phone's telemetry, 1.1 MB at
+     * most. One more drops the oldest (DropOldest, said once a minute). Before there was no bound. Counted beside the
+     * queue (its own size() walks it): one atomic add per packet, nothing more.
+     */
+    static final int MAX_UNNUMBERED = 1024;
+    private final java.util.concurrent.atomic.AtomicInteger unnumberedCount = new java.util.concurrent.atomic.AtomicInteger();
+    private final DropOldest.Said unnumberedDropped = new DropOldest.Said("Unnumbered packets", MAX_UNNUMBERED);
     private final ConcurrentLinkedQueue<SavedPacket> rejectedPackets = new ConcurrentLinkedQueue<>();
     private final ConcurrentHashMap<Short, Long> lastRequestedPackets = new ConcurrentHashMap<>();
     /** pc.31: the receive thread (addPacket) and the buffer thread (getNextPacket, the timer) share the numbering. */
@@ -181,7 +191,13 @@ public class ReceiverBuffer {
             }else{
                 if (!isConnected()) return;
                 lastPacketTimer = disconnectTimeMs;
+                if (unnumberedCount.get() >= MAX_UNNUMBERED && unnumberedBuffer.poll() != null) {
+                    unnumberedCount.decrementAndGet();
+                    String said = unnumberedDropped.dropped(clock.getAsLong());
+                    if (said != null) log(said);
+                }
                 unnumberedBuffer.add(new SavedPacket(packetName, (short) -1, data, ip, port));
+                unnumberedCount.incrementAndGet();
             }
         }
     }
@@ -235,6 +251,7 @@ public class ReceiverBuffer {
         // pc.31: a loop, not recursion, and the packets' handling (pongs, resends, the echo) outside the lock
         while (isActive) {
             SavedPacket packet = unnumberedBuffer.poll();
+            if (packet != null && unnumberedCount.decrementAndGet() < 0) unnumberedCount.set(0); // a clear in between
             if (packet == null) packet = nextNumbered();
             if (packet == null) return null;
             if (checkPacket(packet)) return packet;
@@ -448,6 +465,7 @@ public class ReceiverBuffer {
         skipped.clear();
         numberedBuffer.clear();
         unnumberedBuffer.clear();
+        unnumberedCount.set(0);
         rejectedPackets.clear();
         lastRequestedPackets.clear();
     }
@@ -459,6 +477,7 @@ public class ReceiverBuffer {
             lastPacketTimer = 0;
             numberedBuffer.clear();
             unnumberedBuffer.clear();
+            unnumberedCount.set(0);
             rejectedPackets.clear();
             lastRequestedPackets.clear();
         }

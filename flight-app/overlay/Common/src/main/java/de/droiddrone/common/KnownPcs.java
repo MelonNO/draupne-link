@@ -57,9 +57,40 @@ public final class KnownPcs<K> {
         return new KnownPcs<>(ALERT_MS, true);
     }
 
-    /** This PC asks the phone's name now. */
-    public void asked(K pc, long now) {
+    /**
+     * The most PCs a book keeps: far more than a fleet's PCs on any network (a handful; {@link #MAX} are told at once),
+     * a few kilobytes. Before there was no bound, and every address that asked stayed a day (an IPv6 network has any
+     * number of them).
+     */
+    public static final int BOOK_MAX = 256;
+
+    /**
+     * This PC asks the phone's name now.
+     * @return true when the book was full and the PC that asked longest ago made room (the caller says so, DropOldest)
+     */
+    public boolean asked(K pc, long now) {
+        boolean dropped = false;
+        if (askedAt.size() >= BOOK_MAX && !askedAt.containsKey(pc)) {
+            askedAt.values().removeIf(at -> now - at > keepMs); // the gone first
+            if (askedAt.size() >= BOOK_MAX) {
+                K oldest = null;
+                long oldestAt = Long.MAX_VALUE;
+                for (Map.Entry<K, Long> e : askedAt.entrySet()) {
+                    if (e.getValue() < oldestAt) {
+                        oldestAt = e.getValue();
+                        oldest = e.getKey();
+                    }
+                }
+                if (oldest != null) dropped = askedAt.remove(oldest) != null;
+            }
+        }
         askedAt.put(pc, now);
+        return dropped;
+    }
+
+    /** How many PCs the book holds (tests). */
+    public int size() {
+        return askedAt.size();
     }
 
     /** Whether this PC asked the phone's name within the time this book keeps it (NameAssignGate). */

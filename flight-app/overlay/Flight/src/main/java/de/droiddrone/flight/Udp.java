@@ -81,6 +81,7 @@ import java.util.concurrent.TimeUnit;
 import de.droiddrone.common.BeeperRule;
 import de.droiddrone.common.Bytes;
 import de.droiddrone.common.CameraOwner;
+import de.droiddrone.common.DropOldest;
 import de.droiddrone.common.CaptureClock;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DetectionAreas;
@@ -93,6 +94,7 @@ import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.KnownPcs;
 import de.droiddrone.common.LinkSocket;
 import de.droiddrone.common.Log;
+import de.droiddrone.common.Logcat;
 import de.droiddrone.common.MavlinkRaw;
 import de.droiddrone.common.NameAssignGate;
 import de.droiddrone.common.MediaCodecBuffer;
@@ -108,6 +110,7 @@ import de.droiddrone.common.SavedPacket;
 import de.droiddrone.common.SendWatch;
 import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
+import de.droiddrone.common.SleepWake;
 import de.droiddrone.common.Takeover;
 import de.droiddrone.common.TelemetryData;
 import de.droiddrone.common.TelemetryRecords;
@@ -262,8 +265,11 @@ public class Udp {
         if (d[0] == NAME_QUERY) {
             // pc.50: the PCs that ask who this phone is hear its sleep notice too. Only a question counts: the naming
             // master asks before it names (NameAssignGate), and an assign never vouches for the next one
-            namedBy.asked(from, now);
-            knownPcs.asked(from, now);
+            boolean dropped = namedBy.asked(from, now);
+            if (knownPcs.asked(from, now) || dropped) { // a book at its cap made room (KnownPcs.BOOK_MAX)
+                String said = askersDropped.dropped(now);
+                if (said != null) log(said);
+            }
         }
         try {
             if (d[0] == NAME_ASSIGN) {
@@ -506,12 +512,23 @@ public class Udp {
     }
     /** DRAUPNE Link: the PC asks for a key frame (one arrived damaged or lost). */
     private static final byte KEY_FRAME_REQUEST = PacketIds.KEY_FRAME_REQUEST;
-    /** Answers go out from here: the receive thread, which carries the sticks, never waits on a send. One for the app. */
-    private static final ExecutorService spectatorAnswers = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "spectatorAnswers");
-        t.setDaemon(true);
-        return t;
-    });
+    /**
+     * Answers go out from here: the receive thread, which carries the sticks, never waits on a send. One for the app.
+     * At most ANSWERS_MAX wait (DropOldest: the oldest goes, said once a minute) - a name reply every 5 s per PC, the
+     * spectators' 5 a second at most, the observers' few: a handful wait at a time; this many is a minute of all of them
+     * at once, a few hundred kilobytes. Before there was no bound.
+     */
+    static final int ANSWERS_MAX = 256;
+    private static final ExecutorService spectatorAnswers = DropOldest.executor("spectatorAnswers", ANSWERS_MAX, Logcat::log);
+    /**
+     * A Config's part that is not the camera's (checkConfigUpdate: the sticks' pace, the FC's port, the recorder, the
+     * sound) runs here - one thread for the app, where each Config started a thread of its own. Each task does what the
+     * Config's flags say when it runs, so one waiting is as good as many: CONFIG_UPDATES_MAX at most (the oldest goes).
+     */
+    static final int CONFIG_UPDATES_MAX = 4;
+    private static final ExecutorService configUpdates = DropOldest.executor("configUpdates", CONFIG_UPDATES_MAX, Logcat::log);
+    /** A book of the PCs that asked this phone's name made room (KnownPcs.BOOK_MAX): said once a minute. */
+    private final DropOldest.Said askersDropped = new DropOldest.Said("PCs that asked this phone's name", KnownPcs.BOOK_MAX);
     private long lastSpectatorAnswer;
 
     public Udp(String destIpStr, int port, String key, int connectionMode, StreamEncoder streamEncoder,
@@ -655,8 +672,10 @@ public class Udp {
                     // pc.50: listening in deep sleep holds no wake lock - anything but a name query (answered above, at
                     // once) keeps the phone awake long enough to be handled (a Connect, the PC's answer, a fleet mode)
                     // (pc.50, later: only what can concern a sleeping phone - a stray or unknown packet took the 3 s too)
-                    if (d[0] == UdpCommon.Connect || d[0] == PowerMode.SLEEP_ANSWER || d[0] == FleetProtocol.MODE
-                            || d[0] == Observe.OBSERVE || d[0] == Observe.STOP || d[0] == SPECTATE_PILOT_QUERY) PowerMode.packetWhileAsleep();
+                    // - and only with this phone's key where the packet has one, the answer only from its PC (SleepWake).
+                    // A stick frame: the kind's byte compares, as before
+                    if (SleepWake.kind(d[0]) && PowerMode.listeningAsleep()
+                            && SleepWake.holdsAwake(d, len, gate, receiverPacket.getAddress().equals(lastPcIp))) PowerMode.packetWhileAsleep();
                     // pc.40: a PC's fleet management asks for a power mode - in any state but a pilot session
                     if (d[0] == FleetProtocol.MODE) {
                         onFleetMode(receiverPacket, d, len);
@@ -2146,15 +2165,15 @@ public class Udp {
                     // way: the camera closed and opened, 1.5-2.6 s without a picture each time, on a link already failing
                     final boolean sizeOnly = oldId != null && oldId.equals(config.getCameraId()) && oldUsb == config.isUseUsbCamera();
                     // pc.26: the camera part on the video starter thread, in line with StartVideo and the watchdog
-                    // (two threads restarted the encoder at once before); the rest at once, on a thread of its own
-                    Thread t1 = new Thread(() -> {
+                    // (two threads restarted the encoder at once before); the rest at once, on the config updates'
+                    // thread (was a thread of its own for every Config)
+                    configUpdates.execute(() -> {
                         try {
                             checkConfigUpdate(oldCamera, sizeOnly, false);
                         } catch (RuntimeException e) { // pc.55: not the app's end (see videoStarter)
                             log("Config update error: " + e);
                         }
                     });
-                    t1.start();
                     if (config.isCameraConfigChanged()) videoStarter.execute(() -> checkConfigUpdate(oldCamera, sizeOnly, true));
                 }else if (resCode == -1){
                     sendVersionMismatch();

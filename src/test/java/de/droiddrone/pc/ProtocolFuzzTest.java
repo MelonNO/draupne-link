@@ -10,9 +10,11 @@ import de.droiddrone.common.Fec;
 import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.Observe;
 import de.droiddrone.common.OverwatchProtocol;
+import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.RcPath;
 import de.droiddrone.common.SessionGate;
+import de.droiddrone.common.SleepWake;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.pc.audio.AudioConfig;
 import de.droiddrone.pc.video.FrameAssembler;
@@ -35,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ProtocolFuzzTest {
     static final String KEY = "key";
+    private static final SessionGate GATE = new SessionGate(KEY);
 
     /** The parsers, each given (bytes, length). */
     static List<Object[]> parsers() {
@@ -101,6 +104,8 @@ class ProtocolFuzzTest {
         });
         add(p, "DetectionAreas.read", (d, n) -> DetectionAreas.read(new DataReader(Arrays.copyOf(d, n), true)));
         add(p, "DetectionAreas.parse", (d, n) -> DetectionAreas.parse(new String(d, 0, n, StandardCharsets.ISO_8859_1)));
+        // the phone's receive thread, listening asleep: whether a packet keeps it awake (its key read first)
+        add(p, "SleepWake.holdsAwake", (d, n) -> SleepWake.holdsAwake(d, n, GATE, true));
         return p;
     }
 
@@ -168,7 +173,8 @@ class ProtocolFuzzTest {
                 Spectate.HELLO, OverwatchProtocol.ALERT, OverwatchProtocol.PREVIEW, OverwatchProtocol.CLIP,
                 OverwatchProtocol.STATUS, FleetProtocol.MODE, PcAudio.PACKET, 0x50, 0x51, 0x52, 0, (byte) 0xff,
                 UdpCommon.Connect, UdpCommon.RcFrame, ControlLink.IDLE_STICKS, UdpCommon.VideoFrame, UdpCommon.KeyFrame,
-                ControlLink.VIDEO_PARITY, ControlLink.VIDEO_PARITY_GROUP, ControlLink.VIDEO_PARITY_RS};
+                ControlLink.VIDEO_PARITY, ControlLink.VIDEO_PARITY_GROUP, ControlLink.VIDEO_PARITY_RS,
+                PacketIds.SLEEP_ANSWER, PacketIds.SPECTATE_PILOT_QUERY};
         for (int i = 0; i < 20_000; i++) {
             byte[] d = new byte[r.nextInt(80)];
             r.nextBytes(d);
