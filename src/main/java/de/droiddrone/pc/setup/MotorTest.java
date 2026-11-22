@@ -96,7 +96,7 @@ public final class MotorTest implements AutoCloseable {
             }
             byte[] mixer = fc.msp(FcCommon.MSP_MIXER_CONFIG, null);
             int count = motorCount(fc.msp(MSP_MOTOR, null));
-            if (armed(fc.msp(FcCommon.MSP_STATUS, null))) throw new IOException("The drone is armed. Disarm it first.");
+            if (armed(fc.msp(FcCommon.MSP_STATUS, null))) throw new IOException(BetaflightUsb.ARMED);
             boolean dshot = false;
             try {
                 dshot = isDshot(fc.msp(MSP_ADVANCED_CONFIG, null));
@@ -150,37 +150,71 @@ public final class MotorTest implements AutoCloseable {
 
     /**
      * A new motor output order: stopped first, written, saved, and Betaflight restarts (the order is only taken at
-     * start-up). The motor test is closed after it; open a new one once the flight controller is back.
+     * start-up). The motor test is closed after it; open a new one once the flight controller is back. Not on an armed
+     * board (F-077); a save that fails puts the old order back, so no later save keeps it unasked.
      */
     public synchronized void setOutputOrderAndRestart(int[] order) throws IOException {
         if (closed) throw new IOException("The motor test is closed");
         fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
+        int[] before = parseOrder(fc.msp2(MSP2_MOTOR_OUTPUT_REORDERING, null));
+        notArmed();
         fc.msp2(MSP2_SET_MOTOR_OUTPUT_REORDERING, orderPayload(order));
-        saveAndRestart();
+        saveAndRestart(() -> fc.msp2(MSP2_SET_MOTOR_OUTPUT_REORDERING, orderPayload(before)), "Motor order");
     }
 
-    /** Props out (Betaflight's yaw_motors_reversed) on or off: written with the mixer kept, saved, Betaflight restarts. */
+    /**
+     * Props out (Betaflight's yaw_motors_reversed) on or off: written with the mixer kept, saved, Betaflight restarts.
+     * F-077: Betaflight flies by this setting at once, saved or not (mixer.c), and refuses the save while armed - so
+     * it is written only to a board that says it is not armed just before, and put back as it was if the save fails.
+     */
     public synchronized void setPropsOutAndRestart(boolean out) throws IOException {
         if (closed) throw new IOException("The motor test is closed");
         fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
+        notArmed();
         fc.msp(MSP_SET_MIXER_CONFIG, new byte[]{(byte) info.mixer(), (byte) (out ? 1 : 0)});
-        saveAndRestart();
+        saveAndRestart(() -> fc.msp(MSP_SET_MIXER_CONFIG, new byte[]{(byte) info.mixer(), (byte) (info.reversed() ? 1 : 0)}),
+                "Props in / out");
     }
 
     /**
      * Tells one ESC its spin direction (motor 1 first) and to save it: DShot commands, blocking, so Betaflight holds
-     * the motors stopped while it sends. Needs DShot and the battery in (the ESCs powered).
+     * the motors stopped while it sends. Needs DShot and the battery in (the ESCs powered). Not on an armed board:
+     * Betaflight drops the commands then and answers OK all the same (F-079), so nothing would be saved.
      */
     public synchronized void setDirection(int motor, boolean reversed) throws IOException {
         if (closed) throw new IOException("The motor test is closed");
         if (!info.dshot()) throw new IOException("Not DShot: can't set direction here.");
         fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
+        notArmed();
         fc.msp2(MSP2_SEND_DSHOT_COMMAND, dshotPayload(motor - 1, reversed ? DSHOT_SPIN_REVERSED : DSHOT_SPIN_NORMAL, DSHOT_SAVE_SETTINGS));
     }
 
-    /** EEPROM write, then a restart; the port goes away, so the connection is let go of without the usual STOP. */
-    private void saveAndRestart() throws IOException {
-        fc.msp(MSP_EEPROM_WRITE, null);
+    /** MSP_STATUS just before a write: an armed board is left as it is (F-077). */
+    private void notArmed() throws IOException {
+        if (armed(fc.msp(FcCommon.MSP_STATUS, null))) throw new IOException(BetaflightUsb.ARMED);
+    }
+
+    /** Puts a written value back as it was. */
+    private interface PutBack {
+        void run() throws IOException;
+    }
+
+    /**
+     * EEPROM write, then a restart; the port goes away, so the connection is let go of without the usual STOP. A save
+     * that fails (Betaflight refuses it while armed) leaves the new value in Betaflight's memory: it is put back.
+     */
+    private void saveAndRestart(PutBack putBack, String what) throws IOException {
+        try {
+            fc.msp(MSP_EEPROM_WRITE, null);
+        } catch (IOException e) {
+            try {
+                putBack.run();
+            } catch (IOException notBack) {
+                e.addSuppressed(notBack);
+                throw new IOException("Not saved. " + what + " not put back: unplug battery and USB to restart it.", e);
+            }
+            throw new IOException("Not saved. " + what + " put back as it was.", e);
+        }
         try {
             fc.msp(MSP_REBOOT, null);
         } catch (IOException ignored) {

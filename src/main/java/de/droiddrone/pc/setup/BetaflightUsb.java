@@ -64,6 +64,9 @@ public final class BetaflightUsb implements AutoCloseable {
      */
     static final long PROMPT_SETTLE_MS = 60;
 
+    /** What the pilot is told when a write finds the board armed: nothing is sent to it then. */
+    public static final String ARMED = "The drone is armed. Disarm it first.";
+
     private final Wire wire;
     /** The CLI is open: closing the port then sends "exit", so the board isn't left in CLI mode. */
     private boolean inCli;
@@ -389,7 +392,7 @@ public final class BetaflightUsb implements AutoCloseable {
     public EscLink escs(java.util.function.Consumer<String> log) throws IOException {
         if (inCli) throw new IOException("The CLI is open");
         if (escs != null && !escs.closed()) throw new IOException("The ESC passthrough is open already");
-        if (MotorTest.armed(msp(de.droiddrone.common.FcCommon.MSP_STATUS, null))) throw new IOException("The drone is armed. Disarm it first.");
+        if (MotorTest.armed(msp(de.droiddrone.common.FcCommon.MSP_STATUS, null))) throw new IOException(ARMED);
         byte[] answer = msp(EscLink.MSP_SET_PASSTHROUGH, null);
         int count = answer.length > 0 ? answer[0] & 0xff : 0;
         if (count == 0) throw new IOException("Betaflight has no motor outputs for the ESCs.");

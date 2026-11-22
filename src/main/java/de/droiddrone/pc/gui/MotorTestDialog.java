@@ -1,6 +1,7 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.gui.CheckRow.State;
+import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.MotorTest;
 import de.droiddrone.pc.setup.SetupBoard;
 
@@ -101,6 +102,8 @@ final class MotorTestDialog extends JFrame {
     private Timer shake;
     private volatile boolean running = true;
     private volatile MotorTest.Info info;
+    /** The board said armed at its last reading (Swing thread): props, reorder and directions are grey then (F-077). */
+    private boolean armedNow;
     private boolean propsOut;
     /** PROPS IN / OUT changed: the switch's highlight slides over and the arrows sweep round the new way. */
     private static final long FLIP_MS = 340;
@@ -135,7 +138,12 @@ final class MotorTestDialog extends JFrame {
     private static final int TOOL_W = 210;
     private final List<javax.swing.JComboBox<String>> directionChoices = new java.util.ArrayList<>();
     private boolean revertingDirection;
-    /** The question before a direction is saved in an ESC (F-064): yes or no, in this window. Tests answer it themselves. */
+    /** PROPS IN / OUT, for a test. */
+    JComponent propsSwitch() {
+        return directionSwitch;
+    }
+
+    /** The question before a direction is saved in an ESC (F-064) or props in / out in Betaflight: yes or no, in this window. Tests answer it themselves. */
     java.util.function.BiPredicate<String, String> ask = (question, title) ->
             Dialogs.confirm(this, question, title, JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION;
 
@@ -433,7 +441,7 @@ final class MotorTestDialog extends JFrame {
         if (!connected) understood.setSelected(false);
         enableSliders();
         MotorTest.Info i = info;
-        reorderButton.setEnabled(connected && i != null && i.quadX() && i.motorCount() == 4);
+        reorderButton.setEnabled(connected && reorderAllowed(i));
         showDirections(connected ? i : null);
         sliderRow.revalidate();
         sliderRow.repaint();
@@ -548,7 +556,7 @@ final class MotorTestDialog extends JFrame {
                 order = t.outputOrder();
             } catch (IOException e) {
                 ui(() -> {
-                    reorderButton.setEnabled(true);
+                    reorderButton.setEnabled(!armedNow);
                     note.setHtml("Reorder needs Betaflight 4.3+: " + e.getMessage());
                 });
                 return;
@@ -558,7 +566,11 @@ final class MotorTestDialog extends JFrame {
     }
 
     private void beginReorder(MotorTest.Info board, int[] order) {
-        reorderButton.setEnabled(true);
+        reorderButton.setEnabled(!armedNow);
+        if (armedNow) {
+            note.setHtml(BetaflightUsb.ARMED);
+            return;
+        }
         if (order.length < 4 || !understood.isSelected()) {
             note.setHtml(order.length < 4 ? "No motor order for four motors." : "Tick the box first.");
             return;
@@ -641,6 +653,7 @@ final class MotorTestDialog extends JFrame {
                 c.setFocusable(false); // SPACE stops the motors
                 TacticalCombo.install(c);
                 c.addActionListener(e -> directionChosen(motor, c));
+                c.setEnabled(!armedNow);
                 directionChoices.add(c);
                 line.add(c);
                 directionRow.add(left(line));
@@ -667,6 +680,11 @@ final class MotorTestDialog extends JFrame {
     private void directionChosen(int motor, javax.swing.JComboBox<String> choice) {
         if (revertingDirection || choice.getSelectedIndex() <= 0) return;
         boolean reversed = choice.getSelectedIndex() == 2;
+        if (armedNow) {
+            asIs(choice);
+            note.setHtml(BetaflightUsb.ARMED);
+            return;
+        }
         MotorTest.Info board = info;
         if (board == null || volts >= 0 && !batteryIn) {
             asIs(choice);
@@ -840,6 +858,7 @@ final class MotorTestDialog extends JFrame {
     }
 
     private void connected(MotorTest.Info i) {
+        showArmed(false); // a motor test opens only on a board that is not armed
         if (i.quadX() && i.reversed() != propsOut) { // the picture shows what Betaflight has
             propsOut = i.reversed();
             main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(propsOut)));
@@ -863,22 +882,35 @@ final class MotorTestDialog extends JFrame {
         }
     }
 
-    /** PROPS IN / OUT: with the flight controller there, Betaflight is set to it (saved, it restarts); else the picture only. */
+    /**
+     * PROPS IN / OUT: with the flight controller there, Betaflight is set to it (saved, it restarts) and the switch
+     * turns once that is done - not at the press (F-077); else the picture only. Not while the board is armed.
+     */
     private void setPropsOut(boolean out) {
         if (out == propsOut) return;
         MotorTest.Info i = info;
         if (i != null && i.quadX() && i.reversed() != out) {
+            if (armedNow) {
+                note.setHtml(BetaflightUsb.ARMED);
+                return;
+            }
             stopAll();
-            int answer = Dialogs.confirm(this, "Set Betaflight to " + (out ? "props out" : "props in")
-                            + "?\nBetaflight restarts.", "Props in / out", JOptionPane.YES_NO_OPTION);
-            if (answer != JOptionPane.YES_OPTION) return;
+            if (!ask.test("Set Betaflight to " + (out ? "props out" : "props in") + "?\nBetaflight restarts.", "Props in / out")) return;
             String was = i.reversed() ? "props out" : "props in", now = out ? "props out" : "props in";
             queue(i, t -> {
                 main.logLine(MotorTest.writeLog("Betaflight's motor direction (yaw_motors_reversed)", was, now, "writing"));
                 t.setPropsOutAndRestart(out);
                 main.logLine(MotorTest.writeLog("Betaflight's motor direction (yaw_motors_reversed)", was, now, "saved, Betaflight restarts"));
+                ui(() -> showPropsOut(out));
             });
+            return;
         }
+        showPropsOut(out);
+    }
+
+    /** The switch and the picture turn to this props direction, remembered for the next time. */
+    private void showPropsOut(boolean out) {
+        if (out == propsOut) return;
         propsOut = out;
         main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(out)));
         showMixer();
@@ -895,6 +927,7 @@ final class MotorTestDialog extends JFrame {
 
     private void showLive(MotorTest.Live live) {
         if (!isDisplayable()) return;
+        showArmed(live.armed());
         if (live.armed()) {
             understood.setSelected(false);
             stopAll();
@@ -912,6 +945,25 @@ final class MotorTestDialog extends JFrame {
         }
         for (int i = 0; i < sliders.size() && i < live.motors().length; i++) sliders.get(i).reported = live.motors()[i];
         for (Slider s : sliders) s.repaint();
+    }
+
+    /**
+     * Armed or not, as the board last said: while armed, nothing that writes to it can be pressed (F-077) - props in /
+     * out, reorder, the spin directions. Changed only when the state changes, so it doesn't undo a reorder's own.
+     */
+    private void showArmed(boolean armed) {
+        if (armed == armedNow) return;
+        armedNow = armed;
+        directionSwitch.setEnabled(!armed);
+        directionSwitch.setCursor(Cursor.getPredefinedCursor(armed ? Cursor.DEFAULT_CURSOR : Cursor.HAND_CURSOR));
+        MotorTest.Info i = info;
+        reorderButton.setEnabled(reorderAllowed(i));
+        for (javax.swing.JComboBox<String> c : directionChoices) c.setEnabled(!armed);
+    }
+
+    /** REORDER MOTORS can be pressed: a Quad X with four motors, connected and not armed. */
+    private boolean reorderAllowed(MotorTest.Info i) {
+        return i != null && i.quadX() && i.motorCount() == 4 && !armedNow;
     }
 
     private static void ui(Runnable r) {
@@ -1061,10 +1113,17 @@ final class MotorTestDialog extends JFrame {
             addMouseListener(new MouseAdapter() {
                 @Override
                 public void mousePressed(MouseEvent e) {
+                    if (!isEnabled()) return; // grey while the board is armed (F-077)
                     setPropsOut(e.getX() >= getWidth() / 2);
                     repaint();
                 }
             });
+        }
+
+        @Override
+        public void setEnabled(boolean enabled) {
+            super.setEnabled(enabled);
+            repaint();
         }
 
         @Override
@@ -1074,6 +1133,7 @@ final class MotorTestDialog extends JFrame {
                 int w = getWidth(), h = getHeight(), half = w / 2;
                 float p = flipProgress();
                 float at = propsOut ? p : 1 - p; // the highlight: 0 over PROPS IN .. 1 over PROPS OUT
+                if (!isEnabled()) g.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.4f)); // grey: armed
                 g.setColor(Theme.PANEL_2);
                 g.fillRect(0, 0, w, h);
                 int hx = Math.round(at * (w - half));
