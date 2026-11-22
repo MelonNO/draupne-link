@@ -130,7 +130,7 @@ class SitlKeeperScenario {
             beater.start();
             rig.ask("BEAT");
             phone = new StandInPhone(keeper.phonePort()).every(40).sticks(1000, 1000).startSticks(); // 25 a second: Betaflight takes 100 MSP requests a second in all
-            check(within(8000, () -> !state(r).cannotArm().contains("RXLOSS") && state(r).number("throttle") == 1000), "the phone's stick frames reach the board: "
+            check(within(8000, () -> !state(r).get("blocks").contains("RXLOSS") && state(r).number("throttle") == 1000), "the phone's stick frames reach the board: "
                     + state(rig).get("blocks"));
             Thread.sleep(500);
             StandInPhone p = phone;
@@ -160,6 +160,9 @@ class SitlKeeperScenario {
             phone.sticks(1000, 1000);
             Thread.sleep(300);
             check(rig.ask("CLEAR").startsWith("OK"), "CLEAR, with the throttle back down");
+            // the frames over the cap were not passed on, so the board has said RXLOSS: no window opens until sticks reach it again
+            check(within(5000, () -> !state(r).get("blocks").contains("RXLOSS")), "the sticks reach the board again after the frames over the cap: "
+                    + state(rig).get("blocks"));
 
             // ---- the sticks stop in a window: the keeper ends it before the board's own failsafe
             check(rig.ask("OPEN 15").startsWith("OK window=15000") && arm(rig, phone), "a third window, armed again");
