@@ -20,6 +20,15 @@ public final class ArduBenchCheck {
     private ArduBenchCheck() {
     }
 
+    /** The AUX the board's ARM switch is on (the first RCn_OPTION with ARM/DISARM, n 5-16), or -1 when it has none. */
+    public static int armAux(java.util.Map<String, Float> params) {
+        for (int n = 5; n <= 16; n++) {
+            Float o = params.get("RC" + n + "_OPTION");
+            if (o != null && Math.round(o) == ArduPlan.RC_OPTION_ARM_DISARM) return n - 4;
+        }
+        return -1;
+    }
+
     /** @param armAux the AUX the ARM switch is on (frame channel 4 + armAux) */
     public static String armTest(MavSession fc, int armAux, Consumer<String> log) throws IOException, InterruptedException {
         if (fc.armed()) return "Armed already, or not known: not tested.";

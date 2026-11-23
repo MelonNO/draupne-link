@@ -183,8 +183,12 @@ final class Tour {
     static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
             FEATURE_COVERAGE = "coverage", FEATURE_OVERWATCH = "overwatch", FEATURE_OBSERVATION = "observation",
             FEATURE_FLEET = "fleet", FEATURE_FLIGHTS = "flights", FEATURE_MODES = "modes", FEATURE_SPECTATOR = "spectator";
+    /** Fleet PRD TO-1: the ArduPilot and fleet steps, each a feature of its own (WHAT'S NEW offers them after an update). */
+    static final String FEATURE_ARDUPILOT = "ardupilot", FEATURE_ROUTES = "routes", FEATURE_DISPATCH = "dispatch",
+            FEATURE_FOLLOW = "follow", FEATURE_AUTOLAUNCH = "autolaunch";
     static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE,
-            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS, FEATURE_MODES, FEATURE_SPECTATOR);
+            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS, FEATURE_MODES, FEATURE_SPECTATOR,
+            FEATURE_ARDUPILOT, FEATURE_ROUTES, FEATURE_DISPATCH, FEATURE_FOLLOW, FEATURE_AUTOLAUNCH);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -454,6 +458,8 @@ final class Tour {
                     flightsStand = null;
                 }).of(FEATURE_FLIGHTS));
 
+        addArduSteps(map);
+
         // ---- FLEET MANAGEMENT, with three drones of the tour's own, and the finale
         BooleanSupplier noDrones = () -> !finale.started();
         steps.add(new Step("FLEET", "Every phone at a glance; modes changed without connecting. Press it.",
@@ -495,6 +501,134 @@ final class Tour {
      * SPECTATOR (1.0.56), right after STOP OBSERVING as the pilot asked: another pilot PC (the virtual fleet's, in the
      * showcase's fleet), mirrored here. TourSpectator skips its steps when it can't start one.
      */
+    // ------------------------------------------------------------------ fleet PRD area I: ArduPilot and the fleet
+
+    /** The virtual ArduPilot drones of the fleet steps (TO-2), started at the first of them; null before or without. */
+    private de.droiddrone.pc.fleet.ArduShow ardu;
+
+    /** The show round a place 1 km east of the tour's own drones, in the tour's fleet (none: the steps that need it skip). */
+    private void startArdu() {
+        if (ardu != null) return;
+        de.droiddrone.pc.fleet.Fleet f = finale.fleet();
+        if (f == null) return;
+        double[] c = finale.started() ? finale.centre() : new double[]{59.9, 10.75};
+        double[] at = de.droiddrone.common.group.GeoLocal.offset(c[0], c[1], 1000, 0);
+        ardu = TourArdu.start(f, at[0], at[1], main::logLine);
+        if (ardu == null) return;
+        de.droiddrone.pc.fleet.ArduShow show = ardu;
+        main.setTourGroup(() -> show.ops() == null ? null : show.ops().picture());
+        showArdu();
+    }
+
+    private void showArdu() {
+        if (ardu == null) return;
+        double[] p = ardu.place();
+        main.mapWindow().map().setFollow(false);
+        main.mapWindow().map().centreOn(p[0], p[1], 16.2);
+    }
+
+    private void closeArdu() {
+        de.droiddrone.pc.fleet.ArduShow a = ardu;
+        ardu = null;
+        main.setTourGroup(null);
+        if (a != null) a.close();
+    }
+
+    /** Both scouts armed: on their way (DISPATCH). */
+    private boolean scoutsAway() {
+        de.droiddrone.pc.fleet.ArduShow a = ardu;
+        if (a == null) return true;
+        for (String s : de.droiddrone.pc.fleet.ArduShow.SCOUTS) if (!a.phone(s).armed()) return false;
+        return true;
+    }
+
+    private boolean reserveAway() {
+        de.droiddrone.pc.fleet.ArduShow a = ardu;
+        return a == null || a.phone(de.droiddrone.pc.fleet.ArduShow.RESERVE).armed();
+    }
+
+    private boolean groupFlying() {
+        de.droiddrone.pc.fleet.ArduShow a = ardu;
+        return a == null || a.ops() != null && a.ops().picture() != null;
+    }
+
+    /**
+     * TO-3: ArduPilot drones and their modes, ROUTE, DISPATCH and YOUR TURN, FOLLOW GROUP (the block, battery order, the
+     * leash ring, keep-out, floor), the transit areas and abort layer, DISCARD LEAD, SAFE TO AUTOLAUNCH, CALL RESERVE
+     * with its mini-view, the battery rules. Live on the show's virtual drones; no failure is staged (TO-4).
+     */
+    private void addArduSteps(Supplier<JComponent> map) {
+        BooleanSupplier noArdu = () -> ardu == null;
+        steps.add(new Step("ARDUPILOT DRONES", "ARDU in FLEET: ArduPilot. They fly routes, groups and launch by themselves. "
+                + "BTFL: Betaflight.", map).before(() -> {
+                    main.showMapWindow();
+                    startArdu();
+                }).needsFinale().live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_ARDUPILOT));
+        steps.add(new Step("MODE BUTTONS", "Flying an ArduPilot drone: LOI holds, RTL comes home, LND lands, GO flies the "
+                + "route. The radio's mode switch first.", main::tourVideo).before(main::toFront).of(FEATURE_ARDUPILOT));
+        steps.add(new Step("ROUTE", "Click points on the map: it flies the set height above the ground. Drag a point to "
+                + "move it; right-click for the rest.", () -> main.mapWindow().tourRoute()).before(main::showMapWindow).live(map)
+                .reopen(main::showMapWindow).of(FEATURE_ROUTES));
+        steps.add(new Step("UPLOAD AND GO", "UPLOAD checks every point on the drone. GO flies it; at the end it holds and "
+                + "calls you.", () -> main.mapWindow().tourRoute()).live(map).reopen(main::showMapWindow).of(FEATURE_ROUTES));
+        steps.add(new Step("DISPATCH", "Marked drones, right-click the map: DISPATCH. Each gets its own slot, height and "
+                + "route. Watch the two scouts.", map).before(() -> {
+                    showArdu();
+                    if (ardu == null) return;
+                    TourArdu.markScouts(ardu);
+                    de.droiddrone.pc.fleet.ArduShow show = ardu;
+                    javax.swing.Timer t = new javax.swing.Timer(2000, e -> { // their reports first: where they stand
+                        // the tour ended (or moved to another show) within the 2 s: nothing more for this one
+                        if (ardu == show && show.ops() != null) show.ops().dispatch(show.dispatchTarget()[0], show.dispatchTarget()[1]);
+                    });
+                    t.setRepeats(false);
+                    t.start();
+                }).live(map).skip(noArdu).waitFor(this::scoutsAway, "Launching...", true).reopen(main::showMapWindow)
+                .of(FEATURE_DISPATCH));
+        steps.add(new Step("YOUR TURN", "At its slot a drone holds and calls you. Right-click it: TAKE CONTROL.", map)
+                .live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_DISPATCH));
+        steps.add(new Step("FOLLOW GROUP", "Fly a lead, right-click others: FOLLOW GROUP. They keep a block beside it, and "
+                + "move when it passes the ring.", map).before(() -> {
+                    showArdu();
+                    if (ardu != null) TourArdu.formGroup(ardu);
+                }).live(map).skip(noArdu).waitFor(this::groupFlying, "Forming...", true).reopen(main::showMapWindow)
+                .of(FEATURE_FOLLOW));
+        steps.add(new Step("THE BLOCK", "Rings of cells round an empty core, 10 m between layers. Lowest batteries at the "
+                + "bottom. Red: the lead keeps out.", map).live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_FOLLOW));
+        steps.add(new Step("TRANSIT AREAS", "Height changes only in the four squares. The bottom row leaves through the "
+                + "corners, below the block.", map).live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_FOLLOW));
+        steps.add(new Step("FLOOR", "Right-click a drone: Floor +5 m or -5 m. Never under 10 m.", map).live(map).skip(noArdu)
+                .reopen(main::showMapWindow).of(FEATURE_FOLLOW));
+        steps.add(new Step("DISCARD LEAD", "Radio switch AUX5: the bottom-row drone with the least battery leads. You fly "
+                + "it at once.", map).before(() -> {
+                    if (ardu != null && ardu.ops() != null) ardu.ops().discardLead();
+                }).live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_FOLLOW));
+        steps.add(new Step("SAFE TO AUTOLAUNCH", "A landed drone that may climb straight up, nothing above it. Right-click: "
+                + "SAFE TO AUTOLAUNCH.", map).before(() -> {
+                    if (ardu != null) TourArdu.markReserve(ardu);
+                }).live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_AUTOLAUNCH));
+        steps.add(new Step("CALL RESERVE", "Radio switch AUX6: the marked drone there first launches and joins at the top. "
+                + "Its camera shows small in the corner.", map).before(() -> {
+                    if (ardu != null && ardu.ops() != null) ardu.ops().callReserve();
+                }).live(map).skip(noArdu).waitFor(this::reserveAway, "Launching...", true).reopen(main::showMapWindow)
+                .of(FEATURE_AUTOLAUNCH));
+        steps.add(new Step("BATTERY", "Battery never sends a drone home. HOME NOW warns you; at 3 % it lands where it is.",
+                map).live(map).skip(noArdu).reopen(main::showMapWindow).of(FEATURE_AUTOLAUNCH));
+    }
+
+    /** SETUP > Fleet demo (TO-5, TOOLS > Advanced): the tour from its first ArduPilot step, as Overwatch demo from FLEET. */
+    static void fleetDemo(MainWindow main) {
+        if (main.demoRunning()) return;
+        Tour t = new Tour(main, null);
+        t.demo = true;
+        run(t, Math.max(0, arduStepIndex(t.steps)));
+    }
+
+    static int arduStepIndex(List<Step> steps) {
+        for (int i = 0; i < steps.size(); i++) if ("ARDUPILOT DRONES".equals(steps.get(i).title)) return i;
+        return -1;
+    }
+
     private void addSpectatorSteps(BooleanSupplier noShowcase) {
         steps.addAll(spectatorPart.steps());
     }
@@ -696,6 +830,11 @@ final class Tour {
             case FEATURE_FLIGHTS -> "previous flights";
             case FEATURE_MODES -> "pilot and observer modes";
             case FEATURE_SPECTATOR -> "spectator mirror";
+            case FEATURE_ARDUPILOT -> "ArduPilot drones";
+            case FEATURE_ROUTES -> "terrain routes";
+            case FEATURE_DISPATCH -> "dispatch";
+            case FEATURE_FOLLOW -> "follow group";
+            case FEATURE_AUTOLAUNCH -> "safe autolaunch";
             default -> f;
         });
         Object[] options = {"Yes", "Not now"};
@@ -830,6 +969,7 @@ final class Tour {
     private void finished() {
         clearExamplePins();
         powerDemoOff();
+        closeArdu(); // fleet TO-2: the virtual ArduPilot drones go first
         spectatorPart.close(); // first: its pilot PC and drones stop answering before the clean-up
         finale.close();
         main.tourUnmarkDrones();

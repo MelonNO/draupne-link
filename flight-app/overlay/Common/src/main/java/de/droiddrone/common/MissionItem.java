@@ -91,8 +91,27 @@ public final class MissionItem {
                 && same(param3, o.param3) && same(param4, o.param4);
     }
 
+    /** What differs between this item (sent) and another (read back), field by field: "frame 0 / 3, param2 0.0 / 2.0". */
+    public String diff(MissionItem o) {
+        if (o == null) return "nothing read back";
+        StringBuilder s = new StringBuilder();
+        if (seq != o.seq) s.append("seq ").append(seq).append(" / ").append(o.seq).append(", ");
+        if (frame != o.frame) s.append("frame ").append(frame).append(" / ").append(o.frame).append(", ");
+        if (command != o.command) s.append("command ").append(command).append(" / ").append(o.command).append(", ");
+        if (x != o.x || y != o.y) s.append("place ").append(latDeg()).append(",").append(lonDeg()).append(" / ").append(o.latDeg()).append(",").append(o.lonDeg()).append(", ");
+        if (Math.abs(z - o.z) >= 0.01f) s.append("height ").append(z).append(" / ").append(o.z).append(", ");
+        float[] a = {param1, param2, param3, param4}, b = {o.param1, o.param2, o.param3, o.param4};
+        for (int i = 0; i < 4; i++) if (!same(a[i], b[i])) s.append("param").append(i + 1).append(" ").append(a[i]).append(" / ").append(b[i]).append(", ");
+        return s.length() == 0 ? "the same" : s.substring(0, s.length() - 2);
+    }
+
+    /**
+     * A parameter as sent against as read back. NaN sent means "as it is" in MAVLink; ArduPilot stores it and reads it
+     * back as 0 (seen in ArduPilot SITL 4.7.3, 2026-11-23: every route failed its read-back on the yaw before).
+     */
     private static boolean same(float a, float b) {
-        return Float.isNaN(a) ? Float.isNaN(b) : !Float.isNaN(b) && Math.abs(a - b) < 1e-4f;
+        if (Float.isNaN(a)) return Float.isNaN(b) || b == 0f;
+        return !Float.isNaN(b) && Math.abs(a - b) < 1e-4f;
     }
 
     @Override

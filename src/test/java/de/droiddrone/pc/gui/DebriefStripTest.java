@@ -36,7 +36,7 @@ class DebriefStripTest {
                 List<FlightSummary.Figure> figures = FlightSummary.of(d.data).figures();
                 assertEquals(figures.stream().map(FlightSummary.Figure::label).toList(), texts(d.summaryStrip.labels));
                 assertEquals(figures.stream().map(FlightSummary.Figure::value).toList(), texts(d.summaryStrip.values));
-                assertEquals(List.of("DURATION", "ARMED", "DISTANCE", "FURTHEST", "MAX HEIGHT", "MIN CELL", "LINK LOSSES", "FAILSAFES", "WORST PING"),
+                assertEquals(List.of("DURATION", "ARMED", "DISTANCE", "FURTHEST", "MAX HEIGHT", "MIN CELL", "LINK LOSSES", "FAILSAFES", "WORST PING", "CLOSEST"),
                         texts(d.summaryStrip.labels));
                 assertEquals("3:00", d.summaryStrip.values[0].getText());
                 assertEquals("90 M", d.summaryStrip.values[4].getText());
@@ -44,7 +44,10 @@ class DebriefStripTest {
                 assertEquals("1", d.summaryStrip.values[6].getText());
                 assertEquals("0", d.summaryStrip.values[7].getText());
                 assertEquals("412 MS", d.summaryStrip.values[8].getText());
-                for (JLabel v : d.summaryStrip.values) assertEquals(Theme.TEXT, v.getForeground(), v.getText() + ": known, bright");
+                for (JLabel v : java.util.Arrays.copyOf(d.summaryStrip.values, 9)) assertEquals(Theme.TEXT, v.getForeground(), v.getText() + ": known, bright");
+                // AC-14: files from before the flight's record know no closest approach: dimmed, not NONE
+                assertEquals(FlightSummary.UNKNOWN, d.summaryStrip.values[9].getText());
+                assertEquals(Theme.MUTED, d.summaryStrip.values[9].getForeground());
                 assertTrue(((javax.swing.JComponent) d.summaryStrip.values[4].getParent()).getToolTipText().contains("above take-off"),
                         "which altitude the highest one is");
             });

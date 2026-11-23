@@ -19,10 +19,11 @@ public final class TunnelWire implements MavSession.Wire {
     private final ControlLink link;
     private final BlockingQueue<byte[]> in = new LinkedBlockingQueue<>(MAX_QUEUED);
     private volatile boolean closed;
+    private java.util.function.Consumer<byte[]> listener;
 
     public TunnelWire(ControlLink link) {
         this.link = link;
-        link.setTunnelListener(frames -> {
+        link.addTunnelListener(listener = frames -> {
             if (!in.offer(frames)) {
                 in.poll();
                 in.offer(frames);
@@ -55,6 +56,6 @@ public final class TunnelWire implements MavSession.Wire {
     @Override
     public void close() {
         closed = true;
-        link.setTunnelListener(null);
+        link.removeTunnelListener(listener);
     }
 }

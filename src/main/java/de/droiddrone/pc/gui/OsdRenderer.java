@@ -56,7 +56,19 @@ final class OsdRenderer {
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
                 String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
                 boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag, List<VideoPins.Mark> pins,
-                LinkHistory linkHistory) {
+                LinkHistory linkHistory, OsdFleet fleet) {
+        /** Up to the fleet branch: no fleet on the OSD. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
+             boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag, List<VideoPins.Mark> pins,
+             LinkHistory linkHistory) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview, linkStalled,
+                    videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown, banner,
+                    spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, pins, linkHistory, null);
+        }
+
         /** Up to 1.0.71: no link history. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -83,14 +95,21 @@ final class OsdRenderer {
         Data withPins(List<VideoPins.Mark> marks) {
             return new Data(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
                     linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
-                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, marks, linkHistory);
+                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, marks, linkHistory, fleet);
+        }
+
+        /** Fleet GU-5: the same with the fleet's figures (null: none). */
+        Data withFleet(OsdFleet f) {
+            return new Data(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
+                    linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
+                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, pins, linkHistory, f);
         }
 
         /** The same with the link's last 30 s (the OSD editor's sample). */
         Data withLinkHistory(LinkHistory history) {
             return new Data(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
                     linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
-                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, pins, history);
+                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, pins, history, fleet);
         }
 
         /** Up to 1.0.63: no waking line, no tier tag. */
@@ -193,6 +212,8 @@ final class OsdRenderer {
     /** The editor's: where each element was drawn this time. Null while flying. */
     private Map<OsdElement, Rectangle2D> boundsOut;
     private Rectangle2D box; // the element being drawn, while boundsOut is wanted
+    /** This paint is the OSD editor's sample: nothing blinks. */
+    private boolean previewNow;
     /** The mAh/km shown, NaN for ---; and when it was worked out (MonoClock ms). */
     private double efficiency = Double.NaN;
     private long efficiencyAtMs;
@@ -227,6 +248,7 @@ final class OsdRenderer {
             this.h = h;
             this.layout = layout == null ? OsdLayout.defaults() : layout;
             boundsOut = bounds;
+            previewNow = d.preview();
             unit = Math.max(h / 720f * scale, minUnit); // everything scales with the picture (a tile: smaller, not below readable)
             long now = de.droiddrone.pc.MonoClock.ms();
             FcTelemetry t = d.telemetry();
@@ -392,6 +414,37 @@ final class OsdRenderer {
             element(OsdElement.LINK_HISTORY, (ex, ey, a) -> {
                 if (!observer && d.linkHistory() != null) linkHistory(ex, ey, a, d.linkHistory(), now);
             });
+            // fleet PRD GU-5: each draws only while it has something to say
+            OsdFleet f = d.fleet();
+            if (f != null && !observer) {
+                element(OsdElement.TRAFFIC, (ex, ey, a) -> {
+                    if (f.traffic() != null) blink(f.traffic(), ex, ey, a, RED, now);
+                });
+                element(OsdElement.HOME_NOW, (ex, ey, a) -> {
+                    if (f.homeNow() != null) {
+                        if (f.homeAlarm()) blink(f.homeNow(), ex, ey, a, RED, now);
+                        else value(f.homeNow(), ex, ey, a, WHITE);
+                    }
+                });
+                element(OsdElement.LEAD_DOWN, (ex, ey, a) -> {
+                    if (f.leadDown()) blink("LEAD DOWN - DISCARD LEAD", ex, ey, a, YELLOW, now);
+                });
+                element(OsdElement.RESERVES, (ex, ey, a) -> {
+                    if (f.reserves() != null) value(f.reserves(), ex, ey, a, WHITE);
+                });
+                element(OsdElement.GROUP, (ex, ey, a) -> {
+                    if (f.group() == null) return;
+                    String edge = Double.isNaN(f.edgeM()) ? "" : "  EDGE " + Math.round(f.edgeM()) + " M";
+                    value(f.group() + edge, ex, ey, a, !Double.isNaN(f.edgeM()) && f.edgeM() < 0 ? RED : WHITE);
+                });
+                element(OsdElement.FLOOR, (ex, ey, a) -> {
+                    if (!Double.isNaN(f.floorM())) value("FLOOR " + Math.round(f.floorM()) + " M", ex, ey, a, WHITE);
+                });
+                element(OsdElement.GNSS, (ex, ey, a) -> {
+                    if (f.gnss() != null) value(f.gnss(), ex, ey, a, f.gnss().equals("GNSS") ? GREEN : f.gnss().equals("GNSS LOST") ? RED : YELLOW);
+                });
+                element(OsdElement.MINI_VIEWS, (ex, ey, a) -> miniViews(ex, ey, a, f.minis(), now));
+            }
 
             if (d.recording()) recordingMark(now);
             element(OsdElement.WARNINGS, (ex, ey, a) -> {
@@ -1221,6 +1274,56 @@ final class OsdRenderer {
     }
 
     /** A one-line value in the OSD's value font. */
+    /** Fleet GU-6: a critical line, on a dark ground, shown 400 ms of each 800 (steady in the editor's sample). */
+    private void blink(String text, float x, float y, OsdLayout.Align a, Color c, long now) {
+        if (!previewNow && (now / 400) % 2 != 0) {
+            g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
+            mark(startX(x, g.getFontMetrics().stringWidth(text), a), y - g.getFontMetrics().getAscent(),
+                    g.getFontMetrics().stringWidth(text), g.getFontMetrics().getHeight()); // its place counts while it is dark
+            return;
+        }
+        boolean was = backed;
+        backed = true;
+        try {
+            value(text, x, y, a, c);
+        } finally {
+            backed = was;
+        }
+    }
+
+    /**
+     * Fleet AL-20 / AL-21: the launching reserves' own cameras, a fifth of the picture's width each, stacked upward from
+     * the element's place: the picture (or a dark box until the first), its name and status, a bar of its height to the
+     * floor; red with LAUNCH FAILED and its last picture.
+     */
+    private void miniViews(float x, float y, OsdLayout.Align a, java.util.List<OsdFleet.Mini> minis, long now) {
+        if (minis == null || minis.isEmpty()) return;
+        float w = 256 * unit, h = 144 * unit, gap = 8 * unit;
+        float left = startX(x, w, a);
+        float top = y;
+        for (int i = minis.size() - 1; i >= 0; i--) { // the newest nearest the element's place
+            OsdFleet.Mini m = minis.get(i);
+            g.setColor(new Color(0, 0, 0, 170));
+            g.fill(new java.awt.geom.Rectangle2D.Float(left, top, w, h));
+            if (m.picture() != null) g.drawImage(m.picture(), Math.round(left), Math.round(top), Math.round(w), Math.round(h), null);
+            g.setColor(m.failed() ? RED : WHITE);
+            g.setStroke(new BasicStroke(Math.max(1f, 2 * unit)));
+            g.draw(new java.awt.geom.Rectangle2D.Float(left, top, w, h));
+            g.setFont(Theme.monoFont(Font.BOLD, 14 * unit));
+            text(m.name() + "  " + (m.failed() ? "LAUNCH FAILED" : m.status()), left + 6 * unit, top + 18 * unit, m.failed() ? RED : WHITE);
+            if (!Double.isNaN(m.heightM()) && !Double.isNaN(m.floorM()) && m.floorM() > 0) { // the climb to the floor
+                float barH = h - 26 * unit, bx = left + w - 10 * unit, by = top + 22 * unit;
+                float fill = (float) Math.max(0, Math.min(1, m.heightM() / m.floorM()));
+                g.setColor(new Color(255, 255, 255, 60));
+                g.fill(new java.awt.geom.Rectangle2D.Float(bx, by, 5 * unit, barH));
+                g.setColor(GREEN);
+                g.fill(new java.awt.geom.Rectangle2D.Float(bx, by + barH * (1 - fill), 5 * unit, barH * fill));
+            }
+            mark(left, top, w, h);
+            top -= h + gap;
+        }
+    }
+
     private void value(String text, float x, float y, OsdLayout.Align a, Color c) {
         g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
         put(text, x, y, c, a);

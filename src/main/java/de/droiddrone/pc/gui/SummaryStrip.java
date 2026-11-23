@@ -17,13 +17,13 @@ import java.util.List;
 /**
  * PREVIOUS FLIGHTS' summary of the chosen flight ({@link FlightSummary}): its figures side by side, each a small
  * heading over its value, there without playing anything. A figure the flight's files don't tell is written as the
- * summary gives it ("-"), dimmed. One row where the window is wide enough; on a narrower one two rows, five and four
- * (three rows of three on a very narrow one) - each column as wide as its widest figure, the room left over shared
+ * summary gives it ("-"), dimmed. One row where the window is wide enough; on a narrower one two rows of five
+ * (three rows on a very narrow one) - each column as wide as its widest figure, the room left over shared
  * out between them.
  */
 final class SummaryStrip extends JPanel {
     /** The headings before a flight is chosen (a flight's own say which altitude and which voltage). */
-    private static final String[] NAMES = {"DURATION", "ARMED", "DISTANCE", "FURTHEST", "MAX ALT", "MIN CELL", "LINK LOSSES", "FAILSAFES", "WORST PING"};
+    private static final String[] NAMES = {"DURATION", "ARMED", "DISTANCE", "FURTHEST", "MAX ALT", "MIN CELL", "LINK LOSSES", "FAILSAFES", "WORST PING", "CLOSEST"};
     /** The columns tried, widest first. */
     private static final int[] COLUMNS = {NAMES.length, 5, 3};
     static final int GAP = 14, ROW_GAP = 6;
@@ -58,6 +58,8 @@ final class SummaryStrip extends JPanel {
         }
         // which altitude the highest one is: its heading says it short, the tooltip in full
         if (summary != null && summary.maxAltKind != null) cells[4].setToolTipText(summary.maxAltLabel() + ": " + summary.maxAltKind.meaning);
+        // AC-14: which drone came that near, sideways and in height
+        if (summary != null && summary.closest != null) cells[9].setToolTipText("Closest other drone: " + summary.closest.text());
         revalidate();
         repaint();
     }

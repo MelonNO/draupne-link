@@ -18,11 +18,11 @@ Work on [DRAUPNE Fleet & ArduPilot](PRD.md): ArduPilot as a second flight-contro
 
 | # | Phase | Gate | State |
 |---|---|---|---|
-| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gate not run (no SITL here) |
+| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gates 1 and 2 pass in ArduPilot SITL on the PC; F405 bench test not done |
 | 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | built; the ridge gate passes on made-up terrain |
-| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback |
+| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback, 3 SITL drones dispatched and held apart |
 | 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; random overlapping failures still lose separation (open); hand-over is a new session (1-2 s) |
-| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback; the AL-19 cases as unit tests |
+| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback and in SITL; the AL-19 cases as unit tests |
 | 6-9 | GNSS-denied (stage 2) | See the PRD | after stage 1 |
 
 Phases 2-4 need only phase 1; phase 5 needs phase 4. Each phase brings its own GUI, setup-guide, tour and docs
@@ -80,8 +80,14 @@ First steps of phase 1, in order:
    other drones, ARM on AUX1 and the mode switch on AUX2), `ArduSetupWriter` (backup .param first, write, read back
    each, stop at the first mismatch; RESTORE), `ArduTools` (six-position accelerometer calibration with the 3D
    drone, level, compass, motor test capped at 15 % / 3 s, reboot), `ArduBenchCheck` (AS-10: arms on the overrides,
-   disarms on the switch). SETUP > ArduPilot drone setup. **Not built:** flashing ArduPilot onto a Betaflight board
-   (STM32 DFU needs a USB driver this app doesn't install) - the FIND page says to flash once with ArduPilot's tools.
+   disarms on the switch). SETUP > ArduPilot drone setup.
+   - **H1 / H4 (2026-11-23, not tried on a real board):** FIND's "To ArduPilot (DFU)": the board the pilot picks,
+     disarmed (MSP), the CLI's `bl`, exactly one new STM32 DFU device (others in DFU are never opened), erase all,
+     write ArduPilot's `_with_bl.hex`, read back, restart (`ArduDfuFlow`, `StmDfu`, `WinUsbDfu` by JNA). Needs
+     Windows' WinUSB driver on the DFU device (Betaflight's driver tool or Zadig); the app doesn't install it.
+   - **AS-6 PORTS / AS-7 FRAME AND TUNING (2026-11-23):** USB as MAVLink, the GPS's and the radio's SERIALn (a port
+     doing something else only with REPLACE); motor order, 5"/7"/10" starting points or "keep its tune", AUTOTUNE
+     on a mode switch position. Each a plan and CONFIRM through `ArduSetupWriter`.
 7. **The tunnel (done, not tried):** `MavTunnel` (0x32): whole MAVLink frames PC <-> FC through the phone in the
    pilot's session - parameters, missions, guided targets, ADS-B traffic and a short list of commands; never sticks,
    arming, calibration, motor test or reboot. The FC's answers go back only while the PC uses it. `TunnelWire` lets
@@ -102,9 +108,53 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    run names them (tags `night` + `finding`). The loopback cut-off case on the real wire now passes. **Don't fly a
    group before all of them pass.**
 2. **Real ArduPilot:** every gate again in SITL (needs WSL), then the PRD's bench tests (F405, two real drones).
-3. **Hand-over speed (NFR, FL-6):** a new lead is a new pilot session, 1-2 s; the PRD wants sticks within 500 ms.
-4. **Not built yet:** the launch mini-view (AL-20/21) and the reserves' OSD list (AL-5), HOME NOW (FD-5), the
-   dispatch preview (FD-9), the other drones' pictures on demand (C3), ADS-B to the lead (FD-8), geofence (AP-9),
-   flight logs (AP-10), the Mission Planner bridge (AP-11), go-look (AP-12), the rally point upload (AC-10: RTL goes
-   to each drone's own home), RT-14 power lines, the tour's new steps (area I), flashing ArduPilot onto a Betaflight
-   board (H1/H4).
+3. **Hand-over speed (NFR, FL-6): done on loopback, not tried on drones.** It was a new pilot session that waited for
+   ArduPilot's armed word twice (its heartbeat, once a second): 1.3-2.1 s, and the window never handed over at all (it
+   asked for END LINK first). Now the group's fresh report stands for that word (`RcSession.handedOver`), the link
+   to the new lead sends sticks once the phone's session is up (`ControlLink.handOver`), and the phone lets in its
+   commander's session on a follower it just told to lead, armed or not (`FleetCommandGate.leadConnect`) - nobody
+   else. `LeadHandoverLoopbackTest`: 286-291 ms at a 120 ms round trip. Open: what the radio's mode switch does to the
+   new lead at that moment is untried (AC-32's centred pickup is not built); the video waits for its key frame as before.
+4. **Not built yet:** ADS-B of the other drones to the lead's ArduPilot (FD-8, AC-11: only the virtual airspace has
+   it). The F405 bench test and two real drones (PRD gates) wait for hardware.
+5. **Built 2026-11-23 (late):** AC-10 - every drone the PC sends out (DISPATCH, CALL RESERVE, a route's GO) gets its own
+   rally point first, read back on the FC (`RallyPlan`, `FleetOps`; on real ArduPilot in `SitlDispatchTest` and
+   `SitlRallyTest`). The follower's own rally upload (exit plans) never read back on real ArduPilot (frame 6 / 3):
+   fixed. FL-14 - the floor's - / + and a typed value on the group's map label. FL-9 - GROUP DESIGN, with the size
+   (AC-35) and layer (AC-13) checks. Rally points of a group's followers come from the group's exit plans; those of
+   drones sent out on their own from `RallyPlan`: the two are not yet checked against each other.
+
+**The pilot GUI (area G), 2026-11-23:**
+- GU-1 - GU-7 built (the merges of `fleet-osd`, `fleet-ardx`, `fleet-tour`): words and FC type, right-click fleet items,
+  the map's group, routes and dispatch, the mode buttons, the OSD elements, alerts, the radio's fleet switches.
+- **GU-4:** the radio's mode switch is the first way; the OSD buttons (LOI, RTL, LND, GO) the backup. ArduPilot drone
+  setup now puts ARM and the mode switch on the AUX channels this PC's Drone setup uses (were always AUX1 / AUX2),
+  and the switch's default modes make a 3-position switch STABILIZE / ALT HOLD / LOITER (its top was LAND). A route
+  paused with GO and then moved by the switch starts anew at the next GO.
+- **GU-8:** a spectator mirrors the pilot PC's group, the fleet's OSD figures (reserves, group, TRAFFIC, HOME NOW,
+  LEAD DOWN; the launch views' words, not their pictures) and the route, besides the drones' states it had. A
+  spectator, a watcher of a drone and an observation PC get no fleet controls: no right-click fleet items, DISPATCH,
+  CALL RESERVE, DISCARD LEAD, TAKE CONTROL, VIEW, mode buttons, UPLOAD / GO / FENCE (`FleetOps.Host.watchOnly`,
+  `FleetWatchOnlyTest`). Not done: an observation PC shows only what it knows itself - the pilot PC's group reaches
+  spectators, not observers.
+- **GU-9:** the OSD's fleet figures are worked out in the window's refresh, 4 a second, and the paint only reads them
+  (they were worked out inside the video's paint - and with the OSD's PINS off they were not shown at all). The launch
+  views' feeds open and close on a thread of their own (they started decoders in the paint). The group's map picture,
+  member states and next approach height are a view made at each tick: the Swing thread never waits for a tick (and
+  no longer walks the tick thread's own maps). Nothing new runs on the stick or video threads: the radio's fleet
+  switches are a few compares per stick frame, their action goes to the Swing thread.
+- **AC-14 (real flights):** while this PC flies a real drone, armed, the nearest other DRAUPNE drone in the air - those
+  the fleet tracks with their height, others the network says are armed by their place - goes into the flight's record
+  once a second; PREVIOUS FLIGHTS shows CLOSEST (who and how, in its tooltip). NONE: watched, none in the air.
+5. **Area F, 2026-11-23:** AL-11 (SAFE TO AUTOLAUNCH / CALL RESERVE greyed out without a 3D fix) and AL-10 (a
+   reserve on its way joins whoever is the lead now; group lost: a new group round the flown drone) built, loopback
+   tested (`ReserveLeadNowLoopbackTest`).
+
+## Real ArduPilot on this PC (SITL)
+
+ArduPilot's own Windows build of Copter's SITL (the one Mission Planner's simulation downloads from
+firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable: `ArduCopter.elf` and its Cygwin DLLs) goes in
+`%LOCALAPPDATA%\DroidDroneBuild\sitl\copter` (or `DRAUPNE_ARDU_SITL`). No Windows Linux part needed. Then
+`gradlew fleetSitl` runs the gates against it (`src/test/java/de/droiddrone/pc/sitl`): gate 1 - Drone setup's plan
+written, armed on the phone's overrides, flown away, the PC cut, LOITER, Smart RTL after 20 s, landed at home; gate
+2's upload - 100 items up and read back under 5 s. Each instance runs in its own folder (`run0`, `run1`), TCP 5760 + 10 n.

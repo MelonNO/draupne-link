@@ -17,6 +17,8 @@ import java.awt.geom.Path2D;
  */
 public final class RouteProfileView extends JComponent {
     private volatile RouteProfile profile;
+    /** Fleet RT-14: power lines and masts near the route (empty: none looked up). */
+    private volatile java.util.List<de.droiddrone.pc.route.PowerLines.Near> obstacles = java.util.List.of();
 
     public RouteProfileView() {
         setPreferredSize(new Dimension(420, 170));
@@ -29,6 +31,11 @@ public final class RouteProfileView extends JComponent {
         repaint();
     }
 
+    public void setObstacles(java.util.List<de.droiddrone.pc.route.PowerLines.Near> near) {
+        obstacles = near == null ? java.util.List.of() : java.util.List.copyOf(near);
+        repaint();
+    }
+
     public RouteProfile profile() {
         return profile;
     }
@@ -37,13 +44,17 @@ public final class RouteProfileView extends JComponent {
     protected void paintComponent(Graphics graphics) {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
         try {
-            paint(g, profile, getWidth(), getHeight());
+            paint(g, profile, obstacles, getWidth(), getHeight());
         } finally {
             g.dispose();
         }
     }
 
     static void paint(Graphics2D g, RouteProfile p, int w, int h) {
+        paint(g, p, java.util.List.of(), w, h);
+    }
+
+    static void paint(Graphics2D g, RouteProfile p, java.util.List<de.droiddrone.pc.route.PowerLines.Near> near, int w, int h) {
         g.setColor(Theme.PANEL);
         g.fillRect(0, 0, w, h);
         g.setFont(Theme.headingFont(11f));
@@ -107,6 +118,15 @@ public final class RouteProfileView extends JComponent {
         FontMetrics sf = g.getFontMetrics();
         int tx = Math.min(right - sf.stringWidth(low), Math.max(left, lx + 4));
         g.drawString(low, tx, Math.max(top + sf.getAscent(), ly1 - 4));
+        // RT-14: power lines and masts, where along the route (out), marked from the top
+        g.setColor(Theme.BAD);
+        for (de.droiddrone.pc.route.PowerLines.Near n : near) {
+            if (n.alongM() > len) continue;
+            int ox = x(n.alongM(), len, left, right);
+            g.drawLine(ox, top, ox, bottom);
+            String tag = n.kind() == de.droiddrone.pc.route.PowerLines.Kind.LINE || n.kind() == de.droiddrone.pc.route.PowerLines.Kind.MINOR_LINE ? "LINE" : "MAST";
+            g.drawString(tag, Math.min(right - sf.stringWidth(tag), ox + 2), top + sf.getAscent());
+        }
         // the height scale
         g.setColor(Theme.MUTED);
         g.drawString(String.format(java.util.Locale.ROOT, "%.0f", maxZ), 2, top + sf.getAscent());

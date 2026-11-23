@@ -118,12 +118,17 @@ final class FleetRole {
                 if (p != null && b != null) {
                     b.plan(p);
                     m.setRtlAltM(p.returnAltRelM); // its own way home's height, set now (AC-41) - the FC's RTL goes up there
+                    m.rallyPoint(p.rallyLat, p.rallyLon, p.returnAltRelM); // AC-10: its RTL to its own rally point (only when it changed)
                 }
                 break;
             }
             case FleetCmd.LEAD:
                 if (c.length >= 4) {
                     boolean lead = c.data[c.at + 1] != 0;
+                    // FL-6: a follower told to lead - its commander's pilot session is let in (mayLead)
+                    boolean follower = brain != null || leftGroupAt != 0 && now - leftGroupAt <= FleetCommandGate.LEFT_GROUP_MS;
+                    if (!lead) leadOrderedAt = 0;
+                    else if (!inSession && follower && (leadOrderedAt == 0 || now - leadOrderedAt > FleetCommandGate.LEAD_CONNECT_MS)) leadOrderedAt = now;
                     Udp.setLead(lead);
                     if (lead) m.setRtlAltM(((c.data[c.at + 2] & 0xff) << 8 | (c.data[c.at + 3] & 0xff)) / 10.0);
                 }
@@ -135,7 +140,10 @@ final class FleetRole {
                 }
                 break;
             case FleetCmd.DISBAND:
-                if (brain != null) log("No longer a follower");
+                if (brain != null) {
+                    log("No longer a follower");
+                    leftGroupAt = now;
+                }
                 brain = null;
                 lastIntent = FleetIntent.NOTHING;
                 break;
@@ -160,8 +168,38 @@ final class FleetRole {
     /** Fleet area F: this phone's own safe autolaunch. */
     final LaunchRunner launch = new LaunchRunner();
 
+    /**
+     * Fleet AL-20 / C3: this PC commands the drone now (a command within {@link #REPORT_FOR_MS}, a launch or a follower's
+     * group under way) - its camera may go to that PC as an observation, armed or not.
+     */
+    boolean commandedBy(java.net.InetAddress from, long now) {
+        InetSocketAddress c = commander;
+        return c != null && c.getAddress().equals(from) && (now < reportUntil || brain != null || launch.underWay());
+    }
+
+    /** Commanded now by its commander (see commandedBy). */
+    boolean commanded(long now) {
+        return commander != null && (now < reportUntil || brain != null || launch.underWay());
+    }
+
     InetSocketAddress commander() {
         return commander;
+    }
+
+    /** FL-6: when the commander's order to lead came to this follower (0: none standing), and when it left the group. */
+    private volatile long leadOrderedAt, leftGroupAt;
+
+    /**
+     * Fleet FL-5 / FL-6, the hand-over (receive thread): a keyed Connect the session rules refused may start the pilot
+     * session all the same - from this drone's commander, a follower it ordered to lead moments ago
+     * (FleetCommandGate.leadConnect). Taken once: the order is used up.
+     */
+    boolean mayLead(java.net.InetAddress from, long now) {
+        InetSocketAddress c = commander;
+        long at = leadOrderedAt;
+        if (!FleetCommandGate.leadConnect(at != 0, c != null && c.getAddress().equals(from), now - at)) return false;
+        leadOrderedAt = 0;
+        return true;
     }
 
     /** The phone's 10 Hz ArduPilot thread. */

@@ -224,6 +224,11 @@ class MapView extends JComponent {
         repaint();
     }
 
+    /** The other drones drawn now, each with its state (a spectator's: the pilot PC's, its fleet words too). */
+    List<NetDrone> netDrones() {
+        return netDrones;
+    }
+
     /** The kept flight whose line passes within 7 px of (x, y), or -1. */
     private int keptAt(int x, int y) {
         MapProjection proj = projection();
@@ -318,6 +323,16 @@ class MapView extends JComponent {
     /** Fleet G1: the FOLLOW GROUP items for a drone's right-click (MainWindow.fleetItems); null: none. */
     private volatile java.util.function.Function<String, List<JMenuItem>> fleetItems;
 
+    /** Fleet AP-9: the airspace areas shown and the pilot's drawings, for the drone's geofence. */
+    java.util.List<de.droiddrone.pc.map.Airspace> airspaceShown() {
+        return airspace;
+    }
+
+    java.util.List<MapGraphics.Item> drawings() {
+        MapGraphics g = graphics;
+        return g == null ? java.util.List.of() : g.list();
+    }
+
     void setFleetItems(java.util.function.Function<String, List<JMenuItem>> items) {
         fleetItems = items;
     }
@@ -347,6 +362,74 @@ class MapView extends JComponent {
         route = r;
         routePlanned = planned;
         if (r == null || routeSelected >= r.size()) routeSelected = -1;
+        repaint();
+    }
+
+    /** The route drawn now (null: none), for the spectators' mirror (GU-8). */
+    de.droiddrone.pc.route.Route route() {
+        return route;
+    }
+
+    /** Its planned line, or null. */
+    List<double[]> routePlanned() {
+        return routePlanned;
+    }
+
+    /** The follower group drawn now (null: none). */
+    de.droiddrone.pc.air.GroupLink.Picture group() {
+        return group;
+    }
+
+    /** FL-14: the group's floor from its map label. */
+    interface GroupFloor {
+        /** The - / + are drawn (this PC flies the group; never on a watching PC). */
+        boolean shown();
+
+        /** - or + pressed: the floor by this much (-5 / +5 m). */
+        void step(double deltaM);
+
+        /** The figure clicked: a value typed. */
+        void typed();
+    }
+
+    private volatile GroupFloor groupFloor;
+    private volatile MapGroupLayer.FloorButtons groupFloorButtons;
+    /** Which of the label's floor buttons the press was on: -1 none, 0 minus, 1 plus, 2 the figure. */
+    private int groupFloorPressed = -1;
+
+    void setGroupFloor(GroupFloor f) {
+        groupFloor = f;
+        repaint();
+    }
+
+    /** Where the label's floor buttons were drawn last (tests); null: none. */
+    MapGroupLayer.FloorButtons groupFloorButtons() {
+        return groupFloorButtons;
+    }
+
+    /** The floor button at this point: 0 minus, 1 plus, 2 the figure, -1 none. */
+    int groupFloorAt(java.awt.Point at) {
+        MapGroupLayer.FloorButtons b = groupFloorButtons;
+        GroupFloor f = groupFloor;
+        if (b == null || f == null || !f.shown()) return -1;
+        return b.minus().contains(at) ? 0 : b.plus().contains(at) ? 1 : b.value().contains(at) ? 2 : -1;
+    }
+
+    /** A click on the label's floor buttons (the mouse, and the tests). */
+    void groupFloorClicked(int which) {
+        GroupFloor f = groupFloor;
+        if (f == null || !f.shown() || which < 0) return;
+        if (which == 0) f.step(-FleetOps.FLOOR_STEP_M);
+        else if (which == 1) f.step(FleetOps.FLOOR_STEP_M);
+        else f.typed();
+        repaint();
+    }
+
+    /** Fleet RT-14: power lines and masts near the route (empty: none). */
+    private volatile List<de.droiddrone.pc.route.PowerLines.Near> obstacles = List.of();
+
+    void setObstacles(List<de.droiddrone.pc.route.PowerLines.Near> near) {
+        obstacles = near == null ? List.of() : List.copyOf(near);
         repaint();
     }
 
@@ -433,6 +516,12 @@ class MapView extends JComponent {
                     return;
                 }
                 crossPressed = false;
+                // FL-14: the group label's floor - / + and figure are buttons of their own
+                groupFloorPressed = SwingUtilities.isLeftMouseButton(e) ? groupFloorAt(e.getPoint()) : -1;
+                if (groupFloorPressed >= 0) {
+                    dragged = false;
+                    return;
+                }
                 // I-008: the held chip is a button of its own - no tool point, no pan under it
                 heldPressed = SwingUtilities.isLeftMouseButton(e) && onHeldChip != null && heldChip != null && heldChip.contains(e.getPoint());
                 if (heldPressed) {
@@ -538,6 +627,12 @@ class MapView extends JComponent {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
+                if (groupFloorPressed >= 0) { // FL-14
+                    int was = groupFloorPressed;
+                    groupFloorPressed = -1;
+                    if (groupFloorAt(e.getPoint()) == was) groupFloorClicked(was);
+                    return;
+                }
                 if (heldPressed) { // I-008: IT'S DOWN - RESUME, asked as the LINK card asks it
                     heldPressed = false;
                     Runnable r = onHeldChip;
@@ -1124,7 +1219,8 @@ class MapView extends JComponent {
     /** The overwatch alert's colour: a red that isn't the map's accent or the warnings' yellow. */
     static final Color ALERT = new Color(0xff4d3a);
 
-    private JPopupMenu menu(int x, int y) {
+    /** The right-click menu at (x, y) (package: the GU-8 tests read what a watching PC is offered). */
+    JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         RouteHost rh = routeHost;
@@ -1824,8 +1920,14 @@ class MapView extends JComponent {
             if (home != null) MapPlaceLayer.paintRings(g, home, proj);
             if (oldTrack != null) MapTrackLayer.paintOldTrack(g, oldTrackPath, oldTrackName, proj);
             MapTrackLayer.paintKept(g, kept, keptPaths, proj);
-            if (group != null) MapGroupLayer.paint(g, group, proj); // fleet G4
+            if (group != null) { // fleet G4; FL-14: the floor's - / + on the label where this PC flies the group
+                GroupFloor f = groupFloor;
+                groupFloorButtons = MapGroupLayer.paint(g, group, proj, f != null && f.shown());
+            } else {
+                groupFloorButtons = null;
+            }
             if (route != null) MapRouteLayer.paint(g, route, routePlanned, routeSelected, proj); // fleet RT-1
+            if (route != null && !obstacles.isEmpty()) MapRouteLayer.paintObstacles(g, obstacles, proj); // fleet RT-14
             MapTrackLayer.paintTrack(g, trackPath, proj);
             if (home != null) MapPlaceLayer.paintHome(g, home, proj);
             FlightTrack.Point last = track == null ? null : track.last();

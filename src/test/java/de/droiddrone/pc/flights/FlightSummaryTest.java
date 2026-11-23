@@ -126,11 +126,12 @@ class FlightSummaryTest {
         assertEquals("2", s.failsafesText());
 
         List<FlightSummary.Figure> figures = s.figures();
-        assertEquals(List.of("DURATION", "ARMED", "DISTANCE", "FURTHEST", "MAX HEIGHT", "MIN CELL", "LINK LOSSES", "FAILSAFES", "WORST PING"),
+        assertEquals(List.of("DURATION", "ARMED", "DISTANCE", "FURTHEST", "MAX HEIGHT", "MIN CELL", "LINK LOSSES", "FAILSAFES", "WORST PING", "CLOSEST"),
                 figures.stream().map(FlightSummary.Figure::label).toList());
-        assertEquals(List.of("1:59", "1:40", "1.11 KM", "667 M", "42 M", "3.47 V", "2", "2", "310 MS"),
+        assertEquals(List.of("1:59", "1:40", "1.11 KM", "667 M", "42 M", "3.47 V", "2", "2", "310 MS", "-"),
                 figures.stream().map(FlightSummary.Figure::value).toList());
-        assertTrue(figures.stream().allMatch(FlightSummary.Figure::known));
+        assertTrue(figures.stream().limit(9).allMatch(FlightSummary.Figure::known));
+        assertFalse(figures.get(9).known(), "a flight without a record: its closest approach not known");
     }
 
     @Test
@@ -155,7 +156,7 @@ class FlightSummaryTest {
         assertEquals(FlightSummary.UNKNOWN, s.linkLossesText(), "no link log: not known - not 0 losses");
         assertEquals(FlightSummary.UNKNOWN, s.failsafesText());
         assertEquals(FlightSummary.UNKNOWN, s.worstPingText());
-        assertEquals(List.of(true, true, true, true, true, false, false, false, false), s.figures().stream().map(FlightSummary.Figure::known).toList());
+        assertEquals(List.of(true, true, true, true, true, false, false, false, false, false), s.figures().stream().map(FlightSummary.Figure::known).toList());
     }
 
     /** A flight without GPS: a recording whose figures have no position (none sent, then 0 / 0 for "no fix") and no cell count. */
@@ -272,7 +273,7 @@ class FlightSummaryTest {
                 videos().resolve("flight-2026-11-08_14-05-00.csv"), logs().resolve("link-20261108-140452.csv"), Double.NaN);
         FlightSummary s = assertDoesNotThrow(() -> FlightSummary.of(gone));
         assertEquals("1:00", s.durationText());
-        assertEquals(List.of(true, false, false, false, false, false, false, false, false), s.figures().stream().map(FlightSummary.Figure::known).toList());
+        assertEquals(List.of(true, false, false, false, false, false, false, false, false, false), s.figures().stream().map(FlightSummary.Figure::known).toList());
         assertEquals(-1, s.armedMs);
         assertNull(s.maxAltKind);
         assertEquals("MAX ALT", s.maxAltLabel());
@@ -283,7 +284,7 @@ class FlightSummaryTest {
         Files.write(gone.telemetry(), new byte[0]);
         Files.write(gone.linkLog(), new byte[0]);
         s = assertDoesNotThrow(() -> FlightSummary.of(gone));
-        assertEquals(List.of(true, false, false, false, false, false, false, false, false), s.figures().stream().map(FlightSummary.Figure::known).toList());
+        assertEquals(List.of(true, false, false, false, false, false, false, false, false, false), s.figures().stream().map(FlightSummary.Figure::known).toList());
         for (FlightSummary.Figure fig : s.figures()) if (!fig.known()) assertEquals(FlightSummary.UNKNOWN, fig.value(), fig.label());
     }
 

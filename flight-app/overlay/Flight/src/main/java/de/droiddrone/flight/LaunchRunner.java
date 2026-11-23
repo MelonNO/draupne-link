@@ -192,7 +192,7 @@ final class LaunchRunner {
         reading.batteryPercent = Double.isNaN(b) ? -1 : (int) Math.round(b);
         reading.imuHealthy = m.imuHealthy();
         reading.compassHealthy = m.compassHealthy();
-        reading.fcHealthy = m.isArduPilot();
+        reading.fcHealthy = m.isArduPilot() && m.preArmOk(); // ArduPilot's own pre-arm checks too
         ClimbWatchdog.Sample s = null;
         if (state == LaunchSequence.CLIMBING) {
             s = sample;

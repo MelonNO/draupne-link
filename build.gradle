@@ -26,6 +26,7 @@ dependencies {
     implementation 'com.google.zxing:core:3.5.3'   // QR codes in the phone guide
     implementation 'com.google.code.gson:gson:2.11.0' // parses `tailscale status --json`
     implementation 'com.fazecast:jSerialComm:2.11.0' // talks to Betaflight over USB in the setup wizard
+    implementation 'net.java.dev.jna:jna:5.6.0' // fleet H1: the STM32's USB DFU through Windows' WinUSB (Betaflight to ArduPilot)
     implementation 'org.bytedeco:ffmpeg:7.1-1.5.11'  // video decoding
     runtimeOnly 'org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64'
     runtimeOnly 'org.bytedeco:javacpp:1.5.11:windows-x86_64'
@@ -99,7 +100,7 @@ tasks.withType(Test).configureEach {
 }
 
 // The test bench's tags (docs/TESTING.md): run by the bench tasks further down, never by `test`.
-def benchTags = ['benchself', 'explore', 'ui', 'badlink', 'edge', 'soak', 'night', 'emulator', 'sitl', 'finding']
+def benchTags = ['benchself', 'explore', 'ui', 'badlink', 'edge', 'soak', 'night', 'emulator', 'sitl', 'finding', 'ardusitl']
 // >>> R4, the hardware rig: its two tags are the bench's too - never run by `test`, perfTest, quarantineTest or CI
 benchTags += ['hw', 'hwphone']
 // <<< R4
@@ -419,4 +420,16 @@ tasks.register('packageInstaller', Exec) {
             rename { "DRAUPNE-Link-Setup-${version}.exe" }
         }
     }
+}
+
+// fleet: the PRD's phase gates against real ArduPilot Copter running on this PC (ArduPilot's Windows SITL build in
+// %LOCALAPPDATA%\DroidDroneBuild\sitl\copter, or DRAUPNE_ARDU_SITL). Real time, a few minutes; skipped without SITL.
+tasks.register('fleetSitl', Test) {
+    group = 'bench'
+    description = 'The fleet gates against ArduPilot SITL (tag ardusitl)'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'ardusitl' }
+    include '**/sitl/**'
+    maxParallelForks = 1
 }

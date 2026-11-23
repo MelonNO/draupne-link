@@ -40,6 +40,7 @@ public final class MavTunnel {
             MISSION_REQUEST = 40, MISSION_SET_CURRENT = 41, MISSION_CURRENT = 42, MISSION_REQUEST_LIST = 43, MISSION_COUNT = 44,
             MISSION_CLEAR_ALL = 45, MISSION_ITEM_REACHED = 46, MISSION_ACK = 47, MISSION_REQUEST_INT = 51, MISSION_ITEM_INT = 73,
             COMMAND_INT = 75, COMMAND_LONG = 76, COMMAND_ACK = 77, SET_POSITION_TARGET_GLOBAL_INT = 86,
+            LOG_REQUEST_LIST = 117, LOG_ENTRY = 118, LOG_REQUEST_DATA = 119, LOG_DATA = 120, LOG_REQUEST_END = 122,
             POSITION_TARGET_GLOBAL_INT = 87, HOME_POSITION = 242, ADSB_VEHICLE = 246;
 
     /** The MAV_CMDs the PC may send: modes, mission control, pointing and speed - never arming or the bench's. */
@@ -75,6 +76,9 @@ public final class MavTunnel {
             case MISSION_REQUEST:
             case MISSION_ITEM_INT:
             case SET_POSITION_TARGET_GLOBAL_INT:
+            case LOG_REQUEST_LIST: // AP-10: the flight log after landing (the phone passes these only while disarmed)
+            case LOG_REQUEST_DATA:
+            case LOG_REQUEST_END:
             case ADSB_VEHICLE:
                 return true;
             case COMMAND_LONG:
@@ -86,6 +90,11 @@ public final class MavTunnel {
             default:
                 return false;
         }
+    }
+
+    /** AP-10: a log request - the phone writes it to the FC only while it is disarmed (a log read slows the FC). */
+    public static boolean isLogRequest(int msgId) {
+        return msgId == LOG_REQUEST_LIST || msgId == LOG_REQUEST_DATA || msgId == LOG_REQUEST_END;
     }
 
     /** Whether a message from the flight controller goes to the PC (while the tunnel is open). */
@@ -102,6 +111,8 @@ public final class MavTunnel {
             case MISSION_ITEM_REACHED:
             case COMMAND_ACK:
             case POSITION_TARGET_GLOBAL_INT:
+            case LOG_ENTRY:
+            case LOG_DATA:
             case HOME_POSITION:
                 return true;
             default:

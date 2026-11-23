@@ -36,7 +36,19 @@ public class Connection {
         return open(config, video, true);
     }
 
+    /**
+     * Fleet FL-6 / FL-5: the link to the group's new lead (ControlLink.handOver: its sticks as soon as the phone's session
+     * is up). Otherwise as {@link #open(PcConfig, ControlLink.VideoListener)}.
+     */
+    public static Connection openHandOver(PcConfig config, ControlLink.VideoListener video) throws IOException {
+        return open(config, video, false, true);
+    }
+
     private static Connection open(PcConfig config, ControlLink.VideoListener video, boolean probe) throws IOException {
+        return open(config, video, probe, false);
+    }
+
+    private static Connection open(PcConfig config, ControlLink.VideoListener video, boolean probe, boolean handOver) throws IOException {
         int port = config.getPort();
         boolean watch = probe || watchOnly(config);
         if (config.getIp().isEmpty()) {
@@ -51,6 +63,7 @@ public class Connection {
         // is the phone's, asked who flies
         if (watch) link.watchOnly(!probe && Names.kindOf(config.getString(Names.PHONE_NAME_KEY)) != Names.Kind.PHONE);
         if (video != null) link.setVideoListener(video, !"avc".equalsIgnoreCase(config.getString("videoCodec")));
+        if (handOver && !watch) link.handOver();
         try {
             link.start();
         } catch (IOException | RuntimeException e) {

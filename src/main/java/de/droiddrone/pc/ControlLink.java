@@ -454,6 +454,36 @@ public class ControlLink {
 
     private boolean watchPilotPc;
 
+    /**
+     * Fleet FL-6 (call before start): this link is the group's hand-over to its new lead - the pilot's sticks must be on
+     * it within 500 ms. Until the link is first READY, two things differ, nothing after:
+     * <ul>
+     * <li>The session thread turns every {@link #HANDOVER_TICK_MS} rather than {@link #SESSION_TICK_MS}: the Config goes
+     * out the moment the phone's answer is in, and READY is seen the moment it is.</li>
+     * <li>The sticks go as soon as the phone's session is up (its answer to the Connect) - the phone takes stick frames
+     * from then on, the Config's round trip is not waited for. Until the phone's version is read they go in the layout
+     * every phone app takes (no sequence), as to an older app.</li>
+     * </ul>
+     * And its Connects go at the pace of a reconnect ({@link #CONNECT_FAST_MS}). The pings and the stick path itself are
+     * as on any link.
+     */
+    public void handOver() {
+        handOver = true;
+    }
+
+    private volatile boolean handOver;
+    /** The session thread's turn while a hand-over's link comes up. */
+    static final long HANDOVER_TICK_MS = 5;
+
+    private long sessionTickMs() {
+        return handOver && !everReady ? HANDOVER_TICK_MS : SESSION_TICK_MS;
+    }
+
+    /** A hand-over's link before its first READY: the phone's session is up (its answer came), the version not refused. */
+    private boolean handOverLive() {
+        return handOver && !everReady && !versionMismatch && isConnected();
+    }
+
     /** Connected as a spectator on purpose, rather than turned into one because another PC flies. */
     public boolean isWatchOnly() {
         return watchOnly;
@@ -942,7 +972,7 @@ public class ControlLink {
                 } else if (!connected) {
                     boolean phoneHoldsOldSession = now - ownSessionNamedAt < RECENT_SESSION_MS;
                     long every = phoneHoldsOldSession ? OWN_SESSION_RETRY_MS
-                            : lostAt > 0 && now - lostAt < RECONNECT_FAST_MS ? CONNECT_FAST_MS : CONNECT_MS;
+                            : lostAt > 0 && now - lostAt < RECONNECT_FAST_MS || handOver && !everReady ? CONNECT_FAST_MS : CONNECT_MS;
                     long sinceRound = connectRoundAt == 0 ? Long.MAX_VALUE : now - connectRoundAt;
                     // F-001: the phone heard again after a try's id was kept for not being heard - the new id at once,
                     // not at the next turn of the pace
@@ -957,7 +987,7 @@ public class ControlLink {
                         sendConnect();
                         lastConnect = now;
                     }
-                    Thread.sleep(SESSION_TICK_MS);
+                    Thread.sleep(sessionTickMs());
                 } else if (!configReceived) {
                     if (now - lastConfig >= CONFIG_RETRY_MS) {
                         decideForcedTier(now); // ROBUST set: the first config already carries the small size
@@ -970,7 +1000,7 @@ public class ControlLink {
                         profileSends = Math.max(profileSends, PROFILE_REPEATS);
                         nextProfileSend = now + PROFILE_REPEAT_MS;
                     }
-                    Thread.sleep(SESSION_TICK_MS);
+                    Thread.sleep(sessionTickMs());
                 } else {
                     boolean refreshUnanswered = fcRefreshAskedAt > 0 && now - fcRefreshAskedAt >= FC_REFRESH_RETRY_MS;
                     if (refreshFc || refreshUnanswered) { // the same FC, most likely: its state was kept, and is asked for once more
@@ -1201,11 +1231,10 @@ public class ControlLink {
                 }
             }
             case de.droiddrone.common.MavTunnel.PACKET -> { // fleet: the FC's answers through the phone's tunnel
-                java.util.function.Consumer<byte[]> t = tunnelListener;
-                if (t != null && spectator == null) {
+                if (!tunnelListeners.isEmpty() && spectator == null) {
                     byte[] frames = new byte[buffer.getRemaining()];
                     buffer.read(frames, 0, frames.length);
-                    t.accept(frames);
+                    for (java.util.function.Consumer<byte[]> t : tunnelListeners) t.accept(frames);
                 }
             }
             case UdpCommon.ConfigReceived -> {
@@ -1955,7 +1984,7 @@ public class ControlLink {
         if (channels.length < 4 || channels.length > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) {
             throw new IllegalArgumentException("RC channel count must be 4.." + FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT);
         }
-        if (!sticksWanted() || !(everReady || configReceived && isConnected())) return false;
+        if (!sticksWanted() || !(everReady || configReceived && isConnected() || handOverLive())) return false;
         short[] frame = padForRxMap(channels);
         try {
             int build = telemetry.getPhonePcBuild();
@@ -2067,10 +2096,15 @@ public class ControlLink {
     }
 
     /** Fleet: where the FC's answers through the phone's tunnel go (MavTunnel); null: nobody listens. */
-    private volatile java.util.function.Consumer<byte[]> tunnelListener;
+    private final java.util.List<java.util.function.Consumer<byte[]>> tunnelListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    public void setTunnelListener(java.util.function.Consumer<byte[]> listener) {
-        tunnelListener = listener;
+    /** Fleet: one more listener of the tunnel (a MavSession's TunnelWire, the Mission Planner bridge). */
+    public void addTunnelListener(java.util.function.Consumer<byte[]> listener) {
+        if (listener != null) tunnelListeners.add(listener);
+    }
+
+    public void removeTunnelListener(java.util.function.Consumer<byte[]> listener) {
+        tunnelListeners.remove(listener);
     }
 
     /**
@@ -2147,6 +2181,7 @@ public class ControlLink {
             case de.droiddrone.common.FcCommand.MISSION_START -> "START";
             case de.droiddrone.common.FcCommand.PAUSE -> "PAUSE";
             case de.droiddrone.common.FcCommand.CONTINUE -> "CONTINUE";
+            case de.droiddrone.common.FcCommand.GO_LOOK -> "GO LOOK";
             default -> "?";
         };
     }
@@ -2233,7 +2268,7 @@ public class ControlLink {
      * purpose, or refused for the version. What RcSession's gate waits for; see {@link #sendRc}.
      */
     public boolean sticksWanted() {
-        return running && spectator == null && !versionMismatch && !dormant && (everReady || getState() == State.READY);
+        return running && spectator == null && !versionMismatch && !dormant && (everReady || getState() == State.READY || handOverLive());
     }
 
     /** The link has been READY once since start(). */

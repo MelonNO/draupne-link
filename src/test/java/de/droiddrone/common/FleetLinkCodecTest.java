@@ -76,4 +76,34 @@ class FleetLinkCodecTest {
         assertEquals(N, FleetCommandGate.decide(false, false, false, false, Long.MAX_VALUE, true), "no commander yet, on the ground");
         assertEquals(R, FleetCommandGate.decide(false, false, false, false, Long.MAX_VALUE, false), "no commander, not known disarmed");
     }
+
+    /** FL-6: the hand-over lets in the commander only, a follower it told to lead, for 5 s. */
+    @Test
+    void theNewLeadsSessionIsItsCommandersOnlyAndOnlyJustAfterTheOrder() {
+        assertTrue(FleetCommandGate.leadConnect(true, true, 0));
+        assertTrue(FleetCommandGate.leadConnect(true, true, FleetCommandGate.LEAD_CONNECT_MS));
+        assertFalse(FleetCommandGate.leadConnect(true, false, 0), "another PC, the key or not");
+        assertFalse(FleetCommandGate.leadConnect(false, true, 0), "no order to lead (or not given to a follower)");
+        assertFalse(FleetCommandGate.leadConnect(true, true, FleetCommandGate.LEAD_CONNECT_MS + 1), "the order too old");
+        assertFalse(FleetCommandGate.leadConnect(true, true, -1), "a clock gone back");
+    }
+
+    /** FL-6: the session the hand-over starts is a session as any: the commander's own Connects after it are its own. */
+    @Test
+    void theHandedOverSessionKeepsItsId() {
+        SessionGate g = new SessionGate("DD");
+        byte[] k = "DD".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] c = new byte[6 + k.length + 2 + 5];
+        c[0] = UdpCommon.Connect;
+        c[5] = (byte) k.length;
+        System.arraycopy(k, 0, c, 6, k.length);
+        Bytes.putInt(c, 6 + k.length + 2, 77);
+        long id = SessionGate.sessionId(c, c.length);
+        assertEquals(77, id);
+        // armed, another PC flew it last: SPECTATOR - then the hand-over's rule starts it
+        assertEquals(SessionGate.Verdict.SPECTATOR, g.noSession(c, c.length, true, false, false, () -> false, 1000, id));
+        assertEquals(SessionGate.Verdict.NEW_SESSION, g.leadSession(1000, id));
+        assertEquals(SessionGate.Verdict.SAME_SESSION, g.fromPilot(c, c.length, 1300, id), "a Connect of the same try: dropped");
+        assertEquals(id, g.liveSessionId());
+    }
 }

@@ -463,6 +463,10 @@ public class Mavlink {
             case de.droiddrone.common.FcCommand.CONTINUE:
                 setMode(COPTER_AUTO);
                 break;
+            case de.droiddrone.common.FcCommand.GO_LOOK: // fleet AP-12: there at its height, the camera on the spot
+                commandInt(192, -1, 1, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), Float.NaN, (short) 6); // DO_REPOSITION, change mode
+                commandInt(195, 0, 0, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), 0f, (short) 6); // DO_SET_ROI_LOCATION, on the ground
+                break;
             default:
                 return false;
         }
@@ -473,6 +477,13 @@ public class Mavlink {
     /** ArduPilot's mode by its number (MAV_CMD_DO_SET_MODE); the phone's own link-loss rules use it too. */
     public void setMode(int customMode) {
         commandLong(MAV_CMD.MAV_CMD_DO_SET_MODE, CUSTOM_MODE_ENABLED, customMode);
+    }
+
+    /** COMMAND_INT: a place in whole 1e7 degrees (DO_REPOSITION, DO_SET_ROI_LOCATION); frame 6 = heights above home. */
+    private void commandInt(int command, float p1, float p2, int lat, int lon, float z, short frame) {
+        awaitingAck.add(command);
+        send(new com.MAVLink.common.msg_command_int(p1, p2, 0, Float.NaN, lat, lon, z, command, targetSys(), targetComponent, frame,
+                (short) 0, (short) 0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
 
     private void commandLong(int command, float p1, float p2) {
@@ -495,6 +506,8 @@ public class Mavlink {
         if (!isArduPilot()) return;
         tunnelUsedAtMs = android.os.SystemClock.elapsedRealtime();
         de.droiddrone.common.MavTunnel.split(data, 0, data.length, (d, off, len) -> {
+            int id = de.droiddrone.common.MavTunnel.msgId(d, off, len);
+            if (de.droiddrone.common.MavTunnel.isLogRequest(id) && armedNow(android.os.SystemClock.elapsedRealtime())) return; // AP-10: logs on the ground only
             if (de.droiddrone.common.MavTunnel.toFc(d, off, len)) {
                 serial.writeDataMavlink(java.util.Arrays.copyOfRange(d, off, off + len));
             } else if (!tunnelRefusedSaid) {
@@ -619,6 +632,17 @@ public class Mavlink {
         return (sensorsPresent & need) == need && (sensorsHealth & need) == need;
     }
 
+    /** MAV_SYS_STATUS_PREARM_CHECK: ArduPilot's own pre-arm checks. */
+    static final long SENSOR_PREARM = 0x10000000L;
+
+    /**
+     * ArduPilot says its own pre-arm checks pass (SYS_STATUS' PREARM_CHECK bit healthy; a firmware that doesn't report the
+     * bit counts as passing). Fleet AL-3 / AL-13: a reserve that would be refused is not armed - skipped as FC UNHEALTHY.
+     */
+    boolean preArmOk() {
+        return (sensorsPresent & SENSOR_PREARM) == 0 || (sensorsHealth & SENSOR_PREARM) != 0;
+    }
+
     /** A compass: present and healthy, or none at all (counted healthy: the GPS puck's is the drone's, D3). */
     boolean compassHealthy() {
         return (sensorsPresent & SENSOR_MAG) == 0 || (sensorsHealth & SENSOR_MAG) != 0;
@@ -648,51 +672,102 @@ public class Mavlink {
     private long uploadSaidAt;
     private int uploadSaidState = -1;
 
-    /** A route block from the PC (the buffer thread): a new one starts its upload; the same one again is answered. */
+    /** A route, fence or rally block from the PC (the buffer thread): a new one starts its upload; the same one again is answered. */
     public void missionBlock(de.droiddrone.common.MissionBlock b) {
         if (b == null || !isArduPilot()) return;
         if (b.blockId == uploadBlock && upload != null) {
             sayUpload(true);
             return;
         }
-        uploadBlock = b.blockId;
-        de.droiddrone.common.MissionUpload u = new de.droiddrone.common.MissionUpload(b.items, new de.droiddrone.common.MissionUpload.Link() {
+        startUpload(b.blockId, b.missionType, b.items, true);
+        // AC-10: the PC's rally point for a drone it sends out - its RTL goes there, not home
+        if (b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY && !b.items.isEmpty()) setParam("RALLY_INCL_HOME", 0);
+    }
+
+    /** The phone's own rally upload (AC-10) waiting while another upload runs: started when it ends. */
+    private volatile java.util.List<de.droiddrone.common.MissionItem> rallyWaiting;
+    /** The rally points last read back on the FC: not uploaded again while they are the same. */
+    private java.util.List<de.droiddrone.common.MissionItem> rallyOnFc;
+
+    /**
+     * Fleet AC-10: this follower's own rally point, so its RTL goes there and not to its home - uploaded only when it
+     * changed, after any upload under way.
+     */
+    void rallyPoint(double lat, double lon, double relAltM) {
+        if (!isArduPilot() || Double.isNaN(lat) || Double.isNaN(lon)) return;
+        java.util.List<de.droiddrone.common.MissionItem> want = java.util.Collections.singletonList(new de.droiddrone.common.MissionItem(0,
+                // NAV_RALLY_POINT in MAV_FRAME_GLOBAL_RELATIVE_ALT (3), whole metres: as ArduPilot reads it back (frame 6
+                // came back as 3 and failed every read-back - found in SITL, DRAUPNE Link's SitlRallyTest)
+                3, 5100, true, 0, 0, 0, 0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) Math.round(relAltM)));
+        if (sameItems(want, rallyOnFc) || sameItems(want, rallyWaiting)) return;
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u != null && !u.done() && !u.failed()) {
+            rallyWaiting = want;
+            return;
+        }
+        startUpload(-1, de.droiddrone.common.MissionUpload.TYPE_RALLY, want, false);
+        setParam("RALLY_INCL_HOME", 0); // RTL goes to the rally point, not home
+    }
+
+    private static boolean sameItems(java.util.List<de.droiddrone.common.MissionItem> a, java.util.List<de.droiddrone.common.MissionItem> b) {
+        if (a == null || b == null || a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) if (!a.get(i).sameAs(b.get(i))) return false;
+        return true;
+    }
+
+    /** A PARAM_SET of the phone's own (RALLY_INCL_HOME, FENCE_ENABLE). */
+    void setParam(String name, float value) {
+        byte[] id = new byte[16];
+        byte[] n = name.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(n, 0, id, 0, Math.min(16, n.length));
+        send(new com.MAVLink.common.msg_param_set(value, targetSys(), targetComponent, id, (short) 9,
+                config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+    }
+
+    /**  toPc the status goes to the PC (a block of the PC's); the phone's own rally upload says it in the log only */
+    private void startUpload(int block, final int type, java.util.List<de.droiddrone.common.MissionItem> items, boolean toPc) {
+        uploadBlock = block;
+        uploadToPc = toPc;
+        final short mt = (short) type;
+        de.droiddrone.common.MissionUpload u = new de.droiddrone.common.MissionUpload(items, new de.droiddrone.common.MissionUpload.Link() {
             @Override
             public void sendCount(int count) {
-                send(new com.MAVLink.common.msg_mission_count(count, targetSys(), targetComponent, (short) 0, 0L,
+                send(new com.MAVLink.common.msg_mission_count(count, targetSys(), targetComponent, mt, 0L,
                         config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
             }
 
             @Override
             public void sendItem(de.droiddrone.common.MissionItem m) {
                 send(new com.MAVLink.common.msg_mission_item_int(m.param1, m.param2, m.param3, m.param4, m.x, m.y, m.z, m.seq, m.command,
-                        targetSys(), targetComponent, (short) m.frame, (short) 0, (short) (m.autocontinue ? 1 : 0), (short) 0,
+                        targetSys(), targetComponent, (short) m.frame, (short) 0, (short) (m.autocontinue ? 1 : 0), mt,
                         config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
             }
 
             @Override
             public void sendRequestList() {
-                send(new com.MAVLink.common.msg_mission_request_list(targetSys(), targetComponent, (short) 0,
+                send(new com.MAVLink.common.msg_mission_request_list(targetSys(), targetComponent, mt,
                         config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
             }
 
             @Override
             public void sendRequest(int seq) {
-                send(new com.MAVLink.common.msg_mission_request_int(seq, targetSys(), targetComponent, (short) 0,
+                send(new com.MAVLink.common.msg_mission_request_int(seq, targetSys(), targetComponent, mt,
                         config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
             }
 
             @Override
-            public void sendAck(int type) {
-                send(new com.MAVLink.common.msg_mission_ack(targetSys(), targetComponent, (short) type, (short) 0, 0L,
+            public void sendAck(int ackType) {
+                send(new com.MAVLink.common.msg_mission_ack(targetSys(), targetComponent, (short) ackType, mt, 0L,
                         config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
             }
-        });
+        }, type);
         upload = u;
-        log("Route from the PC: " + b.items.size() + " items, block " + b.blockId);
+        log((type == 1 ? "Fence" : type == 2 ? "Rally points" : "Route") + (toPc ? " from the PC: " : " of the phone's own: ") + items.size() + " items");
         u.start(android.os.SystemClock.elapsedRealtime());
         sayUpload(true);
     }
+
+    private volatile boolean uploadToPc = true;
 
     private void send(MAVLinkPacket packet) {
         packet.seq = getSequence();
@@ -705,6 +780,13 @@ public class Mavlink {
         if (u == null) return;
         u.tick(now);
         sayUpload(false);
+        if (u.missionType() == de.droiddrone.common.MissionUpload.TYPE_RALLY && u.done()) rallyOnFc = u.items();
+        java.util.List<de.droiddrone.common.MissionItem> r = rallyWaiting;
+        if (r != null && (u.done() || u.failed())) { // AC-10: the rally point waited for the upload before it
+            rallyWaiting = null;
+            startUpload(-1, de.droiddrone.common.MissionUpload.TYPE_RALLY, r, false);
+            setParam("RALLY_INCL_HOME", 0);
+        }
     }
 
     private void sayUpload(boolean now) {
@@ -714,9 +796,10 @@ public class Mavlink {
         int state = u.state();
         boolean over = u.done() || u.failed();
         if (!now && state == uploadSaidState && (over || t - uploadSaidAt < 1000)) return;
-        if (state != uploadSaidState && over) log("Route upload: " + (u.done() ? "done, read back" : "FAILED - " + u.reason()));
+        if (state != uploadSaidState && over) log("Upload: " + (u.done() ? "done, read back" : "FAILED - " + u.reason()));
         uploadSaidState = state;
         uploadSaidAt = t;
+        if (!uploadToPc) return; // the phone's own (rally points): its log only
         telemetryOutputBuffer.offer(new TelemetryData(de.droiddrone.common.MissionBlock.STATUS_RECORD,
                 de.droiddrone.common.MissionBlock.status(uploadBlock, state, u.percent(), u.failed() ? u.reason() : null)));
     }
@@ -726,26 +809,31 @@ public class Mavlink {
         de.droiddrone.common.MissionUpload u = upload;
         if (u == null) return;
         long now = android.os.SystemClock.elapsedRealtime();
+        int t = u.missionType(); // fleet: only the answers of the list being uploaded
         switch (packet.msgid) {
-            case com.MAVLink.common.msg_mission_request_int.MAVLINK_MSG_ID_MISSION_REQUEST_INT:
-                u.onRequest(new com.MAVLink.common.msg_mission_request_int(packet).seq, now);
+            case com.MAVLink.common.msg_mission_request_int.MAVLINK_MSG_ID_MISSION_REQUEST_INT: {
+                com.MAVLink.common.msg_mission_request_int q = new com.MAVLink.common.msg_mission_request_int(packet);
+                if (q.mission_type == t) u.onRequest(q.seq, now);
                 break;
-            case com.MAVLink.common.msg_mission_request.MAVLINK_MSG_ID_MISSION_REQUEST:
-                u.onRequest(new com.MAVLink.common.msg_mission_request(packet).seq, now);
+            }
+            case com.MAVLink.common.msg_mission_request.MAVLINK_MSG_ID_MISSION_REQUEST: {
+                com.MAVLink.common.msg_mission_request q = new com.MAVLink.common.msg_mission_request(packet);
+                if (q.mission_type == t) u.onRequest(q.seq, now);
                 break;
+            }
             case com.MAVLink.common.msg_mission_ack.MAVLINK_MSG_ID_MISSION_ACK: {
                 com.MAVLink.common.msg_mission_ack a = new com.MAVLink.common.msg_mission_ack(packet);
-                if (a.mission_type == 0) u.onAck(a.type, now);
+                if (a.mission_type == t) u.onAck(a.type, now);
                 break;
             }
             case com.MAVLink.common.msg_mission_count.MAVLINK_MSG_ID_MISSION_COUNT: {
                 com.MAVLink.common.msg_mission_count c = new com.MAVLink.common.msg_mission_count(packet);
-                if (c.mission_type == 0) u.onCount(c.count, now);
+                if (c.mission_type == t) u.onCount(c.count, now);
                 break;
             }
             case com.MAVLink.common.msg_mission_item_int.MAVLINK_MSG_ID_MISSION_ITEM_INT: {
                 com.MAVLink.common.msg_mission_item_int m = new com.MAVLink.common.msg_mission_item_int(packet);
-                if (m.mission_type == 0) u.onItem(new de.droiddrone.common.MissionItem(m.seq, m.frame, m.command, m.autocontinue != 0,
+                if (m.mission_type == t) u.onItem(new de.droiddrone.common.MissionItem(m.seq, m.frame, m.command, m.autocontinue != 0,
                         m.param1, m.param2, m.param3, m.param4, m.x, m.y, m.z), now);
                 break;
             }

@@ -52,4 +52,22 @@ public final class FleetCommandGate {
         if (!commanderKnown || commanderSilentMs >= TAKEOVER_SILENT_MS) return NEW_COMMANDER;
         return REFUSE;
     }
+
+    /** How long a follower's order to lead lets its commander's pilot session in (see {@link #leadConnect}). */
+    public static final long LEAD_CONNECT_MS = 5_000;
+    /** A DISBAND this recent still counts as a follower (the new lead's DISBAND and LEAD come together). */
+    public static final long LEFT_GROUP_MS = 2_000;
+
+    /**
+     * Fleet FL-5 / FL-6, the hand-over: a keyed Connect the session rules refused (SessionGate: the drone armed, its last
+     * pilot another PC) is let in only when all of this holds - the drone was a follower when its commander, the PC
+     * whose group it follows, ordered it to lead (FleetCmd.LEAD); the Connect comes from that commander; and within
+     * {@link #LEAD_CONNECT_MS} of the order. Nobody else gets more than SessionGate gives.
+     * @param leadOrderedAsFollower the commander's order to lead came while this drone was a follower
+     * @param fromCommander         the Connect comes from the commander's address
+     * @param sinceLeadOrderMs      how long ago that order came
+     */
+    public static boolean leadConnect(boolean leadOrderedAsFollower, boolean fromCommander, long sinceLeadOrderMs) {
+        return leadOrderedAsFollower && fromCommander && sinceLeadOrderMs >= 0 && sinceLeadOrderMs <= LEAD_CONNECT_MS;
+    }
 }

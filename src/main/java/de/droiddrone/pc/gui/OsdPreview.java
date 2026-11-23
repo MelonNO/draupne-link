@@ -32,7 +32,7 @@ final class OsdPreview {
         telemetry.parse(new DataReader(packet, true), BETAFLIGHT);
         sampleHistory(history, de.droiddrone.pc.MonoClock.ms(), VIDEO.pingBaselineMs());
         return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true, false, false, false, null, false, null, false,
-                12, false, "LINK BACK - ARMED - STICKS LIVE", false).withPins(PINS).withLinkHistory(history);
+                12, false, "LINK BACK - ARMED - STICKS LIVE", false).withPins(PINS).withLinkHistory(history).withFleet(OsdFleet.sample());
     }
 
     private final LinkHistory history = new LinkHistory();

@@ -84,6 +84,24 @@ final class MirrorController implements AutoCloseable {
         MapWindow mapWindowIfOpened();
 
         boolean invertPitch();
+
+        // ---- GU-8: the fleet's new elements, for the spectators
+
+        /** The follower group this PC's map draws, or null. */
+        default de.droiddrone.pc.air.GroupLink.Picture fleetGroup() {
+            return null;
+        }
+
+        /** The fleet's OSD figures of the drone this PC flies (reserves, group, TRAFFIC, HOME NOW ...), or null. */
+        default OsdFleet fleetOsd() {
+            return null;
+        }
+
+        /** The map that holds this PC's route (the map window's; null before it was opened). */
+        default MapView routeMap() {
+            MapWindow w = mapWindowIfOpened();
+            return w == null ? null : w.map();
+        }
     }
 
     private final Host host;
@@ -106,6 +124,11 @@ final class MirrorController implements AutoCloseable {
     private String mapText;
     private Pins mirroredPins;
     private MapGraphics mirroredGraphics;
+    // GU-8: the pilot PC's group, the fleet's OSD figures and its route (null: none, or not mirroring)
+    private volatile de.droiddrone.pc.air.GroupLink.Picture mirroredGroup;
+    private volatile OsdFleet mirroredOsd;
+    private MirrorCodec.MirroredRoute mirroredRoute;
+    private boolean routeShown;
     private final Map<MapView, Boolean> mapsShowingMirror = new IdentityHashMap<>();
     private final boolean[] tileMuted = new boolean[MirrorHost.MAX_TILES];
     private final int[] tileVolume = {100, 100, 100, 100, 100, 100, 100, 100};
@@ -155,6 +178,16 @@ final class MirrorController implements AutoCloseable {
         return client != null && m != null ? m : own;
     }
 
+    /** GU-8: the follower group to draw - the pilot PC's while mirroring, else this PC's own. */
+    de.droiddrone.pc.air.GroupLink.Picture groupShown(de.droiddrone.pc.air.GroupLink.Picture own) {
+        return client != null ? mirroredGroup : own;
+    }
+
+    /** GU-8: the fleet's OSD figures the pilot PC's OSD shows now, while mirroring; null otherwise. Any thread. */
+    OsdFleet fleetOsdShown() {
+        return client != null ? mirroredOsd : null;
+    }
+
     /** Every refresh (Swing thread, ~30 a second): the mode at once, the rest once a second, tiles while watched. */
     void tick() {
         long now = MonoClock.ms();
@@ -193,6 +226,11 @@ final class MirrorController implements AutoCloseable {
         Pins p = host.pins();
         MapGraphics g = host.graphics();
         h.setSection(MirrorCodec.MAP, Mirror.text(Kml.write(g == null ? List.of() : g.list(), p == null ? List.of() : p.list(), "DRAUPNE Link")));
+        // GU-8: the group, the fleet's OSD figures and the route - once a second is what a watcher's eye needs
+        h.setSection(MirrorCodec.GROUP, MirrorCodec.group(host.fleetGroup()));
+        h.setSection(MirrorCodec.OSD, MirrorCodec.osd(host.fleetOsd()));
+        MapView rm = host.routeMap();
+        h.setSection(MirrorCodec.ROUTE, MirrorCodec.route(rm == null ? null : rm.route(), rm == null ? null : rm.routePlanned()));
     }
 
     private static boolean sameFeeds(List<TileFeed> a, List<TileFeed> b) {
@@ -244,6 +282,14 @@ final class MirrorController implements AutoCloseable {
         mapText = null;
         mirroredPins = null;
         mirroredGraphics = null;
+        mirroredGroup = null;
+        mirroredOsd = null;
+        mirroredRoute = null;
+        if (routeShown) { // the pilot PC's route goes with the mirror
+            routeShown = false;
+            MapWindow w = host.mapWindowIfOpened();
+            if (w != null) w.map().setRoute(null, null);
+        }
         for (MapView m : mapsShowingMirror.keySet()) {
             m.setPins(host.pins());
             m.setGraphics(host.graphics());
@@ -282,6 +328,12 @@ final class MirrorController implements AutoCloseable {
         if (cards != null) mirroredCards = cards;
         List<MapView.NetDrone> drones = MirrorCodec.drones(s.get(MirrorCodec.DRONES));
         if (drones != null) mirroredDrones = drones;
+        // GU-8: the pilot's group, OSD figures and route (a pilot PC from before sends none: nothing drawn)
+        mirroredGroup = MirrorCodec.group(s.get(MirrorCodec.GROUP));
+        mirroredOsd = MirrorCodec.osd(s.get(MirrorCodec.OSD));
+        MirrorCodec.MirroredRoute route = MirrorCodec.route(s.get(MirrorCodec.ROUTE));
+        boolean routeChanged = !sameRoute(route, mirroredRoute);
+        mirroredRoute = route;
         List<MapView.Observed> obs = MirrorCodec.observed(s.get(MirrorCodec.OBSERVED));
         mirroredObserved = obs == null || mode == null || mode.mode() != Mirror.OBSERVER ? List.of() : obs;
         String text = Mirror.text(s.get(MirrorCodec.MAP));
@@ -319,6 +371,28 @@ final class MirrorController implements AutoCloseable {
             m.repaint();
         }
         if (w != null && mirroredCards != null && w.isShown()) w.setFleet(mirroredCards);
+        if (w != null) {
+            w.setGroup(mirroredGroup);
+            if (routeChanged || !routeShown) {
+                w.map().setRoute(route == null ? null : route.route(), route == null ? null : route.planned());
+                routeShown = true;
+            }
+        }
+    }
+
+    /** The mirrored route (tests). */
+    MirrorCodec.MirroredRoute mirroredRouteForTest() {
+        return mirroredRoute;
+    }
+
+    private static boolean sameRoute(MirrorCodec.MirroredRoute a, MirrorCodec.MirroredRoute b) {
+        if (a == null || b == null) return a == b;
+        if (!a.route().toText().equals(b.route().toText())) return false;
+        List<double[]> pa = a.planned(), pb = b.planned();
+        if (pa == null || pb == null) return pa == pb;
+        if (pa.size() != pb.size()) return false;
+        for (int i = 0; i < pa.size(); i++) if (!java.util.Arrays.equals(pa.get(i), pb.get(i))) return false;
+        return true;
     }
 
     // ---- the pilot's tiles here

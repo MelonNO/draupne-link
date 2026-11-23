@@ -194,6 +194,11 @@ public class MainWindow extends JFrame {
         }
 
         @Override
+        public void handOver(String phone, boolean flying) {
+            handOverTo(phone, flying);
+        }
+
+        @Override
         public void wake(String phone) {
             fleetRequest(phone, de.droiddrone.pc.ControlLink.POWER_NORMAL, 0, getRootPane());
         }
@@ -221,8 +226,42 @@ public class MainWindow extends JFrame {
         }
 
         @Override
+        public int gpsFix(String phone) { // fleet AL-11
+            if (fleets != null) for (FleetCards.Card c : fleets.cards()) if (c.name().equalsIgnoreCase(phone)) return c.gpsFix();
+            return -1;
+        }
+
+        @Override
         public de.droiddrone.pc.map.Elevation elevation() {
             return elevation;
+        }
+
+        @Override
+        public boolean confirmTitled(String title, String text) {
+            javax.swing.JTextArea area = new javax.swing.JTextArea(text);
+            area.setEditable(false);
+            area.setFont(Theme.monoFont(java.awt.Font.PLAIN, 13f));
+            return Dialogs.confirm(MainWindow.this, area, title, javax.swing.JOptionPane.OK_CANCEL_OPTION) == javax.swing.JOptionPane.OK_OPTION;
+        }
+
+        @Override
+        public boolean watchOnly() {
+            return fleetWatchOnly(); // GU-8
+        }
+
+        @Override
+        public String ask(String question, String now) {
+            return Dialogs.input(MainWindow.this, question, now); // FL-14: the floor typed
+        }
+
+        @Override
+        public de.droiddrone.pc.air.AirParams design(de.droiddrone.pc.air.AirParams now) {
+            return GroupDesignPanel.show(MainWindow.this, now); // FL-9
+        }
+
+        @Override
+        public void view(String phone) {
+            if (DroneViewWindow.open(MainWindow.this, phone, addressOf(phone), config.getKey()) == null) logLine("VIEW " + phone + ": not reachable now.");
         }
     });
 
@@ -926,8 +965,12 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
         // fleet PRD area H: an ArduPilot flight controller on USB (a Betaflight board goes through Drone setup as before)
         addMenuItem(menu, "ArduPilot drone setup", "ArduPilot board on USB", () -> ArduSetupPages.open(this));
+        addMenuItem(menu, "ArduPilot flight logs", "After landing: the drone's own log", () -> ArduLogsDialog.open(this)); // fleet AP-10
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
+            // fleet PRD TO-5: the tour's ArduPilot and fleet steps on their own
+            addMenuItem(menu, "Fleet demo", "ArduPilot drones, routes, groups, reserves: virtual", () -> Tour.fleetDemo(this));
+            addMenuItem(menu, "Mission Planner bridge", mpBridge.menuLine(), mpBridge::toggle); // fleet AP-11
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
@@ -1995,12 +2038,13 @@ public class MainWindow extends JFrame {
         nameService.pause(); // the link takes the port, and answers name queries itself meanwhile
         boolean wantVideo = !"false".equalsIgnoreCase(config.getString(VIDEO_KEY));
         ControlLink[] linkRef = new ControlLink[1];
-        // 1.0.64: the last connection's pipeline ends on its own thread - never two of them on the one view
-        awaitVideoClosed(VIDEO_CLOSE_MS);
+        // 1.0.64: the last connection's pipeline ends on its own thread - never two of them on the one view. FL-6: not
+        // waited for in a hand-over (the sticks first): its link is closed, nothing more comes to it
+        if (!handingOver) awaitVideoClosed(VIDEO_CLOSE_MS);
         videoView.clear(); // and no picture it handed over while ending
         video = wantVideo ? new VideoPipeline(videoView, () -> linkRef[0] == null ? -1 : linkRef[0].getPing()) : null;
         try {
-            connection = Connection.open(config, video);
+            connection = handingOver ? Connection.openHandOver(config, video) : Connection.open(config, video);
             linkRef[0] = connection.getLink();
             ControlLink flown = connection.getLink();
             // this PC's "possibly flying" flag (1.0.49): every background download waits while this drone may fly
@@ -3754,6 +3798,10 @@ public class MainWindow extends JFrame {
         }
         refreshLink(slow); // the link's state, its pill, the power modes, LOST DRONE: every time; its texts slow
         if (slow) refreshPowerMarks();
+        if (slow) { // fleet GU-5 / GU-9: the OSD's fleet figures, here at 4 a second - never in the picture's paint
+            de.droiddrone.pc.ControlLink flown = flownLink();
+            fleetOps.refreshOsd(flown == null ? null : flown.getTelemetry(), now);
+        }
         alertSound.update(stickWarning(), System.currentTimeMillis());
         refreshAudio();
         refreshObservation();
@@ -4099,6 +4147,11 @@ public class MainWindow extends JFrame {
                 !spectator && power.awaitingWake, spectator ? -1 : wakeInMs(), spectator ? null : l.getTier(),
                 // F-019: CONNECTING until this connection's first link, LINK LOST only after one was up
                 !spectator && !l.wasEverReady(), linkHistory));
+        // fleet GU-5 / GU-8 / GU-9: the fleet's figures - this PC's own drone's as last worked out in the refresh (no work
+        // here, on the picture's path), a spectator's the pilot PC's as mirrored; a watcher of a drone has none.
+        // Before the PINS check: with the pins off the fleet's elements went too.
+        OsdFleet fleet = spectator ? mirror.fleetOsdShown() : l.isWatchOnly() ? null : fleetOps.osd();
+        if (fleet != null) d = d.withFleet(fleet);
         if (!videoView.getOsdLayout().isOn(OsdElement.PINS) || miniMap == null) return d;
         // the pins the maps show (watching: the pilot PC's), from the pose of when the picture was taken
         FcTelemetry t = l.getTelemetry();
@@ -5344,11 +5397,15 @@ public class MainWindow extends JFrame {
             liveShown = st == ControlLink.State.READY || st == ControlLink.State.SPECTATING;
         }
         List<MapView.NetDrone> drones = new ArrayList<>();
+        List<de.droiddrone.pc.flights.ClosestApproach.Other> airborne = new ArrayList<>(); // AC-14
         for (NameService.DronePosition d : nameService.dronePositions()) {
             if (liveShown && d.name().equalsIgnoreCase(flying)) continue; // shown live already
-            if (observedNames.contains(d.name())) continue; // OBSERVATION draws it, numbered
             Names.Position p = d.position();
             long age = now - d.at() + p.ageS() * 1000L;
+            if (Boolean.TRUE.equals(p.armed()) && age <= 10_000 && !d.name().equalsIgnoreCase(flying) && !VirtualFleet.isVirtual(names.ipOf(d.name()))) {
+                airborne.add(new de.droiddrone.pc.flights.ClosestApproach.Other(d.name(), p.lat(), p.lon(), Double.NaN));
+            }
+            if (observedNames.contains(d.name())) continue; // OBSERVATION draws it, numbered
             String ip = names.ipOf(d.name());
             Asleep sleeping = ip == null ? null : power.asleep(ip);
             String pilot = p.pilotIp().isEmpty() ? null : names.nameAt(p.pilotIp());
@@ -5417,12 +5474,15 @@ public class MainWindow extends JFrame {
             }
             if (kind == MapView.Kind.LOST) queued = null;
             String state = (VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
+            String fleetState = fleetOps.stateOf(d.name()); // fleet FD-2: TRANSIT, YOUR TURN, IN GROUP ... on its label
+            if (fleetState != null) state = state + " - " + fleetState;
             // F-055: the sign where its track ends, when that is newer than the network's place of it
             FlightTrack lt = liveTrack;
             double[] at = signPlace(d.name(), p.lat(), p.lon(), d.at() - p.ageS() * 1000L, liveTrackDrone, lt == null ? null : lt.last());
             drones.add(new MapView.NetDrone(d.name(), at[0], at[1], state, kind, p.flown(), pilot, queued, d.headingDeg(),
                     blind && kind == MapView.Kind.OVERWATCH));
         }
+        networkAirborne = airborne;
         // the flown drone's own place too (the network says nothing of it while this PC flies it)
         if (connection != null && !liveVirtual && !connection.getLink().isSpectator() && flying != null && !flying.isEmpty()) {
             FlightTrack.Point at = liveTrack == null ? null : liveTrack.last();
@@ -5513,8 +5573,74 @@ public class MainWindow extends JFrame {
     private void refreshFleet() {
         if (fleets != null) fleets.refresh();
         MapWindow mw = mapWindowIfOpen(); // fleet G4: the follower group on the map
-        if (mw != null) mw.setGroup(fleetOps.picture());
+        java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> tg = tourGroup;
+        // GU-8: a spectator draws the pilot PC's group (its own while not mirroring)
+        if (mw != null) mw.setGroup(mirror.groupShown(tg != null ? tg.get() : fleetOps.picture()));
         fleetOps.tickReserves(); // fleet area F: calls waiting for a column, orders sent again until answered
+        recordClosestApproach();
+    }
+
+    /** Other drones the network says are armed, from the last network refresh: where each is (AC-14). */
+    private volatile List<de.droiddrone.pc.flights.ClosestApproach.Other> networkAirborne = List.of();
+
+    /**
+     * Fleet AC-14: once a second while this PC flies a real drone and it is armed, the nearest other DRAUPNE drone in
+     * the air goes into the flight's record - for PREVIOUS FLIGHTS. Those the fleet tracks count with their height, the
+     * others the network says are armed by their place only.
+     */
+    private void recordClosestApproach() {
+        de.droiddrone.pc.flights.FlightRecord record = flightRecord;
+        de.droiddrone.pc.ControlLink l = flownLink();
+        if (record == null || l == null || liveVirtual) return;
+        FcTelemetry t = l.getTelemetry();
+        if (!t.isArmedNow(MonoClock.ms(), 2000)) return;
+        FcTelemetry.Gps gps = t.getGps();
+        if (gps == null || !gps.positionOk()) {
+            record.closestWatched();
+            return;
+        }
+        String flown = fcPhone;
+        Map<String, de.droiddrone.pc.flights.ClosestApproach.Other> others = new java.util.LinkedHashMap<>();
+        for (de.droiddrone.pc.flights.ClosestApproach.Other o : networkAirborne) others.put(o.name().toLowerCase(Locale.ROOT), o);
+        for (de.droiddrone.pc.flights.ClosestApproach.Other o : fleetOps.airborne()) others.put(o.name().toLowerCase(Locale.ROOT), o);
+        record.closest(de.droiddrone.pc.flights.ClosestApproach.nearest(flown, gps.latDeg(), gps.lonDeg(), fleetOps.altAmslOf(flown),
+                others.values()), System.currentTimeMillis());
+    }
+
+    /** Fleet TO-2: the tour's or DEMO's virtual group on the map in place of this PC's own (null: its own). */
+    private volatile java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> tourGroup;
+
+    void setTourGroup(java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> g) {
+        tourGroup = g;
+    }
+
+    /** Fleet AP-11: Mission Planner / QGroundControl over the link, while on (off by itself when its link ends). */
+    private final MpBridgeSwitch mpBridge = new MpBridgeSwitch(new MpBridgeSwitch.Host() {
+        public de.droiddrone.pc.ControlLink flownLink() {
+            return MainWindow.this.flownLink();
+        }
+
+        public void message(String text) {
+            Dialogs.message(MainWindow.this, text);
+        }
+
+        public void log(String line) {
+            logLine(line);
+        }
+    });
+
+    /** Fleet: the name of the phone this PC flies (a real one), or null. */
+    String flownPhoneName() {
+        return fcPhone;
+    }
+
+    /** Fleet AP-12: GO LOOK - the ArduPilot drone this PC flies goes to the alert's ground point and looks at it. */
+    void goLook(String alertedBy, double[] at) {
+        de.droiddrone.pc.ControlLink l = flownLink();
+        boolean sent = l != null && l.getTelemetry().isArmedNow(MonoClock.ms(), 3000)
+                && l.sendFcCommand(de.droiddrone.common.FcCommand.goLook(at[0], at[1]));
+        if (sent) logLine("GO LOOK: to " + alertedBy + "'s alert, the camera on it.");
+        else logLine("GO LOOK: needs an ArduPilot drone this PC flies, in the air.");
     }
 
     /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */
@@ -5527,6 +5653,11 @@ public class MainWindow extends JFrame {
 
     /** The fleet's way back into the window. */
     private final class FleetHost implements FleetController.Host {
+        @Override
+        public String fleetState(String phone) {
+            return fleetOps.stateOf(phone); // fleet FD-2 / FL-10
+        }
+
         @Override
         public Connection connection() {
             return connection;
@@ -5678,9 +5809,59 @@ public class MainWindow extends JFrame {
         public boolean invertPitch() {
             return "true".equalsIgnoreCase(config.getString(OSD_INVERT_PITCH_KEY));
         }
+
+        @Override
+        public de.droiddrone.pc.air.GroupLink.Picture fleetGroup() {
+            java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> tg = tourGroup;
+            return tg != null ? tg.get() : fleetOps.picture();
+        }
+
+        @Override
+        public OsdFleet fleetOsd() {
+            return flownLink() == null ? null : fleetOps.osd();
+        }
+    }
+
+    /**
+     * GU-8: this PC only watches - a spectator (of a pilot PC, or of a drone another PC flies) or an observation PC. It
+     * shows the fleet's map and OSD elements and gets none of its controls.
+     */
+    boolean fleetWatchOnly() {
+        Connection c = connection;
+        if (c != null && (c.getLink().isSpectator() || c.getLink().isWatchOnly())) return true;
+        return observation != null || (mirror != null && mirror.isMirroring());
     }
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
+    /** A hand-over's connect() runs (FL-6): its link is ControlLink.handOver's, the old video's end not waited for. */
+    private boolean handingOver;
+
+    /**
+     * Fleet FL-6 / FL-5: the group's new lead, flown now. DISCARD LEAD is the pilot's own switch (E4): no question -
+     * the link to the old lead ends and the new lead's opens on the same port, its sticks as soon as its phone's session
+     * is up. Its report (flying: fresh, armed, in the air) stands for its FC's own word until that comes.
+     */
+    private void handOverTo(String phone, boolean flying) {
+        if (connectedTo(phone)) return;
+        Connection was = connection;
+        if (was == null || observation != null || was.getLink().isWatchOnly()) {
+            connectFromMap(phone, false);
+            return;
+        }
+        logLine("NEW LEAD " + phone + ": sticks to it.");
+        handingOver = true;
+        try {
+            disconnect();
+            roleCombo.setSelectedItem(ROLE_PILOT);
+            save(Map.of(Names.PHONE_NAME_KEY, phone));
+            updatePhoneList();
+            connect();
+        } finally {
+            handingOver = false;
+        }
+        if (session != null && flying) session.handedOver();
+    }
+
     private void connectFromMap(String phone, boolean watch) {
         toPilotWindow();
         if (observation != null && watch) {
@@ -6051,14 +6232,16 @@ public class MainWindow extends JFrame {
             showConnectedName(null);
             refreshPhoneApp(null);
             arduModes.update(null, -1, null, MonoClock.ms());
+            mpBridge.follow(null); // fleet AP-11: no link, no bridge
             return;
         }
         ControlLink link = connection.getLink();
         ControlLink.State state = link.getState();
+        mpBridge.follow(flownLink()); // fleet AP-11: the bridge goes with the link it was started on
         // fleet AP-6: the mode buttons of this PC's own ArduPilot drone (not a spectator's or a watcher's)
         FcTelemetry modeT = link.getTelemetry();
-        arduModes.update(link.isSpectator() || link.isWatchOnly() ? null : modeT.getStatus(), modeT.getArduMode(),
-                modeT.getLastCommandAck(), MonoClock.ms());
+        arduModes.update(modeT.getStatus(), modeT.getArduMode(), modeT.getLastCommandAck(), MonoClock.ms(),
+                !link.isSpectator() && !link.isWatchOnly()); // GU-8: never on a spectator's or a watcher's video
         String stateText = connection.describe(state);
         if (state != lastState || !Objects.equals(stateText, lastStateText)) {
             // 1.0.64: not "Waiting for the phone... (DRAUPNE Flight open? ...)" while a sleeper is waited for, nor

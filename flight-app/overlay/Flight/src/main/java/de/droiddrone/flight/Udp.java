@@ -745,6 +745,11 @@ public class Udp {
                         boolean samePc = sameAddress && receiverPacket.getPort() == lastPcPort;
                         SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress,
                                 () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now, SessionGate.sessionId(d, len));
+                        // fleet FL-6: the group's own PC takes this follower as its new lead (FleetCommandGate.leadConnect)
+                        if (v == SessionGate.Verdict.SPECTATOR && fleet.mayLead(from, now)) {
+                            v = gate.leadSession(now, SessionGate.sessionId(d, len));
+                            log("New lead: the group's PC " + from.getHostAddress() + " takes the sticks");
+                        }
                         if (v == SessionGate.Verdict.DROP) continue;
                         if (v == SessionGate.Verdict.WRONG_KEY) {
                             noteWrongKey(receiverPacket);
@@ -1458,6 +1463,12 @@ public class Udp {
     java.net.InetSocketAddress pilotAddress() {
         UdpSender s = udpSender;
         return s == null || s.getIp() == null ? null : new java.net.InetSocketAddress(s.getIp(), s.getPort());
+    }
+
+    /** Fleet AL-20 / C3: the one asking commands this drone now: its camera may be streamed (launch view, VIEW). */
+    private boolean launchViewFor(java.net.InetAddress from) {
+        java.net.InetSocketAddress c = fleet.commander();
+        return c != null && fleet.commandedBy(from, android.os.SystemClock.elapsedRealtime());
     }
 
     /** A pilot session is up now. */
@@ -3180,7 +3191,8 @@ public class Udp {
         long now = android.os.SystemClock.elapsedRealtime(); // pc.50: the observers' table on the monotonic clock (observeTick's)
         // pc.38: the pilot's silence on the monotonic clock; never an observer source while overwatching (ObserveGate)
         int state = ObserveGate.request(isConnected(), gate.silentMs(now), packet.getAddress().equals(lastPcIp), fcDisarmed,
-                PowerMode.mode() == PowerMode.NORMAL, Overwatch.isWatching());
+                PowerMode.mode() == PowerMode.NORMAL, Overwatch.isWatching(),
+                launchViewFor(packet.getAddress())); // fleet AL-20: a launch's view for its commander
         // pc.52: refused in standby, and woken for its next request
         if (ObserveGate.wakes(state, PowerMode.mode() == PowerMode.STANDBY, Overwatch.isWatching())) {
             log("Observer " + packet.getAddress().getHostAddress() + " asks in standby: waking");
@@ -3284,7 +3296,7 @@ public class Udp {
             if (!observers.isEmpty()) {
                 // a pilot connected, the FC not known disarmed, or out of normal power mode (pc.38: overwatch too)
                 endState = ObserveGate.ended(isConnected(), FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED,
-                        PowerMode.mode() == PowerMode.NORMAL, Overwatch.isWatching());
+                        PowerMode.mode() == PowerMode.NORMAL, Overwatch.isWatching(), fleet.commanded(android.os.SystemClock.elapsedRealtime()));
                 if (endState != Observe.STREAMING) {
                     ended = observerAddresses.values().toArray(new java.net.InetSocketAddress[0]);
                     observers.clear();

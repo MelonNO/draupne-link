@@ -26,6 +26,8 @@ package de.droiddrone.common;
  *   <li>MISSION_START: [2] - AUTO, then MAV_CMD_MISSION_START (the uploaded route from its first item)</li>
  *   <li>PAUSE: [3] - LOITER where it is (a mission is held; START or CONTINUE goes on)</li>
  *   <li>CONTINUE: [4] - AUTO again, the mission from the item it was on</li>
+ *   <li>GO_LOOK: [5][lat i32 1e7][lon i32 1e7] (fleet AP-12) - fly there at the height it has (DO_REPOSITION, GUIDED) and
+ *       point the camera at that ground point (DO_SET_ROI_LOCATION)</li>
  * </ul>
  * The phone answers each with the FC's COMMAND_ACK as telemetry record {@link #ACK_RECORD}: [command u16][result u8]
  * (MAV_RESULT: 0 accepted, 1 temporarily rejected, 2 denied, 3 unsupported, 4 failed), or result {@link #NO_FC} when
@@ -33,7 +35,7 @@ package de.droiddrone.common;
  */
 public final class FcCommand {
     public static final byte PACKET = 0x30;
-    public static final int MODE = 1, MISSION_START = 2, PAUSE = 3, CONTINUE = 4;
+    public static final int MODE = 1, MISSION_START = 2, PAUSE = 3, CONTINUE = 4, GO_LOOK = 5;
     /** Telemetry record: the flight controller's answer to a command (a DD_ code of DRAUPNE's fleet range). */
     public static final short ACK_RECORD = 0x40E0;
     public static final int NO_FC = 255;
@@ -41,10 +43,24 @@ public final class FcCommand {
     public final int kind;
     /** MODE: the custom mode; otherwise 0. */
     public final int mode;
+    /** GO_LOOK: the ground point (degrees); otherwise NaN. */
+    public final double lat, lon;
 
     private FcCommand(int kind, int mode) {
+        this(kind, mode, Double.NaN, Double.NaN);
+    }
+
+    private FcCommand(int kind, int mode, double lat, double lon) {
         this.kind = kind;
         this.mode = mode;
+        this.lat = lat;
+        this.lon = lon;
+    }
+
+    public static byte[] goLook(double lat, double lon) {
+        int a = (int) Math.round(lat * 1e7), o = (int) Math.round(lon * 1e7);
+        return new byte[]{PACKET, GO_LOOK, (byte) (a >>> 24), (byte) (a >>> 16), (byte) (a >>> 8), (byte) a,
+                (byte) (o >>> 24), (byte) (o >>> 16), (byte) (o >>> 8), (byte) o};
     }
 
     public static byte[] mode(int customMode) {
@@ -69,6 +85,14 @@ public final class FcCommand {
             case PAUSE:
             case CONTINUE:
                 return new FcCommand(kind, 0);
+            case GO_LOOK: {
+                if (len < 10) return null;
+                int a = (d[2] & 0xff) << 24 | (d[3] & 0xff) << 16 | (d[4] & 0xff) << 8 | (d[5] & 0xff);
+                int o = (d[6] & 0xff) << 24 | (d[7] & 0xff) << 16 | (d[8] & 0xff) << 8 | (d[9] & 0xff);
+                double lat = a / 1e7, lon = o / 1e7;
+                if (Math.abs(lat) > 90 || Math.abs(lon) > 180 || a == 0 && o == 0) return null;
+                return new FcCommand(GO_LOOK, 0, lat, lon);
+            }
             default:
                 return null;
         }

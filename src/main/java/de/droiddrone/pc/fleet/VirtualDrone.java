@@ -278,13 +278,26 @@ public final class VirtualDrone {
 
     // ------------------------------------------------------------------ start, stop, restart
 
+    /**
+     * Its model's and its stick buffer's threads: under the normal priority, so a made-up fleet never holds up a real
+     * drone's sticks and video on this PC. A test that times the drone's own rules (RX loss after 100 ms, failsafe
+     * stages) next to other tests sets it to normal ({@link #ownTimeKept}): below normal, a loaded PC starves the model,
+     * the sticks it was sent reach it late, and it counts a loss the link never had.
+     */
+    private volatile int threadPriority = Thread.MIN_PRIORITY + 1;
+
+    /** Its threads at normal priority, before {@link #start}: for tests that go by its timing. */
+    void ownTimeKept() {
+        threadPriority = Thread.NORM_PRIORITY;
+    }
+
     /** Opens its socket on its loopback address (port 0: any free one) and starts its threads. */
     void start(int wantedPort) throws IOException {
         running = true;
         openSocket(wantedPort);
         Thread tick = new Thread(this::tickRun, "fleetTick" + slot);
         tick.setDaemon(true);
-        tick.setPriority(Thread.MIN_PRIORITY + 1);
+        tick.setPriority(threadPriority);
         tick.start();
     }
 
@@ -299,7 +312,7 @@ public final class VirtualDrone {
         receiverBuffer = new ReceiverBuffer(sender, true, key, null);
         int gen = ++threadsGen;
         startThread(() -> receiveRun(s, gen), "fleetReceive" + slot, Thread.NORM_PRIORITY);
-        startThread(() -> bufferRun(gen), "fleetBuffer" + slot, Thread.MIN_PRIORITY + 1);
+        startThread(() -> bufferRun(gen), "fleetBuffer" + slot, threadPriority);
     }
 
     private void closeSocket() {
