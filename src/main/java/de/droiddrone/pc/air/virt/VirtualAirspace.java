@@ -149,7 +149,7 @@ public final class VirtualAirspace {
             VirtualCopter c = copters.get(id);
             if (c == null || c.landed) continue;
             V2 aside = outsideTarget.get(id);
-            if (linkUp(id) && aside != null) { // the PC steps it out of a cut-off drone's way (AC-37)
+            if (linkUp(id) && aside != null && c.gnssOk) { // the PC steps it out of a cut-off drone's way (AC-37); never one without GNSS (AC-12)
                 double[] ll = GeoLocal.offset(lat0, lon0, aside.e(), aside.n());
                 c.apply(FleetIntent.guided(ll[0], ll[1], c.u, Double.NaN, 5), lat0, lon0);
             } else             if (linkUp(id)) c.apply(FleetIntent.HOLD, lat0, lon0); // keeps its mode (E3): here, it holds
@@ -255,8 +255,10 @@ public final class VirtualAirspace {
         if (lead == null || lead.landed && pilot == null) return;
         long silent = now - phoneHeardPc.getOrDefault(leadId, now);
         if (silent >= 1000) standIn(lead, silent);
-        else if (adsbThreat(lead)) lead.apply(FleetIntent.HOLD, lat0, lon0); // ArduPilot's avoidance: stop and hold (AC-11)
-        else if (pilot != null) {
+        else if (adsbThreat(lead) || now < leadHoldUntil) { // ArduPilot's avoidance: stop and hold (AC-11) ...
+            if (adsbThreat(lead)) leadHoldUntil = now + ADSB_RECOVERY_MS; // ... till the threat has been gone a while
+            lead.apply(FleetIntent.HOLD, lat0, lon0);
+        } else if (pilot != null) {
             double[] to = pilot.at(t(), lead);
             if (to != null) lead.pilot(to[0], to[1], to[2]);
         }
@@ -268,6 +270,10 @@ public final class VirtualAirspace {
      * ({@link GroupController#unheard}) - and ArduPilot's avoidance stops and holds when one is predicted inside the
      * protection radius and the layer spacing within 5 s.
      */
+    /** ArduPilot's avoidance stays in its action until the threat has been clear this long (its recovery time). */
+    static final long ADSB_RECOVERY_MS = 2000;
+    private long leadHoldUntil = -1;
+
     private boolean adsbThreat(VirtualCopter lead) {
         if (gc == null) return false;
         de.droiddrone.pc.air.ConflictPredictor.Track me = new de.droiddrone.pc.air.ConflictPredictor.Track(lead.id, lead.e, lead.n, lead.u, lead.ve, lead.vn, lead.vu, 0);

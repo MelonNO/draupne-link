@@ -1,6 +1,8 @@
 package de.droiddrone.pc.air;
 
 import de.droiddrone.common.FleetStatus;
+import de.droiddrone.common.group.GeoLocal;
+import de.droiddrone.common.group.Traffic;
 import de.droiddrone.common.group.FollowerBrain;
 import de.droiddrone.pc.air.virt.VirtualFleetPhone;
 import org.junit.jupiter.api.AfterEach;
@@ -91,16 +93,32 @@ class GroupLinkLoopbackTest {
         for (VirtualFleetPhone f : followers) assertTrue(f.isFollower(), "a follower now: " + f.copter.id);
         assertTrue(closest > 0, "no pair inside 10 m sideways and 10 m in height: " + closest);
         assertTrue(events.stream().anyMatch(e -> e.startsWith("FOLLOW GROUP")), events.toString());
+        assertTrue(events.stream().noneMatch(e -> e.startsWith("Group: ")), "the tick never throws: " + events);
+        trafficToEveryDrone(lead, followers);
         if (!cutOne) return;
 
         // F2 cut off: it holds by itself (its brain's HOLD), the others carry on following
         VirtualFleetPhone cut = followers.get(1);
         cut.setLink(false);
         end = System.currentTimeMillis() + 4000;
+        long f2 = Traffic.address("F2");
+        boolean predicted = false, alwaysThere = true;
+        long cutAt = System.currentTimeMillis();
         while (System.currentTimeMillis() < end) {
             closest = Math.min(closest, closestBreach(phones));
+            Traffic t = lead.traffic;
+            Traffic.Entry e = t == null ? null : t.entries.stream().filter(x -> x.address == f2).findFirst().orElse(null);
+            if (System.currentTimeMillis() - cutAt > 1200) alwaysThere &= e != null; // the TRAFFIC sent once a second
+            if (e != null && (e.flags & Traffic.PREDICTED) != 0) {
+                predicted = true;
+                double[] ll = cut.latLon();
+                double h = Math.hypot(GeoLocal.east(ll[0], ll[1], e.lat, e.lon), GeoLocal.north(ll[0], ll[1], e.lat, e.lon));
+                assertTrue(h < 15, "AC-11: the cut-off one where its plan has it, " + h + " m off");
+            }
             Thread.sleep(100);
         }
+        assertTrue(alwaysThere, "AC-11: the cut-off follower stays on the lead's ADS-B");
+        assertTrue(predicted, "AC-11: sent where its exit plan has it (PREDICTED) while unheard");
         cut.setLink(true);
         Thread.sleep(1500);
         FleetStatus s = link.status("F2");
@@ -108,6 +126,39 @@ class GroupLinkLoopbackTest {
         assertTrue(s.phase == FollowerBrain.HOLD || s.phase == FollowerBrain.NORMAL, "held, then back with the group: phase " + s.phase);
         assertTrue(closest > 0, "separation kept through the cut: " + closest);
         assertTrue(events.stream().anyMatch(e -> e.startsWith("FOLLOW GROUP")), events.toString());
+    }
+
+    /**
+     * FD-8 / AC-11: the lead and each follower get TRAFFIC about once a second - every other drone of the group, never
+     * itself, each where its copter is (within what a second's flight and the report's rounding allow).
+     */
+    private void trafficToEveryDrone(VirtualFleetPhone lead, List<VirtualFleetPhone> followers) throws Exception {
+        List<VirtualFleetPhone> all = new ArrayList<>(followers);
+        all.add(lead);
+        int[] before = all.stream().mapToInt(p -> p.trafficCount.get()).toArray();
+        Thread.sleep(2600);
+        for (int i = 0; i < all.size(); i++) {
+            VirtualFleetPhone p = all.get(i);
+            int got = p.trafficCount.get() - before[i];
+            assertTrue(got >= 2 && got <= 4, p.copter.id + ": TRAFFIC once a second, " + got + " in 2.6 s");
+            Traffic t = p.traffic;
+            assertNotNull(t, p.copter.id);
+            assertEquals(all.size() - 1, t.entries.size(), p.copter.id + ": every other drone");
+            for (VirtualFleetPhone o : all) {
+                long a = Traffic.address(o.copter.id);
+                Traffic.Entry e = t.entries.stream().filter(x -> x.address == a).findFirst().orElse(null);
+                if (o == p) {
+                    assertNull(e, p.copter.id + " never gets itself");
+                    continue;
+                }
+                assertNotNull(e, p.copter.id + " gets " + o.copter.id);
+                double[] ll = o.latLon();
+                double h = Math.hypot(GeoLocal.east(ll[0], ll[1], e.lat, e.lon), GeoLocal.north(ll[0], ll[1], e.lat, e.lon));
+                assertTrue(h < 15, o.copter.id + " for " + p.copter.id + ": " + h + " m off");
+                assertTrue(Math.abs(e.altAmsl - o.copter.u) < 8, o.copter.id + " height: " + e.altAmsl + " vs " + o.copter.u);
+                assertEquals(0, e.flags & Traffic.PREDICTED, "heard, so not predicted");
+            }
+        }
     }
 
     /**

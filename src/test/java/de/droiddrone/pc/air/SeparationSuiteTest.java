@@ -37,7 +37,7 @@ class SeparationSuiteTest {
         TABLE.forEach(System.out::println);
     }
 
-    private static double leadAlt(VirtualAirspace a) {
+    static double leadAlt(VirtualAirspace a) {
         return a.copters.get("LEAD").u;
     }
 
@@ -217,21 +217,140 @@ class SeparationSuiteTest {
 
     // ------------------------------------------------------------------ GNSS
 
+    /**
+     * AC-26 / AC-42: one drone loses GNSS in wind from each of eight directions, the group flying: it holds its height
+     * and drifts; the group goes on clear of its estimate and its growing error circle - never downwind of where it
+     * was, where the drone drifts to.
+     */
     @Test
     void oneDroneLosesGnssInWindFromEachDirection() {
-        V2[] winds = {new V2(0, -6), new V2(-6, 0), new V2(0, 6), new V2(6, 0)};
-        for (int w = 0; w < 4; w++) {
+        String[] from = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
+        for (int w = 0; w < 8; w++) {
+            double b = Math.toRadians(45 * w); // the wind comes from this bearing: it blows the other way
+            V2 wind = new V2(-Math.sin(b) * 6, -Math.cos(b) * 6);
             VirtualAirspace a = Groups.group(20, 90 + w);
-            a.wind = winds[w];
+            a.wind = wind;
             a.pilot = Groups.goTo(0, 100, leadAlt(a));
             a.run(3);
             String id = a.gc.members().values().stream().filter(m -> m.place != null && m.place.layer() == 1 && m.place.cell() == 3)
                     .findFirst().orElseThrow().id;
-            a.copters.get(id).setGnss(false, a.t());
+            VirtualCopter lost = a.copters.get(id);
+            double alt0 = lost.u;
+            lost.setGnss(false, a.t());
             a.run(90);
             assertTrue(has(a, "GNSS LOST " + id));
-            record("GNSS lost, one drone, wind from " + "NESW".charAt(w), a);
+            assertEquals(alt0, lost.u, 0.5, "A5: it holds its height (wind from " + from[w] + ")");
+            // AC-42: clear of its estimate plus its error circle by a protection radius outside the group's edge (the way
+            // taken is the safest of 24 - not always upwind: see GroupController.driftEscape)
+            GroupController.Member m = a.gc.members().get(id);
+            double out = a.gc.cube().outsideEdge(lost.estimate().minus(a.gc.centre()));
+            double err = Math.min(lost.errorM(a.t()), GroupController.GNSS_ERR_CAP_M);
+            assertTrue(out >= a.gc.params().radiusM() + err, "AC-42: the group clear of it (wind from " + from[w] + "): "
+                    + out + " m outside the edge, " + m.state());
+            record("GNSS lost, one drone, wind from " + from[w], a);
         }
+    }
+
+    /** AC-42: its GNSS back, the drone rejoins through the transit areas and is in a cell again. */
+    @Test
+    void aDroneWhoseGnssComesBackRejoins() {
+        VirtualAirspace a = Groups.group(12, 97);
+        a.wind = new V2(-3, 2);
+        a.pilot = Groups.goTo(0, 100, leadAlt(a));
+        a.run(3);
+        a.copters.get("F04").setGnss(false, a.t());
+        a.run(60);
+        a.copters.get("F04").setGnss(true, a.t());
+        a.run(240);
+        assertTrue(has(a, "GNSS BACK F04"), a.events.toString());
+        assertTrue(has(a, "REJOIN F04"), a.events.toString());
+        assertEquals(GroupController.State.IN_CELL, a.gc.members().get("F04").state(), "back in a cell");
+        record("GNSS lost 60 s, then back: rejoins", a);
+    }
+
+    /**
+     * AC-42: GNSS and link lost together - it can't fly its exit plan: it holds its height (centred sticks) until its
+     * pack is at 3 %, then lands where it is; the group keeps clear of it all the way down.
+     */
+    @Test
+    void gnssAndLinkLostTheDroneHoldsItsHeightAndLandsAtThreePercent() {
+        VirtualAirspace a = Groups.group(12, 98);
+        a.wind = new V2(2, 3);
+        a.pilot = Groups.goTo(0, 100, leadAlt(a));
+        a.run(3);
+        VirtualCopter c = a.copters.get("F05");
+        c.battery = 12;
+        c.drainPerS = 0.2;
+        double alt0 = c.u;
+        c.setGnss(false, a.t());
+        a.setLink("F05", false);
+        double lowest = alt0;
+        while (c.battery > 3.5) {
+            a.run(1);
+            lowest = Math.min(lowest, c.u);
+        }
+        assertEquals(alt0, lowest, 0.5, "it held its height till 3 %");
+        a.run(200);
+        assertTrue(c.landed, "down at 3 %");
+        record("GNSS and link lost: holds, lands at 3 %", a);
+    }
+
+    /**
+     * AC-12 / A5: drones with a layer of their own (no group: the lead, dispatched drones) lose GNSS together - each holds
+     * its height on its barometer and drifts with the wind, and as they all drift alike they stay a layer apart; none is
+     * moved sideways by the PC.
+     */
+    @Test
+    void dronesOnLayersOfTheirOwnLoseGnssEachHoldsItsHeight() {
+        AirParams p = AirParams.defaults();
+        VirtualAirspace a = new VirtualAirspace(p, 0, 99);
+        a.wind = new V2(4, -2);
+        double[] alts = {60, 70, 80, 90};
+        for (int i = 0; i < alts.length; i++) {
+            String id = "S" + i;
+            VirtualCopter c = a.add(id, i * 3, -i * 2, alts[i]); // nearly stacked: only their layers keep them apart
+            c.homeAmsl = 0;
+            a.outside.add(id);
+        }
+        a.run(2);
+        for (int i = 0; i < alts.length; i++) a.copters.get("S" + i).setGnss(false, a.t());
+        a.run(120);
+        for (int i = 0; i < alts.length; i++) assertEquals(alts[i], a.copters.get("S" + i).u, 0.5, "S" + i + " held its height");
+        record("drones on layers of their own lose GNSS (A5)", a);
+    }
+
+    /**
+     * FL-8: cells 20 m apart in each layer, never under the protection radius + 5 m (AC-6); the lead flown slowly at the
+     * group stays out of the keep-out zone round its edge (AC-34), and the group gives way to it as one: no follower
+     * leaves its cell to dodge (AC-19).
+     */
+    @Test
+    void theGroupGivesWayToTheLeadAsOneAndKeepsItOutOfTheKeepOutZone() {
+        VirtualAirspace a = Groups.group(20, 41);
+        AirParams p = a.gc.params();
+        for (String x : a.gc.members().keySet()) {
+            for (String y : a.gc.members().keySet()) {
+                if (x.compareTo(y) >= 0 || a.gc.members().get(x).place.layer() != a.gc.members().get(y).place.layer()) continue;
+                double[] cx = a.gc.cellPlace(x), cy = a.gc.cellPlace(y);
+                double d = Math.hypot(cx[0] - cy[0], cx[1] - cy[1]);
+                assertTrue(d >= 20 - 1e-6 && d >= p.radiusM() + 5, x + "-" + y + " cells " + d + " m apart");
+            }
+        }
+        VirtualCopter lead = a.copters.get("LEAD");
+        double alt = lead.u;
+        lead.e = 0;
+        lead.n = p.edgeM() + p.keepOutM() + 60;
+        a.pilot = (t, l) -> new double[]{0, l.n - 3, alt}; // on at 3 m/s, well under the group's top speed
+        double closest = Double.MAX_VALUE, worstCell = 0;
+        for (int s = 0; s < 120; s++) {
+            a.run(1);
+            closest = Math.min(closest, a.gc.cube().outsideEdge(lead.pos().minus(a.gc.centre())));
+            worstCell = Math.max(worstCell, Groups.worstCellError(a));
+        }
+        assertTrue(a.gc.centre().length() > 30, "the group gave way: " + a.gc.centre());
+        assertTrue(closest >= p.keepOutM() - 5, "the lead kept out of the keep-out zone: " + closest + " m from the edge");
+        assertTrue(worstCell < 6, "the group moved as one: a follower " + worstCell + " m off its cell");
+        record("FL-8: the lead flown slowly at the group", a);
     }
 
     @Test
@@ -338,25 +457,26 @@ class SeparationSuiteTest {
 
     /**
      * Random cases (AC-14 "random scenarios"): an event every 10 s for 5 min - the lead flown anywhere, links cut and back,
-     * GNSS lost, packs draining fast, reserves called, DISCARD LEAD. Five seeds in the normal suite; the long run (30
-     * seeds, 10 min each) under the night tag.
+     * GNSS lost, packs draining fast, reserves called, DISCARD LEAD. Twelve seeds in the normal suite (about a second
+     * each; seed 11 was the last of them to lose separation, fixed 2026-11-23); the long run (30 seeds, 10 min each)
+     * under the night tag.
      */
     @Test
     void randomCasesSeeded() {
-        for (long seed = 1; seed <= 5; seed++) randomCase(seed, 300);
+        for (long seed = 1; seed <= 12; seed++) randomCase(seed, 300);
     }
 
     /**
      * The nightly run (AC-14 "random scenarios run every night"): gradlew benchNight; AIR_SEEDS=N for how many (30),
      * seeds from 100, 10 min each; every seed is run and every one that lost separation is said.
      * <p>
-     * OPEN (tagged finding too, until it holds for all): 2026-11-23, seeds 100-189: 85 of 90 keep separation; 112
-     * (6.1 m at the same height), 139 (9.2 m), 147 (9.5 m sideways, 9.0 m in height), 157 (9.0 m, 8.6 m), 160
-     * (10.0 m, 5.9 m) do not. Near misses mostly: what the safe velocities' buffer (3 m) can buy against the drones'
-     * response; a wider buffer (4 m) made it worse (82 of 90).
+     * 2026-11-23: seeds 100-189 all keep separation (AIR_SEEDS=90). The last five (112, 139, 147, 157, 160) and seed 11
+     * were not near misses of the buffer but things the PC had wrong: a cut-off drone setting off on its plan a little
+     * later than predicted; a drone landing with GNSS braking to a stop, not flying on; a GNSS-less drone's error circle
+     * cut at 10 m; the lead's ADS-B hold let go the moment it stopped; one GNSS-less drone far off holding back the
+     * group's landings; and whatever is under a drone coming down being taken as a layer clear of it.
      */
     @Tag("night")
-    @Tag("finding")
     @Test
     void randomCasesNightly() {
         String env = System.getenv("AIR_SEEDS");

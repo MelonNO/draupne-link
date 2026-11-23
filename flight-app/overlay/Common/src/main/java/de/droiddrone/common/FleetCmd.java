@@ -23,7 +23,7 @@ package de.droiddrone.common;
  * fleet one: {@link #GROUP} [0x35][GroupOrder], {@link #EXIT} [0x36][ExitPlan], {@link #LAUNCH} [0x37][LaunchWire order],
  * {@link #TRACK} [0x39][seconds u8] (report for that long), {@link #LEAD} [0x3A][lead u8][RTL height above home dm u16],
  * {@link #CLEAR} [0x3B][lat i32][lon i32][height above sea level dm i32] (step aside there in GUIDED), {@link #DISBAND}
- * [0x3C] (no longer in a group). Who may send it: {@link FleetCommandGate}. The phone answers every accepted one by
+ * [0x3C] (no longer in a group), {@link #TRAFFIC} [0x3F][group.Traffic] (the other drones, for the FC as ADS-B). Who may send it: {@link FleetCommandGate}. The phone answers every accepted one by
  * keeping its {@link FleetStatus} reports going to the sender. Unnumbered: the PC repeats what must arrive (orders at
  * 5 Hz, plans every 10 s). Java 11.
  */
@@ -37,6 +37,11 @@ public final class FleetCmd {
     public static final byte MARK = 0x3D;
     /** The launch's status, phone to commander: [0x3E][LaunchWire status]. Not a FleetCmd: a datagram of its own. */
     public static final byte LAUNCH_STATUS = 0x3E;
+    /**
+     * Fleet FD-8 / AC-11: the other DRAUPNE drones round this one, once a second, [0x3F][group.Traffic] - its FC gets
+     * each as an ADS-B target (ADSB_VEHICLE).
+     */
+    public static final byte TRAFFIC = 0x3F;
 
     public static byte[] mark(int id, double floorM) {
         int dm = (int) Math.max(0, Math.min(65535, Math.round(floorM * 10)));
@@ -104,6 +109,10 @@ public final class FleetCmd {
         java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(13);
         b.put(CLEAR).putInt((int) Math.round(lat * 1e7)).putInt((int) Math.round(lon * 1e7)).putInt((int) Math.round(altAmslM * 10));
         return b.array();
+    }
+
+    public static byte[] traffic(byte[] traffic) {
+        return prefixed(TRAFFIC, traffic);
     }
 
     public static byte[] disband() {

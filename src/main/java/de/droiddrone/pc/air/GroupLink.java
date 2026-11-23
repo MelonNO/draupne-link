@@ -5,6 +5,7 @@ import de.droiddrone.common.FleetStatus;
 import de.droiddrone.common.group.ExitPlan;
 import de.droiddrone.common.group.GeoLocal;
 import de.droiddrone.common.group.GroupOrder;
+import de.droiddrone.common.group.Traffic;
 
 import java.io.IOException;
 import java.net.DatagramPacket;
@@ -23,11 +24,13 @@ import java.util.function.Consumer;
  * commands (FleetCmd, keyed) to each drone's phone and takes their reports (FleetStatus); {@link GroupController}
  * decides five times a second (tick) from them. The lead is tracked the same way (its report carries its height above
  * sea level, which the pilot link doesn't). What it sends: each follower's GroupOrder every tick, its ExitPlan when
- * made again and every {@link #PLAN_EVERY_MS} besides, the lead's RTL height, a step aside to drones in the way.
+ * made again and every {@link #PLAN_EVERY_MS} besides, the lead's RTL height, a step aside to drones in the way, and once a second each drone the others as ADS-B traffic (TRAFFIC).
  * Events (LINK LOST, GNSS LOST, TRAFFIC ...) go to the window. Nothing here runs on the stick or video path.
  */
 public final class GroupLink implements AutoCloseable {
     public static final long TICK_MS = 200, PLAN_EVERY_MS = 10_000, TRACK_S = 20;
+    /** FD-8: TRAFFIC to each drone once a second; a drone not heard for this long is no longer sent as traffic. */
+    public static final long TRAFFIC_EVERY_MS = 1000, TRAFFIC_STALE_MS = 10_000;
 
     /** What the window hears. */
     public interface Listener {
@@ -54,7 +57,7 @@ public final class GroupLink implements AutoCloseable {
     private volatile String lead;
     private double lat0 = Double.NaN, lon0 = Double.NaN;
     private volatile boolean open = true;
-    private long trackedAt;
+    private long trackedAt, trafficAt;
     /**
      * GU-9: what the window reads of the group - the map's picture, each member's state, the next reserve's approach
      * height - made again at the end of every tick and change, on this lock. The window reads it without the lock: the
@@ -219,6 +222,24 @@ public final class GroupLink implements AutoCloseable {
         params = p == null ? AirParams.defaults() : p;
     }
 
+    /** AC-10: the solo drones' rally points ({lat, lon} by drone) not yet taken by the tick; null: none new. */
+    private volatile Map<String, double[]> soloRalliesAsked;
+    /** The followers' rally points ({lat, lon} by drone) as of the last tick. */
+    private volatile Map<String, double[]> followerRallies = Map.of();
+
+    /**
+     * AC-10: the rally points of the drones on their own (RallyPlan, by drone: {lat, lon}). Taken at the next tick, on
+     * its thread: the followers' exit-plan rally points keep two protection radii from them (setOutsideRallies).
+     */
+    public void setSoloRallies(Map<String, double[]> solo) {
+        soloRalliesAsked = Map.copyOf(solo);
+    }
+
+    /** The followers' rally points as of the last tick ({lat, lon} by drone): RallyPlan keeps the solo drones' clear of them. */
+    public Map<String, double[]> followerRallies() {
+        return followerRallies;
+    }
+
     /** A floor asked for and not yet taken by the tick (NaN: none). */
     private volatile double floorAsked = Double.NaN;
 
@@ -231,6 +252,7 @@ public final class GroupLink implements AutoCloseable {
     public synchronized void disband() {
         GroupController g = group;
         group = null;
+        followerRallies = Map.of();
         if (g == null) return;
         refreshView();
         for (String d : phones.keySet()) send(d, FleetCmd.disband());
@@ -298,6 +320,16 @@ public final class GroupLink implements AutoCloseable {
             floorAsked = Double.NaN;
             g.setFloor(floor);
         }
+        Map<String, double[]> solo = soloRalliesAsked;
+        if (solo != null) { // AC-10: the followers' rally points clear of the solo drones'
+            soloRalliesAsked = null;
+            Map<String, V2> local = new HashMap<>();
+            for (Map.Entry<String, double[]> e : solo.entrySet()) local.put(e.getKey(), local(e.getValue()[0], e.getValue()[1]));
+            g.setOutsideRallies(local);
+        }
+        Map<String, double[]> fr = new LinkedHashMap<>();
+        for (Map.Entry<String, V2> e : g.rallies().entrySet()) fr.put(e.getKey(), GeoLocal.offset(lat0, lon0, e.getValue().e(), e.getValue().n()));
+        followerRallies = fr;
         if (now - trackedAt > 5000) { // the reports keep coming (each command does that too)
             trackedAt = now;
             track(new ArrayList<>(phones.keySet()));
@@ -331,7 +363,18 @@ public final class GroupLink implements AutoCloseable {
         for (Map.Entry<String, V2> c : out.clear().entrySet()) {
             double[] ll = GeoLocal.offset(lat0, lon0, c.getValue().e(), c.getValue().n());
             FleetStatus s = last.get(c.getKey());
-            if (s != null) send(c.getKey(), FleetCmd.clear(ll[0], ll[1], s.altAmsl));
+            // AC-12: one without GNSS is never moved sideways (it couldn't fly GUIDED anyway: its FC holds its height)
+            if (s != null && s.has(FleetStatus.GNSS)) send(c.getKey(), FleetCmd.clear(ll[0], ll[1], s.altAmsl));
+        }
+        if (now - trafficAt >= TRAFFIC_EVERY_MS) { // FD-8 / AC-11: each FC gets the others as ADS-B targets
+            trafficAt = now;
+            List<String> to = new ArrayList<>(g.members().keySet());
+            if (lead != null && !to.contains(lead)) to.add(lead);
+            Map<String, double[]> unheard = g.unheard(now);
+            for (String d : to) {
+                Traffic t = trafficFor(d, now, unheard);
+                if (t != null) send(d, FleetCmd.traffic(t.encode()));
+            }
         }
         for (String ev : out.events()) listener.event(ev);
         if (out.newLead() != null && !out.newLead().equals(lead)) { // the lead silent 30 s: taken over (FL-5)
@@ -342,6 +385,53 @@ public final class GroupLink implements AutoCloseable {
             send(lead, FleetCmd.lead(true, out.leadRtlAltRelM()));
             listener.newLead(lead);
         }
+    }
+
+    /**
+     * FD-8 / AC-11: the other drones for one drone's FC - every drone heard in the last {@link #TRAFFIC_STALE_MS} that
+     * is armed and not landed, the cut-off followers where their exit plans have them now (GroupController.unheard),
+     * the {@link Traffic#MAX} nearest to it first. Null when there is nobody else.
+     */
+    synchronized Traffic trafficFor(String to, long now, Map<String, double[]> unheard) {
+        if (Double.isNaN(lat0)) return null;
+        FleetStatus me = last.get(to);
+        record Near(double d, Traffic.Entry e) {}
+        List<Near> near = new ArrayList<>();
+        java.util.Set<String> done = new java.util.HashSet<>();
+        for (Map.Entry<String, double[]> u : unheard.entrySet()) {
+            if (u.getKey().equals(to)) continue;
+            double[] p = u.getValue();
+            double[] ll = GeoLocal.offset(lat0, lon0, p[0], p[1]);
+            FleetStatus s = last.get(u.getKey());
+            int flags = Traffic.PREDICTED | (s != null && !s.has(FleetStatus.GNSS) ? Traffic.NO_GNSS : 0);
+            near.add(new Near(apart(me, ll[0], ll[1], p[2]), Traffic.Entry.of(Traffic.address(u.getKey()), ll[0], ll[1], p[2],
+                    p[3], p[4], p[5], flags, age(u.getKey(), now))));
+            done.add(u.getKey());
+        }
+        for (Map.Entry<String, FleetStatus> e : last.entrySet()) {
+            String d = e.getKey();
+            FleetStatus s = e.getValue();
+            if (d.equals(to) || done.contains(d) || !s.has(FleetStatus.ARMED) || s.has(FleetStatus.LANDED)) continue;
+            if (now - heardAt.getOrDefault(d, 0L) > TRAFFIC_STALE_MS) continue;
+            near.add(new Near(apart(me, s.lat, s.lon, s.altAmsl), Traffic.Entry.of(Traffic.address(d), s.lat, s.lon, s.altAmsl,
+                    s.velE, s.velN, s.velU, s.has(FleetStatus.GNSS) ? 0 : Traffic.NO_GNSS, age(d, now))));
+        }
+        if (near.isEmpty()) return null;
+        near.sort(java.util.Comparator.comparingDouble(Near::d));
+        List<Traffic.Entry> out = new ArrayList<>();
+        for (Near n : near) if (out.size() < Traffic.MAX) out.add(n.e());
+        return new Traffic(out);
+    }
+
+    private int age(String drone, long now) {
+        Long at = heardAt.get(drone);
+        return at == null ? 255 : (int) Math.max(0, Math.min(255, (now - at) / 1000));
+    }
+
+    /** Metres between a report and a place; 0 when the report isn't known (then the order is as found). */
+    private static double apart(FleetStatus me, double lat, double lon, double alt) {
+        if (me == null) return 0;
+        return Math.hypot(Math.hypot(GeoLocal.east(me.lat, me.lon, lat, lon), GeoLocal.north(me.lat, me.lon, lat, lon)), alt - me.altAmsl);
     }
 
     // ------------------------------------------------------------------ the wire
