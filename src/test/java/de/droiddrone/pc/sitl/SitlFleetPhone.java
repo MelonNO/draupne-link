@@ -104,6 +104,7 @@ final class SitlFleetPhone implements AutoCloseable {
                 try {
                 switch (c.inner()) {
                     case FleetCmd.GROUP -> {
+                        if (piloted) break; // the piloted drone is never a follower (FL-7), as the phone in a session
                         GroupOrder o = GroupOrder.decode(c.data, c.at + 1);
                         if (o == null) break;
                         if (brain == null) brain = new FollowerBrain(1000);
@@ -113,10 +114,15 @@ final class SitlFleetPhone implements AutoCloseable {
                         ExitPlan plan = ExitPlan.decode(c.data, c.at + 1);
                         if (plan != null && brain != null) {
                             brain.plan(plan);
+                            lastPlan = plan;
                             rtlAlt(plan.returnAltRelM);
+                            exitRally(plan, now); // as FleetRole: its RTL to its own rally point (AC-10), when it changed
                         }
                     }
                     case FleetCmd.DISBAND -> brain = null;
+                    case FleetCmd.LEAD -> { // as FleetRole: a lead's RTL height (AC-41)
+                        if (c.length >= 4 && c.data[c.at + 1] != 0) leadRtlAltM = ((c.data[c.at + 2] & 0xff) << 8 | (c.data[c.at + 3] & 0xff)) / 10.0;
+                    }
                     case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                     case FleetCmd.MARK -> mark(c.data, c.at, c.length);
                     case FleetCmd.LAUNCH -> {
@@ -151,6 +157,21 @@ final class SitlFleetPhone implements AutoCloseable {
     }
 
     private volatile de.droiddrone.common.MissionUpload upload;
+
+    private double rallyLat = Double.NaN, rallyLon = Double.NaN;
+
+    /** As Mavlink.rallyPoint on the phone: the exit plan's rally point uploaded (read back) when it changed. */
+    private void exitRally(ExitPlan plan, long now) {
+        if (!Double.isNaN(rallyLat) && GeoLocal.distance(rallyLat, rallyLon, plan.rallyLat, plan.rallyLon) < 1) return;
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u != null && u.state() != de.droiddrone.common.MissionUpload.DONE && u.state() != de.droiddrone.common.MissionUpload.FAILED) return; // one at a time: the next plan brings it again
+        rallyLat = plan.rallyLat;
+        rallyLon = plan.rallyLon;
+        upload = new de.droiddrone.common.MissionUpload(de.droiddrone.pc.launch.RallyPlan.items(plan.rallyLat, plan.rallyLon, plan.returnAltRelM),
+                SitlMission.link(fc, de.droiddrone.common.MissionUpload.TYPE_RALLY), de.droiddrone.common.MissionUpload.TYPE_RALLY);
+        upload.start(now);
+        rallyInclHomeOff();
+    }
     /** AC-10: the rally list ArduPilot read back (null: none yet), and RALLY_INCL_HOME as ArduPilot answered it. */
     volatile java.util.List<de.droiddrone.common.MissionItem> rallyRead;
     volatile float rallyInclHome = Float.NaN;
@@ -193,9 +214,10 @@ final class SitlFleetPhone implements AutoCloseable {
                     launchTick(now);
                     FollowerBrain b = brain;
                     double[] p = fc.position();
-                    if (b != null && p != null) {
+                    if (b != null && p != null && !piloted) {
                         FleetIntent i = b.tick(now, commanderHeardAt, p[0], p[1], 80, fc.gpsFix() >= 3);
                         act(i, now);
+                        holdSticks(); // as FleetRole: a follower is fed centred sticks (FL-7) - LOITER holds its height on them
                     }
                 }
                 if (now - lastReport >= 500) {
@@ -210,6 +232,15 @@ final class SitlFleetPhone implements AutoCloseable {
         }
     }
 
+
+    /** As FleetRole.holdSticks for a drone never flown by the pilot: the four sticks centred, the switches left alone. */
+    private void holdSticks() throws IOException {
+        int u = 65535;
+        fc.send(new com.MAVLink.common.msg_rc_channels_override(1500, 1500, 1500, 1500, u, u, u, u,
+                (short) Math.max(1, fc.fcSysId()), (short) 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+    }
+
     /** As DRAUPNE Flight's FleetRole.act. */
     private void act(FleetIntent i, long now) throws IOException, InterruptedException {
         boolean changed = i.kind != last.kind;
@@ -218,9 +249,10 @@ final class SitlFleetPhone implements AutoCloseable {
                 if (changed || now - lastGuided >= 200) {
                     lastGuided = now;
                     if (fc.customMode() != GUIDED) mode(GUIDED);
-                    int mask = 0x1C0 | 0x800 | (Double.isNaN(i.yawDeg) ? 0x400 : 0);
+                    boolean noVel = Double.isNaN(i.velE) || Double.isNaN(i.velN); // as Mavlink.guidedTarget: position only
+                    int mask = 0x1C0 | 0x800 | (Double.isNaN(i.yawDeg) ? 0x400 : 0) | (noVel ? 0x38 : 0);
                     fc.send(new msg_set_position_target_global_int(0, (int) Math.round(i.lat * 1e7), (int) Math.round(i.lon * 1e7),
-                            (float) i.altAmsl, (float) i.velN, (float) i.velE, 0f, 0f, 0f, 0f, Double.isNaN(i.yawDeg) ? 0f : (float) Math.toRadians(i.yawDeg),
+                            (float) i.altAmsl, noVel ? 0f : (float) i.velN, noVel ? 0f : (float) i.velE, 0f, 0f, 0f, 0f, Double.isNaN(i.yawDeg) ? 0f : (float) Math.toRadians(i.yawDeg),
                             0f, mask, (short) Math.max(1, fc.fcSysId()), (short) 1, (short) 5, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
                 }
             }
@@ -344,6 +376,38 @@ final class SitlFleetPhone implements AutoCloseable {
         socket.send(new DatagramPacket(d, d.length, to.getAddress(), to.getPort()));
     }
 
+
+    /** The pilot flies it now (a session as the phone has it): no group orders, its follower brain let go. */
+    volatile boolean piloted;
+    /** The RTL height (m above home) the commander last gave it as a lead; NaN: none. */
+    volatile double leadRtlAltM = Double.NaN;
+
+    void setPiloted(boolean on) {
+        piloted = on;
+        if (on) brain = null;
+    }
+
+    /** The pilot's stand-in: a GUIDED position target (as sticks would take it there). */
+    void pilotTo(double lat, double lon, double altAmsl) throws IOException, InterruptedException {
+        if (fc.customMode() != GUIDED) mode(GUIDED);
+        fc.send(new msg_set_position_target_global_int(0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) altAmsl,
+                0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0x1C0 | 0x400 | 0x800 | 0x38, (short) Math.max(1, fc.fcSysId()), (short) 1, (short) 5,
+                MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+    }
+
+    /** RTL at this height above home (the lead's link-loss rule's last step, AP-5 / AC-41). */
+    void rtl(double relM) throws IOException, InterruptedException {
+        rtlAlt(relM);
+        mode(RTL);
+    }
+
+    /** The exit plan it holds now (null: none). */
+    ExitPlan plan() {
+        FollowerBrain b = brain;
+        return b == null ? null : lastPlan;
+    }
+
+    private volatile ExitPlan lastPlan;
     /** Test help: off the ground in GUIDED to heightM above home (as a dispatch or a pilot would have it). */
     void takeOff(double heightM) throws Exception {
         mode(GUIDED);
