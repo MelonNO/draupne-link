@@ -33,8 +33,9 @@ import java.util.concurrent.TimeUnit;
  * saves that itself); the motor test window opened to read its rows - the board, its layout and props direction, the
  * battery, the motor protocol (spin directions are offered for DShot only) - and closed, nothing in it pressed; the
  * orientation's words.</li>
- * <li><b>CONFIRM</b>, back on the first step. Drone setup must say done ("Betaflight set up - unplug the drone."), or
- * be held only by what waits for a GPS that did not answer with the battery out (said in the film, no failure). Then
+ * <li><b>CONFIRM</b>, back on the first step. Drone setup must say done ("Betaflight set up - unplug the drone.") with
+ * every row set, or - battery out - name as not set ("Not set: GPS, ...") only rows that wait for a GPS that did not
+ * answer (said in the film, no failure; F-087). Then
  * the guide closed, nothing of the app's on the board, and the board read again the same way: each difference from
  * the snapshot into the film and {@code drone-setup-compare.txt}, held to what Drone setup said it changed - its
  * "Betaflight: ..." line and the commands its log says it wrote, CALIBRATE's accelerometer, the receiver it switched

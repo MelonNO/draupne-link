@@ -39,17 +39,20 @@ final class DroneSetupRun {
     /** A real board behind the keeper: after each CLI visit it restarts, and the keeper reads its settings again before the next lease. */
     static final BoardPort.Timing THROUGH_KEEPER = new BoardPort.Timing(500, 90_000);
     static final String GUIDE = "New drone";
-    /** Drone setup's first step when it rests: the round is over and nothing runs (BetaflightPage.status). */
-    static final String SET_UP = "Betaflight set up - unplug the drone.", TO_CONFIRM = "Set everything, then Confirm.",
-            NOT_ALL = "Some settings could not be set - see By hand";
+    /**
+     * Drone setup's first step when it rests: the round is over and nothing runs (BetaflightPage.status) - done, to
+     * confirm, or (F-087) "Not set: GPS, GPS rescue." naming the rows that are not.
+     */
+    static final String SET_UP = "Betaflight set up - unplug the drone.", TO_CONFIRM = "Set everything, then Confirm.", NOT_SET_STATUS = "Not set";
     /** CONFIRM's write stopped and nothing was saved: the page says why under its settings. */
     private static final String NOTHING_WRITTEN = "Nothing was written";
-    private static final List<String> RESTING = List.of(SET_UP, TO_CONFIRM, NOT_ALL);
     /** What says a setting is not as chosen after a write (DroneSetup's rows and footer). */
     private static final List<String> NOT_SET = List.of("Could not set it", "Not set -", "Not changed (", "Still not set", "No GPS found", "Needs a GPS",
-            "Turning GPS on");
+            "Turning GPS on", "has no mode", " keeps ");
     /** Of those, what only says no GPS answered: with the battery out the GPS may have no power. */
     private static final List<String> NO_GPS = List.of("No GPS found", "Needs a GPS", "Turning GPS on");
+    /** The rows that say no GPS (or no compass, mostly on the GPS) answered, by their names in the status line. */
+    private static final List<String> GPS_ROWS = List.of("GPS", "Compass");
     private static final BetaflightUsb.Port BOARD = new BetaflightUsb.Port(KeeperWire.PORT_NAME, KeeperWire.DESCRIPTION);
     private static final long READ_MS = 240_000, CONFIRM_MS = 360_000;
 
@@ -360,25 +363,32 @@ final class DroneSetupRun {
         List<String> log = rig.log();
         written = HwDroneSetup.written(log);
         said = HwDroneSetup.said(log);
-        String status = ui.sees(SET_UP) ? SET_UP : ui.sees(NOT_ALL) ? NOT_ALL : ui.sees(NOTHING_WRITTEN) ? NOTHING_WRITTEN + " (the write stopped)" : "neither";
+        String notSetLine = notSetStatus();
+        String status = ui.sees(SET_UP) ? SET_UP : notSetLine != null ? notSetLine : ui.sees(NOTHING_WRITTEN) ? NOTHING_WRITTEN + " (the write stopped)" : "neither";
+        statusAfterConfirm = status;
         String usb = HwDroneSetup.row(after, "Flight controller on USB");
         List<String> notSet = new ArrayList<>();
         for (String l : after) for (String m : NOT_SET) if (l.contains(m) && !notSet.contains(l.strip())) notSet.add(l.strip());
         if (done && status.equals(SET_UP)) {
-            rig.check(usb.contains("Done - unplug the drone."), "Drone setup says done: \"" + SET_UP + "\" - " + usb);
-            // 1.0.71: a spent CONFIRM (SetupConfirm.done) leaves the page's pendingWrite true, so a row that is not as
-            // chosen no longer keeps it from "done" - said here for the report, no failure of this run
-            if (!notSet.isEmpty()) film.remark("SAYS DONE WHILE A ROW SAYS NOT SET (for the report): " + String.join(" | ", notSet));
-        } else {
-            boolean gpsAlone = done && status.equals(NOT_ALL) && !notSet.isEmpty() && notSet.stream().allMatch(l -> NO_GPS.stream().anyMatch(l::contains));
+            // F-087: done only when every row is set
+            rig.check(usb.contains("Done - unplug the drone.") && notSet.isEmpty(), "Drone setup says done, and every row is set: "
+                    + (notSet.isEmpty() ? usb : "rows not set: " + String.join(" | ", notSet)));
+        } else if (done && notSetLine != null) {
+            List<String> named = rowsNamed(notSetLine);
+            double volts = state().real("volts");
+            boolean batteryOut = !(volts >= de.droiddrone.pc.setup.MotorTest.NO_BATTERY_VOLTS);
+            boolean gpsAlone = batteryOut && !named.isEmpty() && named.stream().allMatch(n -> GPS_ROWS.contains(n) || saysNoGps(after, n));
             if (gpsAlone) {
-                film.remark("NOT DONE FOR THE GPS ALONE: \"" + NOT_ALL + "\" - no GPS answered (with the battery out it may have no power), so what needs "
-                        + "a GPS waits for it: " + String.join(" | ", notSet) + ". No failure by itself with the battery out; all else is set.");
-                rig.check(true, "Drone setup rests after CONFIRM, set but for what waits for a GPS");
+                film.remark("NOT DONE FOR THE GPS ALONE: \"" + notSetLine + "\" - no GPS answered (with the battery out it may have no power), so what needs "
+                        + "a GPS waits for it: " + String.join(" | ", notSet) + " - no failure by itself with the battery out; all else is set.");
+                rig.check(true, "Drone setup rests after CONFIRM saying which rows are not set, and all of them wait for a GPS: " + notSetLine);
             } else {
-                rig.check(false, "Drone setup says done after CONFIRM: " + (done ? "it rests saying \"" + status + "\"" : "it did not rest within " + CONFIRM_MS / 1000 + " s")
-                        + "; not set: " + notSet + "; " + usb);
+                rig.check(false, "Drone setup says done after CONFIRM: it says \"" + notSetLine + "\"" + (batteryOut ? "" : " with the battery in")
+                        + "; the rows: " + String.join(" | ", notSet) + "; " + usb);
             }
+        } else {
+            rig.check(false, "Drone setup says done after CONFIRM: " + (done ? "it rests saying \"" + status + "\"" : "it did not rest within " + CONFIRM_MS / 1000 + " s")
+                    + "; not set: " + notSet + "; " + usb);
         }
         if (written.isEmpty() && tap.saves() == 0) {
             film.remark("CONFIRM WROTE NOTHING: the board was as the page's choices want it (set up once already): no backup, no save, no restart.");
@@ -515,9 +525,40 @@ final class DroneSetupRun {
     }
 
     private boolean resting() {
-        for (String s : RESTING) if (ui.sees(s)) return true;
-        return false;
+        return ui.sees(SET_UP) || ui.sees(TO_CONFIRM) || notSetStatus() != null;
     }
+
+    /** F-087: the step's status line naming the rows that are not set ("Not set: GPS, GPS rescue."), or null when it says other. */
+    private String notSetStatus() {
+        for (String l : words()) {
+            String s = l.strip();
+            if (s.startsWith(NOT_SET_STATUS + ": ") || s.equals(NOT_SET_STATUS + " - see the rows.")) return s;
+        }
+        return null;
+    }
+
+    /** "Not set: GPS, Compass, GPS rescue." -> [GPS, Compass, GPS rescue]. */
+    static List<String> rowsNamed(String notSetLine) {
+        if (!notSetLine.startsWith(NOT_SET_STATUS + ": ")) return List.of();
+        String list = notSetLine.substring(NOT_SET_STATUS.length() + 2).replaceFirst("\\.$", "");
+        return List.of(list.split(",\\s*"));
+    }
+
+    /** The row of this name (the status line's: "GPS rescue", "Failsafe") says only that no GPS answered. */
+    private static boolean saysNoGps(List<String> words, String name) {
+        String label = name.equals("Failsafe") ? "SIGNAL LOST" : name.toUpperCase(Locale.ROOT);
+        String row = HwDroneSetup.row(words, label + " ");
+        if (row.isEmpty()) row = HwDroneSetup.row(words, label + ":");
+        String said = row;
+        return NO_GPS.stream().anyMatch(said::contains);
+    }
+
+    /** What the step's status said once CONFIRM's rounds were over; null before. */
+    String statusAfterConfirm() {
+        return statusAfterConfirm;
+    }
+
+    private String statusAfterConfirm;
 
     private boolean confirmOffered() {
         for (Component c : ui.all("CONFIRM")) if (c instanceof AbstractButton b && b.isEnabled()) return true;

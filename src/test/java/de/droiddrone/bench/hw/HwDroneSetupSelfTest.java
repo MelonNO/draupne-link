@@ -58,6 +58,8 @@ class HwDroneSetupSelfTest {
             assertTrue(board.saved().lines().anyMatch(l -> l.matches("aux \\d+ 1 1 1300 1700 0 0")), "ANGLE at the middle");
             assertFalse(board.saved().lines().anyMatch(l -> l.matches("aux \\d+ 11 .*")), "no POS HOLD on 4.4");
             assertTrue(run.modeListsSeen().startsWith("offers Acro, Angle, GPS rescue - hint: ") && run.modeListsSeen().contains("2025.12"), run.modeListsSeen());
+            // F-087: no GPS answered (battery out): not "Betaflight set up" - the rows that wait for it are named
+            assertEquals("Not set: GPS, Compass, GPS rescue.", run.statusAfterConfirm());
             KeeperClient.State s = keeper.state();
             assertTrue(s.boardUp() && !s.lease().equals("setup") && Boolean.TRUE.equals(s.locked()) && Boolean.FALSE.equals(s.armed()), s.toString());
             assertTrue(board.armingLocked(), "the keeper's lock is on the board again");

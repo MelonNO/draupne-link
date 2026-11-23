@@ -382,8 +382,9 @@ and proved on the made-up board behind a real keeper only (`gradlew test --tests
   FIND GPS, CALIBRATE COMPASS and the orientation's CHECK IT (the drone turned by hand), USE MEASURED, READ AGAIN and
   DISCONNECT. Checked from the requests themselves (`SetupTap`; all of them in `drone-setup-tap.tsv`): no
   passthrough, no DShot command, no motor order or props write, no EEPROM write or MSP reboot, every motor value STOP.
-- **After CONFIRM** Drone setup must rest saying "Betaflight set up - unplug the drone.", or be held only by what waits
-  for a GPS that did not answer with the battery out (said, no failure). The guide closed, the board is read again the
+- **After CONFIRM** Drone setup must rest saying "Betaflight set up - unplug the drone." with every row set, or - with
+  the battery out - "Not set: GPS, ..." naming only rows that wait for a GPS that did not answer (said, no failure;
+  F-087: done only when every row is set). The guide closed, the board is read again the
   same way; each difference from the snapshot goes into the film and `drone-setup-compare.txt` and must be one Drone
   setup said it made: a command its log says it wrote ("Betaflight CLI: ...") and named in its "Betaflight: ..." line,
   CALIBRATE's accelerometer, the receiver switched over MSP. Anything else is WRONG, and so is a CLI line the board

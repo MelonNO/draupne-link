@@ -1796,7 +1796,7 @@ final class DroneSetup {
                 main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
             }
             showConfirmState();
-            boolean pendingWrite = !confirm.armed();
+            boolean pendingWrite = pendingWrite(confirm.armed(), confirm.confirmed());
             showChanges(r, pendingWrite);
             ModeSwitch.Plan armPlan = r.modes();
             if (r.armTarget() > 0 && armPlan != null && armPlan.armProblem() != null) {
@@ -1849,10 +1849,37 @@ final class DroneSetup {
             modesWrong |= showFailsafe(r, pendingWrite);
             boolean byHandNeeded = !pendingWrite && (!r.msp() || (r.rate() >= 0 && r.rate() < r.target()) || cellsWrong || gpsWrong || modesWrong);
             markByHand(byHandNeeded);
-            cleanDone = confirm.confirmed() && r.plan().isEmpty() && !byHandNeeded && lastRefused == null && beeperProblem == null
+            notSet = notSetRows(); // F-087: done only when every row is set
+            cleanDone = confirm.confirmed() && r.plan().isEmpty() && notSet.isEmpty() && !byHandNeeded && lastRefused == null && beeperProblem == null
                     && escHold.on(r.boardId()).isEmpty(); // F-080: not done while an ESC of it did not answer
             if (cleanDone) usb.set(State.OK, usbText + "<br><b>Done - unplug the drone.</b>");
         }
+
+        /**
+         * F-087: nothing is written for these choices yet - the rows say what CONFIRM would set. Not once a CONFIRM wrote
+         * them all: SetupConfirm.done spends the CONFIRM (1.0.71), and "not armed" alone then read as "not written yet" -
+         * a row not as chosen (GPS rescue: "No GPS found") no longer kept the page from "Betaflight set up".
+         */
+        static boolean pendingWrite(boolean armed, boolean confirmed) {
+            return !armed && !confirmed;
+        }
+
+        /** The rows that say their setting is not as chosen (WARN, BAD), by name; the ESC row is no setting of CONFIRM's. */
+        private List<String> notSetRows() {
+            List<String> out = new java.util.ArrayList<>();
+            for (Part p : settings.parts) {
+                if (!p.hidden && p != escRow && (p.state == State.WARN || p.state == State.BAD)) out.add(p.label);
+            }
+            return out;
+        }
+
+        /** F-087: the step's status line while rows are not set, red: "Not set: GPS, GPS rescue." */
+        static String notSetStatus(List<String> rows) {
+            return rows.isEmpty() ? "Not set - see the rows." : "Not set: " + String.join(", ", rows) + ".";
+        }
+
+        /** The rows the last round found not set (F-087); empty when all are. */
+        private List<String> notSet = List.of();
 
         /**
          * Above CONFIRM, in the page's small grey text (Q-003: the maintainer's answer): what its press also writes
@@ -2289,8 +2316,8 @@ final class DroneSetup {
                 }
                 if (cleanDone) return "Betaflight set up - unplug the drone.";
                 if (!confirm.armed() && !confirm.confirmed()) return "Set everything, then Confirm.";
-                wizard.setStatusColor(Theme.WARN);
-                return "Some settings could not be set - see By hand";
+                wizard.setStatusColor(Theme.BAD); // F-087: the rows that are not set, by name
+                return notSetStatus(notSet);
             }
             if (connecting) return "Connecting to the FC...";
             if (!found) return "Waiting for the flight controller.";
