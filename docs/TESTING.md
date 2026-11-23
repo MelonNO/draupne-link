@@ -449,6 +449,16 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   keeper saw that its lock does not show and opened no window - but sticks that asked for ARM armed the board all the
   same, outside any window, and the keeper could only trip and say NOT SAFE. The scenario checks there only that no
   window opens, and sends no sticks.
+- **Drone setup on an armed board** (`SitlArmedWritesScenario`, F-077 to F-079): the app itself (SETUP > Set up a
+  new drone) on UART1 through a tap that writes down every request and CLI line; the sticks on UART2 and the rig's
+  questions on UART4 (both given MSP by the scenario). Armed: PROPS IN / OUT, CALIBRATE and CONFIRM are refused with
+  "The drone is armed. Disarm it first.", no '#' and no MSP write reach the board, the yaw direction is read back;
+  disarmed: CONFIRM writes, Betaflight's own CLI "status" lists the arming block MSP while the CLI is open, and it is
+  gone after the restart. **Sticks and questions on one SITL port do not mix:** the answers came 0.1 to 0.6 s late
+  and more, the stick frames with them - RXLOSS, then BADRX when the ARM switch went up; on ports of their own the
+  questions take about 10 ms. Even so SITL says RXLOSS for about a tenth of a second every few seconds - also with
+  the sticks sent from inside WSL, on time, 25, 50 or 100 a second: its own gaps (2026-11-23). An armed board rides
+  them out (failsafe stage 1); one that comes as the ARM switch goes up leaves BADRX, and the rig flips it again.
 
 ## For whoever adds a scenario
 

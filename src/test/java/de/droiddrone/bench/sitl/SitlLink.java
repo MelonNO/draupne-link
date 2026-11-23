@@ -38,8 +38,13 @@ final class SitlLink implements AutoCloseable {
     private Thread sticks;
 
     SitlLink() throws IOException {
+        this(Sitl.port());
+    }
+
+    /** On another of SITL's UARTs (TCP 5760 + n), one that has MSP on it: a receiver beside a ground station on UART1. */
+    SitlLink(int port) throws IOException {
         socket.setTcpNoDelay(true);
-        socket.connect(new InetSocketAddress(Sitl.HOST, Sitl.port()), 2000);
+        socket.connect(new InetSocketAddress(Sitl.HOST, port), 2000);
         out = socket.getOutputStream();
         Thread reader = new Thread(this::read, "sitlLinkReader");
         reader.setDaemon(true);
@@ -100,6 +105,11 @@ final class SitlLink implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /** SITL closed the connection (it restarted: save, the CLI's exit, MSP's reboot) or this side did. */
+    boolean gone() {
+        return gone || closed;
     }
 
     /** The throttle and the ARM switch from the next frame on (roll, pitch, yaw centred, AUX2-4 low). */
