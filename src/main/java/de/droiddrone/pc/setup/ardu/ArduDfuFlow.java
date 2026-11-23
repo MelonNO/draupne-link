@@ -60,11 +60,25 @@ public final class ArduDfuFlow {
         standIn = bus;
     }
 
-    /** The DFU bus to use: the bench's stand-in, else Windows' WinUSB. */
+    /** The DFU bus to use: the bench's stand-in; none while the bench's made-up serial ports stand in; else WinUSB. */
     public static DfuDevice.Bus bus() {
         DfuDevice.Bus b = standIn;
-        return b != null ? b : WinUsbDfu.BUS;
+        if (b != null) return b;
+        return BetaflightUsb.standingIn() ? NONE : WinUsbDfu.BUS;
     }
+
+    /** No DFU devices (the bench without a made-up one: the real USB is never touched). */
+    static final DfuDevice.Bus NONE = new DfuDevice.Bus() {
+        @Override
+        public List<String> present() {
+            return List.of();
+        }
+
+        @Override
+        public DfuDevice open(String id) throws IOException {
+            throw new IOException("no DFU device");
+        }
+    };
 
     /** The real board on a serial port: each call opens the port, asks or sends, and lets go. */
     public static Board betaflight(BetaflightUsb.Port port) {

@@ -33,9 +33,10 @@ import java.util.Map;
  * CALIBRATIONS with the 3D drone (six positions, level, compass), the MOTORS (props off), and a BENCH CHECK. Opened
  * from SETUP; a Betaflight board goes the way it went. Everything runs on the wizard's workers, never Swing's thread.
  * <p>
- * Not built (says so on the FIND page): flashing ArduPilot onto a board that runs Betaflight (AS-1, H1, H4) - that is
- * the STM32's DFU over USB, which needs a USB driver this app doesn't install. A board already on ArduPilot is
- * found and set up; its firmware updates are Mission Planner's for now.
+ * A board that runs Betaflight (AS-1, H1, H4): From Betaflight reads what carries over, To ArduPilot (DFU) writes
+ * ArduPilot through the STM32's USB DFU ({@link de.droiddrone.pc.setup.ardu.ArduDfuFlow}) - the board the pilot picks,
+ * disarmed, after a confirm naming board and firmware. The DFU device needs Windows' WinUSB driver (Betaflight's
+ * driver tool or Zadig install it; this app doesn't). PORTS (AS-6) and FRAME AND TUNING (AS-7) follow SETTINGS.
  */
 final class ArduSetupPages {
     private ArduSetupPages() {
@@ -108,6 +109,8 @@ final class ArduSetupPages {
         private volatile boolean flashing;
         /** Fleet AS-11: battery, switches, board turn and motor order from a Betaflight board, before it is flashed. */
         private final JButton fromBf = Theme.secondaryButton("From Betaflight");
+        /** Fleet H1 / H4: ArduPilot onto a Betaflight board by USB DFU - the board the pilot picks, disarmed, confirmed. */
+        private final JButton toArdu = Theme.secondaryButton("To ArduPilot (DFU)");
 
         FindPage(State state) {
             this.state = state;
@@ -121,8 +124,8 @@ final class ArduSetupPages {
         @Override
         String hint() {
             return "Plug the drone's flight controller into this PC by USB, battery off. Mission Planner closed. "
-                    + "A Betaflight board is left alone. Firmware: new ArduPilot onto a board that runs ArduPilot. "
-                    + "Betaflight to ArduPilot (DFU) is not built: flash it once with ArduPilot's own tools.";
+                    + "A Betaflight board is left alone until you click. Betaflight board: From Betaflight first, then "
+                    + "To ArduPilot (USB DFU). Firmware: new ArduPilot onto a board that runs ArduPilot.";
         }
 
         @Override
@@ -140,7 +143,10 @@ final class ArduSetupPages {
             row.add(fwNewest);
             row.add(javax.swing.Box.createHorizontalStrut(8));
             row.add(fromBf);
+            row.add(javax.swing.Box.createHorizontalStrut(8));
+            row.add(toArdu);
             fromBf.addActionListener(e -> readBetaflight());
+            toArdu.addActionListener(e -> toArduPilot());
             fwFile.addActionListener(e -> firmwareFromFile());
             fwNewest.addActionListener(e -> firmwareNewest());
             fwFile.setEnabled(state.found != null);
@@ -293,6 +299,174 @@ final class ArduSetupPages {
                     result.setForeground(Theme.OK);
                 }
             });
+        }
+
+        /** One board the pilot may pick for DFU: a Betaflight board's serial port, or a board already in DFU. */
+        record DfuPick(de.droiddrone.pc.setup.BetaflightUsb.Port port, String dfuId) {
+            @Override
+            public String toString() {
+                if (port != null) return port.systemName() + " - " + port.description();
+                String id = dfuId.substring(dfuId.lastIndexOf('\\') + 1);
+                return "In DFU now - " + id;
+            }
+        }
+
+        /** The firmware, ready to write, and what it is. */
+        record DfuFirmware(de.droiddrone.pc.setup.dfu.HexImage image, String what) {}
+
+        /**
+         * Fleet H1 / H4: Betaflight to ArduPilot. Lists the boards (serial ports and DFU devices - none opened), the
+         * pilot picks one and the firmware; the board name is read (for the newest Copter), the firmware got, then a
+         * last confirm names both, and only then the board is sent to DFU and written.
+         */
+        private void toArduPilot() {
+            if (flashing) return;
+            toArdu.setEnabled(false);
+            say("Looking for boards ...");
+            String own = state.found == null ? null : state.found.port().systemName();
+            List<DfuPick> picks = new ArrayList<>();
+            background(() -> {
+                try {
+                    for (de.droiddrone.pc.setup.BetaflightUsb.Port p : de.droiddrone.pc.setup.BetaflightUsb.findFlightControllers()) {
+                        if (!p.systemName().equals(own)) picks.add(new DfuPick(p, null)); // an ArduPilot board found here is not offered
+                    }
+                    for (String id : de.droiddrone.pc.setup.ardu.ArduDfuFlow.bus().present()) picks.add(new DfuPick(null, id));
+                    return null;
+                } catch (Exception e) {
+                    return e.getMessage();
+                }
+            }, failure -> {
+                toArdu.setEnabled(true);
+                if (failure != null || picks.isEmpty()) {
+                    result.setText(failure != null ? "USB: " + failure : "No board on USB.");
+                    result.setForeground(Theme.WARN);
+                    return;
+                }
+                pickAndWrite(picks);
+            });
+        }
+
+        private void pickAndWrite(List<DfuPick> picks) {
+            javax.swing.JComboBox<DfuPick> board = new javax.swing.JComboBox<>(picks.toArray(new DfuPick[0]));
+            javax.swing.JComboBox<String> source = new javax.swing.JComboBox<>(new String[]{"Newest Copter for this board", "A file (_with_bl.hex)"});
+            JPanel p = new JPanel(new GridLayout(0, 1, 0, 6));
+            p.add(new JLabel("Which board? Only this one is touched."));
+            p.add(board);
+            p.add(new JLabel("Firmware"));
+            p.add(source);
+            if (state.carried == null) p.add(new JLabel("Tip: From Betaflight first keeps its battery, switches and motor order."));
+            if (Dialogs.confirm(result, p, "To ArduPilot", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return;
+            DfuPick pick = (DfuPick) board.getSelectedItem();
+            if (pick == null) return;
+            boolean newest = source.getSelectedIndex() == 0;
+            if (newest && pick.port() == null) {
+                result.setText("A board already in DFU doesn't say its name: pick a file.");
+                result.setForeground(Theme.WARN);
+                return;
+            }
+            java.nio.file.Path file = null;
+            if (!newest) {
+                javax.swing.JFileChooser c = new javax.swing.JFileChooser();
+                c.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("ArduPilot with bootloader (.hex, .bin)", "hex", "bin"));
+                if (c.showOpenDialog(result) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+                file = c.getSelectedFile().toPath();
+            }
+            java.nio.file.Path f = file;
+            flashing = true;
+            setButtons(false);
+            background(() -> {
+                try {
+                    return firmwareFor(pick, f);
+                } catch (Exception e) {
+                    return new DfuFirmware(null, e.getMessage());
+                }
+            }, fw -> {
+                if (fw.image() == null) {
+                    dfuDone("To ArduPilot: " + fw.what());
+                    return;
+                }
+                String q = "Write " + fw.what() + "\nonto " + pick + "?\n\nBetaflight and its settings are erased. Battery off, props off.\n"
+                        + "Don't unplug until it says Done.";
+                if (Dialogs.confirm(result, q, "To ArduPilot", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) {
+                    dfuDone("Cancelled: nothing written.");
+                    return;
+                }
+                writeDfu(pick, fw);
+            });
+        }
+
+        /** The firmware: the file, or the newest stable Copter for the board's Betaflight name (asked disarmed). */
+        private DfuFirmware firmwareFor(DfuPick pick, java.nio.file.Path file) throws Exception {
+            if (file != null) {
+                return new DfuFirmware(de.droiddrone.pc.setup.dfu.HexImage.read(java.nio.file.Files.readAllBytes(file)), file.getFileName().toString());
+            }
+            say("Reading the board's name ...");
+            String name;
+            try (de.droiddrone.pc.setup.BetaflightUsb bf = de.droiddrone.pc.setup.BetaflightUsb.open(pick.port())) {
+                if (bf.armedNow()) throw new java.io.IOException("the drone is armed: only on the bench, disarmed");
+                name = de.droiddrone.pc.setup.ardu.ArduDfuFlow.boardName(bf);
+            }
+            if (name == null) throw new java.io.IOException("Betaflight gives no board name: pick a file");
+            java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder().followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build();
+            say("Looking up Copter for " + name + " ...");
+            String url = de.droiddrone.pc.setup.ardu.ArduDfuFlow.latestCopterHex(name, http);
+            if (url == null) throw new java.io.IOException("no ArduPilot Copter for " + name + ": pick a file");
+            say("Downloading ...");
+            return new DfuFirmware(de.droiddrone.pc.setup.dfu.HexImage.read(de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.download(url, http)),
+                    "ArduCopter for " + name);
+        }
+
+        private void writeDfu(DfuPick pick, DfuFirmware fw) {
+            background(() -> {
+                try {
+                    de.droiddrone.pc.setup.dfu.DfuDevice.Bus bus = de.droiddrone.pc.setup.ardu.ArduDfuFlow.bus();
+                    if (pick.port() != null) {
+                        waitForPort(pick.port().systemName()); // reading its name restarted it
+                        de.droiddrone.pc.setup.ardu.ArduDfuFlow.fromBetaflight(de.droiddrone.pc.setup.ardu.ArduDfuFlow.betaflight(pick.port()),
+                                bus, fw.image(), this::say, Thread::sleep, de.droiddrone.pc.setup.ardu.ArduDfuFlow.WAIT_DFU_MS);
+                    } else {
+                        de.droiddrone.pc.setup.ardu.ArduDfuFlow.inDfu(bus, pick.dfuId(), fw.image(), this::say, Thread::sleep);
+                    }
+                    log("ArduPilot setup: " + fw.what() + " written by DFU onto " + pick);
+                    return null;
+                } catch (Exception e) {
+                    return "To ArduPilot: " + e.getMessage();
+                }
+            }, this::dfuDone);
+        }
+
+        /** The Betaflight board's port back after a restart (up to 8 s). */
+        private static void waitForPort(String name) throws InterruptedException {
+            long end = System.currentTimeMillis() + 8000;
+            while (System.currentTimeMillis() < end) {
+                for (de.droiddrone.pc.setup.BetaflightUsb.Port p : de.droiddrone.pc.setup.BetaflightUsb.findFlightControllers()) {
+                    if (p.systemName().equals(name)) {
+                        Thread.sleep(1500); // Betaflight up and answering
+                        return;
+                    }
+                }
+                Thread.sleep(250);
+            }
+        }
+
+        private void dfuDone(String failure) {
+            flashing = false;
+            setButtons(true);
+            if (failure == null) {
+                result.setText("Done. Wait for ArduPilot to start, then Search again.");
+                result.setForeground(Theme.OK);
+            } else if (!failure.isEmpty()) {
+                result.setText(failure);
+                result.setForeground(Theme.WARN);
+                log("ArduPilot setup: " + failure);
+            }
+        }
+
+        private void setButtons(boolean on) {
+            toArdu.setEnabled(on);
+            fromBf.setEnabled(on);
+            fwFile.setEnabled(on && state.found != null);
+            fwNewest.setEnabled(on && state.found != null);
         }
 
         private void say(String text) {

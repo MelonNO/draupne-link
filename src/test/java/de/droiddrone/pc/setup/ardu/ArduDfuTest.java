@@ -206,6 +206,28 @@ class ArduDfuTest {
     }
 
     @Test
+    void theBenchsMadeUpPortsNeverReachTheRealUsb() {
+        de.droiddrone.pc.setup.BetaflightUsb.use(new de.droiddrone.pc.setup.BetaflightUsb.Usb() {
+            public List<de.droiddrone.pc.setup.BetaflightUsb.Port> ports() {
+                return List.of();
+            }
+
+            public de.droiddrone.pc.setup.BetaflightUsb.Wire open(de.droiddrone.pc.setup.BetaflightUsb.Port port) throws IOException {
+                throw new IOException("none");
+            }
+        });
+        try {
+            assertSame(ArduDfuFlow.NONE, ArduDfuFlow.bus(), "the bench without a made-up DFU: no DFU at all");
+            FakeDfu.Bus fake = new FakeDfu.Bus();
+            ArduDfuFlow.use(fake);
+            assertSame(fake, ArduDfuFlow.bus());
+        } finally {
+            ArduDfuFlow.use(null);
+            de.droiddrone.pc.setup.BetaflightUsb.use(null);
+        }
+    }
+
+    @Test
     void theNewestCopterWithBootloaderIsPickedForBetaflightsBoardName() {
         String manifest = """
                 {"format-version":"1.0.0","firmware":[

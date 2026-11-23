@@ -97,6 +97,11 @@ public final class BetaflightUsb implements AutoCloseable {
         usb = standIn;
     }
 
+    /** The test bench's USB stands in now (then no real USB device may be touched: fleet H1's DFU too). */
+    public static boolean standingIn() {
+        return usb != null;
+    }
+
     /** Serial ports that look like a flight controller's USB, by vendor or by name. */
     public static List<Port> findFlightControllers() {
         Usb standIn = usb;
