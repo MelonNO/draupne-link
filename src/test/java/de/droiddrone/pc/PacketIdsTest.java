@@ -48,6 +48,8 @@ class PacketIdsTest {
         c.put("FcCommand.PACKET", de.droiddrone.common.FcCommand.PACKET);
         c.put("MavTunnel.PACKET", de.droiddrone.common.MavTunnel.PACKET);
         c.put("MissionBlock.PACKET", de.droiddrone.common.MissionBlock.PACKET);
+        c.put("FleetCmd.PACKET", de.droiddrone.common.FleetCmd.PACKET);
+        c.put("FleetStatus.PACKET", de.droiddrone.common.FleetStatus.PACKET);
         return c;
     }
 

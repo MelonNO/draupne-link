@@ -484,6 +484,71 @@ public class Mavlink {
         if (u != null) u.sendTunnel(packet.encodePacket());
     }
 
+    // ---- fleet FD-1 / FL-2: what the PC's fleet link needs of the FC, and the follower's targets
+
+    private volatile double altAmslM = Double.NaN, homeAmslM = Double.NaN, velN, velE, velU, latExact, lonExact;
+    private volatile int batteryPercent = 255;
+    static final int COPTER_GUIDED = 4;
+    /** MAV_FRAME_GLOBAL_INT: heights above sea level, as the PC plans them. */
+    static final short FRAME_GLOBAL_INT = 5;
+    /** SET_POSITION_TARGET's type mask: no acceleration, no yaw rate (and no yaw: +0x400). */
+    static final int MASK_POS_VEL = 0x1C0 | 0x800, MASK_NO_YAW = 0x400;
+
+    /** The drone as its FC says, for the PC's fleet report (FleetStatus). */
+    void fillStatus(de.droiddrone.common.FleetStatus s, long now) {
+        s.lat = latExact;
+        s.lon = lonExact;
+        s.altAmsl = Double.isNaN(altAmslM) ? 0 : altAmslM;
+        s.velE = velE;
+        s.velN = velN;
+        s.velU = velU;
+        s.battery = batteryPercent;
+        s.mode = customModeNow < 0 || customModeNow > 254 ? 255 : customModeNow;
+        s.homeAmsl = Double.isNaN(homeAmslM) ? 0 : homeAmslM;
+        if (armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.ARMED;
+        if (gnssOk()) s.flags |= de.droiddrone.common.FleetStatus.GNSS;
+        if (!armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.LANDED;
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u != null) {
+            s.routeBlock = uploadBlock;
+            s.routeState = u.state();
+            s.routePercent = u.percent();
+        }
+    }
+
+    double latNow() {
+        return latExact;
+    }
+
+    double lonNow() {
+        return lonExact;
+    }
+
+    double batteryNow() {
+        return batteryPercent == 255 ? Double.NaN : batteryPercent;
+    }
+
+    /**
+     * Fleet FL-2: a GUIDED target above sea level with a velocity fed forward (the group's own motion), the nose to yawDeg
+     * (NaN: as it is). ArduPilot holds the last target; the follower sends it five times a second.
+     */
+    void guidedTarget(double lat, double lon, double altAmsl, double yawDeg, double velEast, double velNorth) {
+        if (customModeNow != COPTER_GUIDED) setMode(COPTER_GUIDED);
+        int mask = MASK_POS_VEL | (Double.isNaN(yawDeg) ? MASK_NO_YAW : 0);
+        send(new com.MAVLink.common.msg_set_position_target_global_int(0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7),
+                (float) altAmsl, (float) velNorth, (float) velEast, 0f, 0f, 0f, 0f, Double.isNaN(yawDeg) ? 0f : (float) Math.toRadians(yawDeg),
+                0f, mask, targetSys(), targetComponent, FRAME_GLOBAL_INT, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+    }
+
+    /** RTL_ALT (cm above home) for the follower's or lead's way home (AC-41). */
+    void setRtlAltM(double relM) {
+        byte[] id = new byte[16];
+        byte[] n = "RTL_ALT".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(n, 0, id, 0, n.length);
+        send(new com.MAVLink.common.msg_param_set((float) Math.round(relM * 100), targetSys(), targetComponent, id, (short) 9,
+                config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+    }
+
     // ---- fleet RT-8: a route from the PC (MissionBlock), uploaded and read back over USB here
 
     private volatile de.droiddrone.common.MissionUpload upload;
@@ -765,6 +830,7 @@ public class Mavlink {
                     case msg_sys_status.MAVLINK_MSG_ID_SYS_STATUS: {
                         msg_sys_status message = new msg_sys_status(packet);
                         lastSysStatusTs = System.currentTimeMillis();
+                        batteryPercent = message.battery_remaining < 0 ? 255 : message.battery_remaining; // DRAUPNE Link (fleet)
                         DataWriter buffer = new DataWriter(true);
                         if (message.voltage_battery != Utils.UINT16_MAX) {
                             int cellCountDetected = Math.round(message.voltage_battery / 4100f);
@@ -807,6 +873,12 @@ public class Mavlink {
                     case msg_global_position_int.MAVLINK_MSG_ID_GLOBAL_POSITION_INT: {
                         msg_global_position_int message = new msg_global_position_int(packet);
                         lastGlobalPositionIntTs = System.currentTimeMillis();
+                        latExact = message.lat / 1e7; // DRAUPNE Link (fleet): doubles - a float is half a metre off here
+                        lonExact = message.lon / 1e7;
+                        altAmslM = message.alt / 1000.0; // DRAUPNE Link (fleet): for the PC's fleet report
+                        velN = message.vx / 100.0;
+                        velE = message.vy / 100.0;
+                        velU = -message.vz / 100.0;
                         float latDeg = message.lat / 10000000f;
                         float lonDeg = message.lon / 10000000f;
                         calculateTraveledDist(latDeg, lonDeg);
@@ -825,6 +897,7 @@ public class Mavlink {
                     case msg_home_position.MAVLINK_MSG_ID_HOME_POSITION: {
                         msg_home_position message = new msg_home_position(packet);
                         isHomePositionReceived = true;
+                        homeAmslM = message.altitude / 1000.0; // DRAUPNE Link (fleet)
                         homeLatDeg = message.latitude / 10000000f;
                         homeLonDeg = message.longitude / 10000000f;
                         calculateHomeDistDir();

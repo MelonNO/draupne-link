@@ -550,7 +550,8 @@ public class Udp {
         // runs - ArduPilot's GCS failsafe is the backstop for this app itself having stopped
         mavlink.setGcsAlive(() -> {
             long heard = pcHeardAtMs;
-            return heard != 0 && android.os.SystemClock.elapsedRealtime() - heard <= GCS_FRESH_MS || arduLinkLossRunning();
+            long t = android.os.SystemClock.elapsedRealtime();
+            return heard != 0 && t - heard <= GCS_FRESH_MS || arduLinkLossRunning() || fleet.keepsGcsAlive(t);
         });
         startArduLinkLoss(this);
         this.fcDisarmed = () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
@@ -688,6 +689,11 @@ public class Udp {
                     // pc.40: a PC's fleet management asks for a power mode - in any state but a pilot session
                     if (d[0] == FleetProtocol.MODE) {
                         onFleetMode(receiverPacket, d, len);
+                        continue;
+                    }
+                    // fleet FD-1: the commander's fleet command, in any state - never a session, never sticks
+                    if (d[0] == de.droiddrone.common.FleetCmd.PACKET) {
+                        onFleetCmd(receiverPacket, d, len);
                         continue;
                     }
                     // pc.37: an observer's OBSERVE / OBSERVE_STOP, in any state - never a session, never sticks
@@ -1406,6 +1412,48 @@ public class Udp {
 
     Mavlink mavlinkOfRule() {
         return mavlink;
+    }
+
+    /** Fleet FD-1: this phone's part in a fleet - one for the app, as the ArduPilot rule (the Udp is replaced, not it). */
+    static final FleetRole fleet = new FleetRole();
+
+    /** A FleetCmd on the receive thread: the key, then the commander's rule (FleetRole / FleetCommandGate). */
+    private void onFleetCmd(DatagramPacket packet, byte[] d, int len) {
+        de.droiddrone.common.FleetCmd c = de.droiddrone.common.FleetCmd.read(d, len);
+        if (c == null) return;
+        if (!c.key.equals(key)) {
+            noteWrongKey(packet);
+            return;
+        }
+        ReceiverBuffer buffer = receiverBuffer;
+        boolean inSession = buffer != null && buffer.isConnected();
+        InetAddress pilot = udpSender == null ? null : udpSender.getIp();
+        boolean fromPilot = inSession && pilot != null && pilot.equals(packet.getAddress());
+        fleet.onCommand(this, new java.net.InetSocketAddress(packet.getAddress(), packet.getPort()), c, inSession, fromPilot,
+                fcDisarmed.getAsBoolean(), android.os.SystemClock.elapsedRealtime());
+    }
+
+    /** Fleet FD-1: a report to the commander (unnumbered, from the link's socket). */
+    void sendTo(byte[] data, java.net.InetSocketAddress to) {
+        DatagramSocket s = socket;
+        if (s == null || s.isClosed() || to == null) return;
+        try {
+            s.send(new DatagramPacket(data, data.length, to.getAddress(), to.getPort()));
+        } catch (Exception e) {
+            // the next report goes in half a second
+        }
+    }
+
+    /** The pilot session's PC, or null. */
+    java.net.InetSocketAddress pilotAddress() {
+        UdpSender s = udpSender;
+        return s == null || s.getIp() == null ? null : new java.net.InetSocketAddress(s.getIp(), s.getPort());
+    }
+
+    /** A pilot session is up now. */
+    boolean inSession() {
+        ReceiverBuffer b = receiverBuffer;
+        return b != null && b.isConnected();
     }
 
     // ---- pc.50: the video's dead-man
