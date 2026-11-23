@@ -224,6 +224,19 @@ public class MainWindow extends JFrame {
         public de.droiddrone.pc.map.Elevation elevation() {
             return elevation;
         }
+
+        @Override
+        public boolean confirmTitled(String title, String text) {
+            javax.swing.JTextArea area = new javax.swing.JTextArea(text);
+            area.setEditable(false);
+            area.setFont(Theme.monoFont(java.awt.Font.PLAIN, 13f));
+            return Dialogs.confirm(MainWindow.this, area, title, javax.swing.JOptionPane.OK_CANCEL_OPTION) == javax.swing.JOptionPane.OK_OPTION;
+        }
+
+        @Override
+        public void view(String phone) {
+            if (DroneViewWindow.open(MainWindow.this, phone, addressOf(phone), config.getKey()) == null) logLine("VIEW " + phone + ": not reachable now.");
+        }
     });
 
     /** Fleet: the FOLLOW GROUP items of the right-click menus (FLEET rows, the map's drones). */
@@ -4107,7 +4120,9 @@ public class MainWindow extends JFrame {
         long shift = spectator || st == null ? 0 : VideoPins.shiftMs(st.g2gMs(), videoView.displayMs(), l.getPing());
         int[] size = v == null ? null : v.pictureSize();
         if (size != null) cameraView.setPictureSize(size[0], size[1]);
-        return d.withPins(videoPins.marks(t, track, miniMap.allPins(), t.isArmedNow(now, 2000), shift, now));
+        d = d.withPins(videoPins.marks(t, track, miniMap.allPins(), t.isArmedNow(now, 2000), shift, now));
+        // fleet GU-5: the fleet's figures for this PC's own drone (a spectator's or a watcher's OSD has none)
+        return spectator || l.isWatchOnly() ? d : d.withFleet(fleetOps.osd(t, now));
     }
 
     /** The worst stick lateness the phone saw in the last second, in a fresh report; -1 = unknown. */
@@ -5417,6 +5432,8 @@ public class MainWindow extends JFrame {
             }
             if (kind == MapView.Kind.LOST) queued = null;
             String state = (VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
+            String fleetState = fleetOps.stateOf(d.name()); // fleet FD-2: TRANSIT, YOUR TURN, IN GROUP ... on its label
+            if (fleetState != null) state = state + " - " + fleetState;
             // F-055: the sign where its track ends, when that is newer than the network's place of it
             FlightTrack lt = liveTrack;
             double[] at = signPlace(d.name(), p.lat(), p.lon(), d.at() - p.ageS() * 1000L, liveTrackDrone, lt == null ? null : lt.last());
@@ -5527,6 +5544,11 @@ public class MainWindow extends JFrame {
 
     /** The fleet's way back into the window. */
     private final class FleetHost implements FleetController.Host {
+        @Override
+        public String fleetState(String phone) {
+            return fleetOps.stateOf(phone); // fleet FD-2 / FL-10
+        }
+
         @Override
         public Connection connection() {
             return connection;
