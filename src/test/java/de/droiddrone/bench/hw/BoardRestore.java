@@ -1,5 +1,6 @@
 package de.droiddrone.bench.hw;
 
+import de.droiddrone.pc.setup.BetaflightPlan;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.CliWrite;
 
@@ -30,10 +31,12 @@ import java.util.function.Consumer;
  * <b>What it does.</b> The board as it is now is read and filed first (a snapshot of its own, "before-restore"). A
  * board whose dump and MSP facts are the snapshot's already is not written to (-Preplay=always replays all the same).
  * Else the CLI gets "defaults nosave" and then every line of the snapshot's "dump all" - all settings, all profiles,
- * whatever parts that Betaflight's dump has - through Drone setup's all-or-nothing write ({@link CliWrite}): the first
- * line Betaflight refuses, or a broken wire, ends it with "exit", and Betaflight drops every change since the CLI
- * opened. When every line was taken, "dump all" is asked for once more, still in the CLI: only if what Betaflight now
- * has in memory is the snapshot's dump, line for line, "save" is said - else "exit", nothing saved, and the lines
+ * whatever parts that Betaflight's dump has, the batch ended after them ({@link #replay}) - through Drone setup's
+ * all-or-nothing write ({@link CliWrite}): the first line Betaflight refuses, or a broken wire, ends it with "exit", and
+ * Betaflight drops every change since the CLI opened. The built-in config's ###ERROR lines in the answer to "defaults
+ * nosave" are no refusal ({@link #defaultsAnswer}). When every line was taken, "dump all" is asked for once more, still
+ * in the CLI: only if what Betaflight now has in memory is the snapshot's dump, line for line, "save" is said - else
+ * "exit", nothing saved, and the lines
  * that differ are named (a dump does not say everything: see {@link #NOT_PUT_BACK}). Then the board is read again
  * and its dump and MSP facts are compared with the snapshot; every difference is in the report.
  * <p>
@@ -57,6 +60,9 @@ public final class BoardRestore {
                     + "the restore then stops before save, nothing written, and names the lines.");
     /** Lines no dump has, and that would do something else than set a setting: a dump with one is not replayed. */
     private static final Set<String> NEVER_REPLAYED = Set.of("exit", "bl", "dfu", "msc", "flash_erase", "flash_write", "escprog");
+    static final String DEFAULTS = "defaults nosave", BATCH_START = "batch start", BATCH_END = "batch end";
+    /** Betaflight's line before it resets to its defaults (cli.c, cliDefaults): printed only once "defaults" took its words. */
+    static final String RESETTING = "# resetting to defaults";
     /** In the folder of the read before the restore: every line sent and Betaflight's answer to it. */
     static final String REPLAY_LOG = "restore-replay.txt";
     /** The replay's lines go into that file; this often one of them says on the screen how far it is. */
@@ -107,28 +113,43 @@ public final class BoardRestore {
     }
 
     /**
-     * The CLI lines that put a "dump all" back: "defaults nosave" first (after the batch's start; a dump has none of
-     * its own), then the dump's own lines without its "#" lines, and without its "save" - that is said apart, last.
+     * The CLI lines that put a "dump all" back: "defaults nosave" first, before the batch starts (a dump has none of
+     * its own; a diff all's, right after its "batch start", is said there instead), then the dump's own lines without
+     * its "#" lines and without its "save" - that is said apart, last - and "batch end" after them when the dump's
+     * batch is still open (a dump ends it with its save).
+     * <p>
+     * Why so (Betaflight 4.4.1, cli.c): a board with a built-in config ("# config: YES", the board's custom defaults)
+     * has that config run again at every reset to defaults - out loud in "defaults", each of its lines this build does
+     * not have answered ###ERROR after the "# resetting to defaults" line, and quietly in "dump" and "diff". Inside a
+     * batch each such line marks the batch as failed, and Betaflight then answers "save" with ###ERROR and saves
+     * nothing - an answer the save does not read. Before the batch they mark nothing; "batch end", before the dump in
+     * memory is asked for, says whether anything else did (###ERROR: the write stops, nothing saved).
      */
     static List<String> replay(String dumpAll) throws IOException {
         if (!CliWrite.usableBackup(dumpAll)) throw new IOException("The snapshot's \"dump all\" is not whole: not replayed.");
         List<String> commands = new ArrayList<>();
-        boolean defaults = false;
         for (String raw : dumpAll.split("\\R")) {
             String line = raw.strip();
             if (line.isEmpty() || line.startsWith("#")) continue;
             String word = line.split("\\s+")[0].toLowerCase(Locale.ROOT);
             if (word.equals("save")) continue;
             if (word.equals("defaults")) {
-                // alone, "defaults" saves and restarts at once
-                if (!line.equalsIgnoreCase("defaults nosave")) throw new IOException("The snapshot's dump has the line \"" + line + "\": not replayed.");
-                defaults = true;
+                // alone, "defaults" saves and restarts at once; after a setting it would undo that setting
+                boolean first = commands.isEmpty() || commands.size() == 1 && commands.get(0).equalsIgnoreCase(BATCH_START);
+                if (!line.equalsIgnoreCase(DEFAULTS) || !first) throw new IOException("The snapshot's dump has the line \"" + line + "\": not replayed.");
+                continue; // said first, below
             }
             if (NEVER_REPLAYED.contains(word)) throw new IOException("The snapshot's dump has the line \"" + line + "\": not replayed.");
             commands.add(line);
         }
-        if (!defaults) commands.add(!commands.isEmpty() && commands.get(0).equalsIgnoreCase("batch start") ? 1 : 0, "defaults nosave");
+        commands.add(0, DEFAULTS);
+        if (lastIndexOf(commands, BATCH_START) > lastIndexOf(commands, BATCH_END)) commands.add(BATCH_END);
         return commands;
+    }
+
+    private static int lastIndexOf(List<String> lines, String line) {
+        for (int i = lines.size() - 1; i >= 0; i--) if (lines.get(i).equalsIgnoreCase(line)) return i;
+        return -1;
     }
 
     /** Why this board must not be written to from this snapshot, or null: armed, another board, another firmware. */
@@ -261,9 +282,11 @@ public final class BoardRestore {
     }
 
     /**
-     * The CLI as the replay's write sees it. One answer is no refusal here: "feature -X" on a Betaflight built
-     * without X is answered "unavailable" - there is nothing to switch off, and the dump lists every feature's name.
-     * (To switch such a feature on stays a refusal.)
+     * The CLI as the replay's write sees it. Two answers are no refusal here: "feature -X" on a Betaflight built
+     * without X is answered "unavailable" - there is nothing to switch off, and the dump lists every feature's name
+     * (to switch such a feature on stays a refusal); and the built-in config's ###ERROR lines in the answer to
+     * "defaults nosave" ({@link #defaultsAnswer}). A refused line's whole answer goes into the notes when it has more
+     * than one line: the stop says only its first.
      */
     private static CliWrite.Cli lenient(BetaflightUsb fc, List<String> notes) {
         return command -> {
@@ -272,8 +295,30 @@ public final class BoardRestore {
                 notes.add("\"" + command + "\": this Betaflight is built without it - nothing to switch off.");
                 return "";
             }
+            if (command.equalsIgnoreCase(DEFAULTS)) reply = defaultsAnswer(reply, notes);
+            List<String> lines = reply.lines().map(String::strip).filter(l -> !l.isEmpty()).toList();
+            if (BetaflightPlan.refused(reply) && lines.size() > 1) notes.add("Betaflight's whole answer to \"" + command + "\": " + String.join(" | ", lines));
             return reply;
         };
+    }
+
+    /**
+     * "defaults nosave" as Betaflight 4.4.1 answers it (cli.c, cliDefaults): its "# resetting to defaults" line - only
+     * once the command was taken, just before the reset - and then, on a board with a built-in config, a ###ERROR for
+     * each line of that config this build does not have, as the config runs again (cliProcessCustomDefaults leaves
+     * its errors on). Those lines are the config's, not a refusal of the command: Betaflight meets them at every reset
+     * to its defaults, the dump sets every value after them, and the dump in memory is compared before the save. They
+     * are noted and taken out of the answer. An answer without that line first is left as it came: a ###ERROR in it
+     * (a refused "defaults") stops the write.
+     */
+    static String defaultsAnswer(String reply, List<String> notes) {
+        List<String> lines = reply.lines().map(String::strip).filter(l -> !l.isEmpty()).toList();
+        if (lines.isEmpty() || !lines.get(0).equalsIgnoreCase(RESETTING)) return reply;
+        List<String> config = lines.stream().filter(l -> l.startsWith("###ERROR")).toList();
+        if (config.isEmpty()) return reply;
+        notes.add("\"" + DEFAULTS + "\": the board's built-in config has " + config.size() + " line(s) this Betaflight does not take - said at every "
+                + "reset to its defaults, every value is set from the dump after it: " + String.join(" ", config));
+        return String.join("\n", lines.stream().filter(l -> !l.startsWith("###ERROR")).toList());
     }
 
     /**

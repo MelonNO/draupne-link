@@ -97,8 +97,8 @@ class BoardSnapshotTest {
         // the copy for a paste by hand is what a restore would send: defaults, then every line of the dump, then save
         String copy = Files.readString(copies.get(0));
         assertTrue(copy.startsWith("# " + s.version() + "\n"), copy);
-        assertTrue(copy.contains("\n\nbatch start\ndefaults nosave\nboard_name MADEUPF405\n"), copy);
-        assertTrue(copy.contains("\nset min_throttle = 1070\n") && copy.contains("\nset small_angle = 40\n") && copy.endsWith("\nrateprofile 0\nsave\n"), copy);
+        assertTrue(copy.contains("\n\ndefaults nosave\nbatch start\nboard_name MADEUPF405\n"), copy);
+        assertTrue(copy.contains("\nset min_throttle = 1070\n") && copy.contains("\nset small_angle = 40\n") && copy.endsWith("\nrateprofile 0\nbatch end\nsave\n"), copy);
         // read back: the same snapshot
         BoardSnapshot back = BoardSnapshot.load(folder);
         assertEquals(List.of(), s.differences(back));

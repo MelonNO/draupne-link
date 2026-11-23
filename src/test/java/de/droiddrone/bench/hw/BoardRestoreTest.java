@@ -156,7 +156,8 @@ class BoardRestoreTest {
     @Test
     void theReplayIsDefaultsThenTheDumpsOwnLinesWithoutItsSave() throws IOException {
         List<String> lines = BoardRestore.replay(board.saved());
-        assertEquals(List.of("batch start", "defaults nosave", "board_name MADEUPF405"), lines.subList(0, 3));
+        // defaults before the batch, the batch ended after the dump's last line (BoardRestoreBuiltInConfigTest: why)
+        assertEquals(List.of("defaults nosave", "batch start", "board_name MADEUPF405"), lines.subList(0, 3));
         assertEquals(1, lines.stream().filter(l -> l.equals("defaults nosave")).count());
         assertFalse(lines.contains("save"), "save is said apart, last, after every line was taken");
         assertTrue(lines.stream().noneMatch(l -> l.isBlank() || l.startsWith("#")), lines.toString());
@@ -165,11 +166,20 @@ class BoardRestoreTest {
                 "beeper RX_LOST", "beacon -RX_SET", "map AETR1234", "aux 0 0 2 1700 2100 0 0", "aux 19 0 0 900 900 0 0",
                 "set min_throttle = 1070", "set use_unsynced_pwm = OFF", "set min_check = 1050", "profile 1", "set p_roll = 60", "rateprofile 0")));
         assertTrue(lines.indexOf("feature -GPS") < lines.indexOf("feature GPS"), "off first, then on again");
-        assertEquals("rateprofile 0", lines.get(lines.size() - 1));
-        assertEquals(board.saved().lines().filter(l -> !l.isBlank() && !l.startsWith("#")).count(), lines.size(), "the dump's lines, save out, defaults in");
-        // a text that has "defaults nosave" of its own (a diff all) keeps it where it is
-        assertEquals(1, BoardRestore.replay(board.savedDiff()).stream().filter(l -> l.equals("defaults nosave")).count());
+        assertEquals(List.of("rateprofile 0", "batch end"), lines.subList(lines.size() - 2, lines.size()));
+        assertEquals(board.saved().lines().filter(l -> !l.isBlank() && !l.startsWith("#")).count() + 1, lines.size(),
+                "the dump's lines, save out, defaults and batch end in");
+        // a text that has "defaults nosave" of its own right after its batch start (a diff all): said first all the same, once
+        List<String> diff = BoardRestore.replay(board.savedDiff());
+        assertEquals(List.of("defaults nosave", "batch start"), diff.subList(0, 2));
+        assertEquals(1, diff.stream().filter(l -> l.equals("defaults nosave")).count());
+        assertEquals("batch end", diff.get(diff.size() - 1));
+        // after a setting it would undo that setting: not replayed
+        assertThrows(IOException.class, () -> BoardRestore.replay("# version\nbatch start\nset small_angle = 40\ndefaults nosave\n"));
         assertEquals(List.of("defaults nosave", "set small_angle = 40"), BoardRestore.replay("# version\r\nset small_angle = 40\r\nsave"));
+        // a batch the text ends itself (a diff): no second end
+        assertEquals(List.of("defaults nosave", "batch start", "set small_angle = 40", "batch end"),
+                BoardRestore.replay("# version\r\nbatch start\r\nset small_angle = 40\r\nbatch end"));
         // lines that would do something else than set a setting: the whole dump is not replayed
         for (String other : List.of("defaults", "exit", "flash_erase", "bl", "DFU")) {
             assertThrows(IOException.class, () -> BoardRestore.replay("# version\nset small_angle = 40\n" + other + "\n"), other);

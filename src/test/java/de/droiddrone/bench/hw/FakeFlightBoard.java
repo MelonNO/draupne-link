@@ -34,10 +34,11 @@ import java.util.TreeSet;
  * it and an 'R' sends the board into its bootloader ({@link #inBootloader}): CLI text must only go to an open CLI.
  * <p>
  * <b>The CLI</b> (Betaflight 4.4's words and formats): version, board_name, manufacturer_id, mcu_id, signature, get,
- * set, aux, feature, serial, timer, beeper, beacon, map, mixer, profile, rateprofile, batch, defaults [nosave],
- * diff [all], dump [all], save, exit. Anything else: ###ERROR. The settings are a made-up table of two dozen with
- * Betaflight's names ({@link #SETTINGS}), two PID profiles and two rate profiles (the real one has four each: fewer
- * here keeps a replay short).
+ * set, aux, feature, serial, timer, beeper, beacon, map, mixer, profile, rateprofile, batch, defaults [nosave] (and
+ * its built-in config: {@link #builtInConfigNotTaken}), diff [all], dump [all], save, exit. Anything else: ###ERROR;
+ * inside a batch an error keeps "batch end" and "save" from being taken. The settings are a made-up table of two
+ * dozen with Betaflight's names ({@link #SETTINGS}), two PID profiles and two rate profiles (the real one has four
+ * each: fewer here keeps a replay short).
  * <p>
  * <b>Dump and diff</b> have the real ones' shape where a replay meets it: "# version", the version, "# config: YES",
  * "batch start", ("defaults nosave" in "diff all" only,) board_name, manufacturer_id, mcu_id, signature, the parts
@@ -305,6 +306,15 @@ public final class FakeFlightBoard {
      * switched off, and "feature X" or "feature -X" is answered "Unavailable" (as BetaflightPlan.refused knows it).
      */
     public final Set<String> featuresNotBuilt = new TreeSet<>();
+    /**
+     * Lines of the board's built-in config ("# config: YES": Betaflight's custom defaults for this board) that this
+     * build does not have, such as "set camera_control_mode = HARDWARE_PWM" on a build without that part. Betaflight
+     * 4.4.1 runs that config again at every reset to its defaults (cli.c): out loud in "defaults" - each such line's
+     * ###ERROR after its "# resetting to defaults" line - and quietly in "diff" and "dump"; inside a batch each one
+     * marks the batch as failed either way, so "batch end" and "save" in it answer ###ERROR. Empty (as R1 made this
+     * board): a config this build takes whole.
+     */
+    public final List<String> builtInConfigNotTaken = new ArrayList<>();
     /** MSP_STATUS' sensors: a GPS that talks, a compass. */
     public volatile boolean gps, mag;
     /** A restart takes the port away: that many looks for it (the port list, an open) find none. */
@@ -1208,6 +1218,12 @@ public final class FakeFlightBoard {
         return "###ERROR IN " + command + ": " + what + "###";
     }
 
+    /** A line of the built-in config this build does not have, as Betaflight answers it ("set x = 1": ERROR_INVALID_NAME). */
+    private String notTaken(String line) {
+        String[] p = line.strip().split("\\s+", 2);
+        return error(p[0], "INVALID NAME: " + (p.length > 1 ? p[1] : ""));
+    }
+
     /** A command that reads or changes the settings in memory, and what it prints (lines joined by CR LF). */
     private String configCommand(String line) {
         String[] parts = line.split("\\s+", 2);
@@ -1274,18 +1290,24 @@ public final class FakeFlightBoard {
                     return "Command batch started";
                 }
                 if (args.equalsIgnoreCase("end")) {
-                    batch = false;
-                    return "Command batch ended";
+                    boolean failed = batch && batchError;
+                    batch = batchError = false;
+                    return failed ? "###ERROR IN batch: ERRORS WERE DETECTED - PLEASE REVIEW BEFORE CONTINUING###" : "Command batch ended";
                 }
                 return error(word, "INVALID OPTION");
-            case "defaults":
+            case "defaults": {
                 if (!args.equalsIgnoreCase("nosave")) return ""; // alone it saves and restarts: wireCommand
                 ram = new Config(brushed);
                 batchError = false; // as Betaflight: the batch goes on, its errors so far forgotten
-                return "# resetting to defaults";
+                // cli.c: cliPrintHashLine (CR LF, "# ", the words, CR LF), then the built-in config again with its errors on
+                StringBuilder out = new StringBuilder("\r\n# resetting to defaults");
+                for (String config : builtInConfigNotTaken) out.append("\r\n").append(notTaken(config));
+                return out.toString();
+            }
             case "diff":
             case "dump":
                 if (!args.isEmpty() && !args.equalsIgnoreCase("all")) return error(word, "INVALID ARGUMENT: " + args);
+                if (!builtInConfigNotTaken.isEmpty() && batch) batchError = true; // its built-in config again, quietly: marks the batch all the same
                 String listing = print(ram, word.equals("diff"), args.equalsIgnoreCase("all"));
                 if (cutShortListings > 0) { // as a reader sees it that took a heading's "# " for the prompt
                     cutShortListings--;
