@@ -1,6 +1,7 @@
 package de.droiddrone.pc.air.virt;
 
 import de.droiddrone.common.FleetCmd;
+import de.droiddrone.common.FleetCommandGate;
 import de.droiddrone.common.FleetStatus;
 import de.droiddrone.common.group.ExitPlan;
 import de.droiddrone.common.group.FleetIntent;
@@ -48,6 +49,13 @@ public final class VirtualFleetPhone implements AutoCloseable {
         this.key = key;
         this.copter = new VirtualCopter(id, e, n, altAmsl, groundAmsl, id.hashCode());
         socket = new DatagramSocket(0, bind);
+        sender = new de.droiddrone.common.UdpSender(socket);
+        session = new de.droiddrone.common.ReceiverBuffer(sender, true, key, null);
+        gate = new de.droiddrone.common.SessionGate(key);
+        heartbeatAt = start + Math.floorMod(id.hashCode(), 1000); // ArduPilot's heartbeat: once a second, its own phase
+        Thread s = new Thread(this::sessionRun, "virtualFleetPhoneSession-" + id);
+        s.setDaemon(true);
+        s.start();
         Thread r = new Thread(this::receive, "virtualFleetPhone-" + id);
         r.setDaemon(true);
         r.start();
@@ -102,19 +110,26 @@ public final class VirtualFleetPhone implements AutoCloseable {
             if (!linkUp) continue;
             FleetCmd c = FleetCmd.read(p.getData(), p.getLength());
             if (c == null) {
-                java.util.function.Consumer<DatagramPacket> h = other;
-                if (h != null) h.accept(p);
+                int delay = sessionDelayMs;
+                if (delay <= 0) {
+                    notFleet(p);
+                } else {
+                    DatagramPacket copy = new DatagramPacket(java.util.Arrays.copyOf(p.getData(), p.getLength()), p.getLength(),
+                            p.getAddress(), p.getPort());
+                    LATER.schedule(() -> notFleet(copy), delay, java.util.concurrent.TimeUnit.MILLISECONDS);
+                }
                 continue;
             }
             if (!c.key.equals(key)) continue;
             long now = System.currentTimeMillis();
+            if (!commandTaken(p.getAddress(), now)) continue;
             commander = new InetSocketAddress(p.getAddress(), p.getPort());
             commanderHeardAt = now;
             reportUntil = Math.max(reportUntil, now + 15_000);
             switch (c.inner()) {
                 case FleetCmd.GROUP -> {
                     GroupOrder o = GroupOrder.decode(c.data, c.at + 1);
-                    if (o == null) break;
+                    if (o == null || inSession()) break; // the piloted drone is never a follower (FL-7)
                     FollowerBrain b = brain;
                     if (b == null) brain = b = new FollowerBrain(1000);
                     b.order(o, now);
@@ -146,7 +161,17 @@ public final class VirtualFleetPhone implements AutoCloseable {
                         act(seq.order(o, now));
                     }
                 }
-                case FleetCmd.DISBAND -> brain = null;
+                case FleetCmd.DISBAND -> {
+                    if (brain != null) leftGroupAt = now;
+                    brain = null;
+                }
+                case FleetCmd.LEAD -> { // as FleetRole: a follower told to lead lets its commander's session in (FL-6)
+                    if (c.length < 4) break;
+                    boolean lead = c.data[c.at + 1] != 0;
+                    boolean follower = brain != null || leftGroupAt != 0 && now - leftGroupAt <= FleetCommandGate.LEFT_GROUP_MS;
+                    if (!lead) leadOrderedAt = 0;
+                    else if (!inSession() && follower && (leadOrderedAt == 0 || now - leadOrderedAt > FleetCommandGate.LEAD_CONNECT_MS)) leadOrderedAt = now;
+                }
                 case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 default -> {
                 }
@@ -167,7 +192,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 autoTick();
                 launchTick(now);
                 FollowerBrain b = brain;
-                if (b != null && now - lastBrain >= 100) {
+                if (b != null && now - lastBrain >= 100 && !inSession()) {
                     lastBrain = now;
                     double[] ll = latLon();
                     FleetIntent i = b.tick(now, commanderHeardAt, ll[0], ll[1], copter.battery, copter.gnssOk);
@@ -176,6 +201,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 copter.step(STEP_MS / 1000.0, 0, 0, groundAmsl);
             }
             report(now);
+            sessionTelemetry(now);
         }
     }
 
@@ -354,9 +380,245 @@ public final class VirtualFleetPhone implements AutoCloseable {
         }
     }
 
+    // ---- the pilot's session (fleet FL-6): the phone's session rules (SessionGate, the hand-over's FleetCommandGate),
+    // the Connect answered, the Config taken, pings, ArduPilot's armed word once a second, the stick frames counted
+
+    private final de.droiddrone.common.UdpSender sender;
+    private volatile de.droiddrone.common.ReceiverBuffer session;
+    private final de.droiddrone.common.SessionGate gate;
+    private final Object sessionLock = new Object();
+    /** The PC that flew it last (the phone's lastPcIp / lastPcPort), or null. */
+    private volatile InetAddress lastPcIp;
+    private volatile int lastPcPort;
+    /** FL-6 as FleetRole: when its commander's order to lead came to it as a follower (0: none), and when it left the group. */
+    private volatile long leadOrderedAt, leftGroupAt;
+    private volatile int sessions, sticksTaken;
+    /** When the current session's first stick frame came (wall clock; 0: none yet). */
+    private volatile long firstStickAt;
+    private long heartbeatAt;
+    /** ArduPilot Copter 4.6 on a quad, as the phone reports it. */
+    static final de.droiddrone.common.FcInfo ARDUCOPTER = new de.droiddrone.common.FcInfo(
+            de.droiddrone.common.FcInfo.FC_VARIANT_ARDUPILOT, 4, 6, 0, 0, 0, 3, 2);
+
+    /** The pilot session's packets wait this long on their way in (0: none). */
+    private volatile int sessionDelayMs;
+    private static final java.util.concurrent.ScheduledExecutorService LATER = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "virtualFleetPhoneLater");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * A mobile network's round trip for the pilot's session: every packet of it waits this long on its way in - the whole
+     * round trip on one way, a little worse than the real thing (a stick frame arrives a round trip after it went, not half).
+     */
+    public void setSessionDelayMs(int roundTripMs) {
+        sessionDelayMs = Math.max(0, roundTripMs);
+    }
+
+    /** No fleet command: the pilot's session's, or the other handler's (a name query). */
+    private void notFleet(DatagramPacket p) {
+        if (!open || pilotPacket(p)) return;
+        java.util.function.Consumer<DatagramPacket> h = other;
+        if (h != null) h.accept(p);
+    }
+
+    /** This PC flew it last (its pilot session's address and port), and commands it since (FleetRole.pilotWas). */
+    public void flownBy(InetSocketAddress pc) {
+        lastPilot(pc);
+        commander = pc;
+        commanderHeardAt = System.currentTimeMillis();
+    }
+
+    /** Only who flew it last (its commander stays): a reserve set up on another PC, then commanded from this one. */
+    public void lastPilot(InetSocketAddress pc) {
+        lastPcIp = pc.getAddress();
+        lastPcPort = pc.getPort();
+    }
+
+    /** A pilot's session is up. */
+    public boolean inSession() {
+        de.droiddrone.common.ReceiverBuffer b = session;
+        return b != null && b.isConnected();
+    }
+
+    /** Pilot sessions started so far. */
+    public int sessions() {
+        return sessions;
+    }
+
+    /** The pilot's stick frames taken so far. */
+    public int sticksTaken() {
+        return sticksTaken;
+    }
+
+    /** When the session's first stick frame came (wall clock), 0: none in this session. */
+    public long firstStickAt() {
+        return firstStickAt;
+    }
+
+    /**
+     * A fleet command (keyed): FleetCommandGate as FleetRole asks it. A phone made without a past (no commander, no
+     * pilot: the tests' and the show's) takes the first, as before.
+     */
+    private boolean commandTaken(InetAddress from, long now) {
+        InetSocketAddress c = commander;
+        if (c == null && lastPcIp == null) return true;
+        boolean in = inSession();
+        boolean fromPilot = in && from.equals(sender.getIp());
+        int v = de.droiddrone.common.FleetCommandGate.decide(in, fromPilot, c != null, c != null && c.getAddress().equals(from),
+                c == null ? Long.MAX_VALUE : now - commanderHeardAt, !armed || copter.landed);
+        return v != de.droiddrone.common.FleetCommandGate.REFUSE;
+    }
+
+    /** A packet of a pilot's session (the phone's receive thread's rules); false: not one, for the other handler. */
+    private boolean pilotPacket(DatagramPacket p) {
+        int len = p.getLength();
+        if (len < 1) return true;
+        byte[] d = java.util.Arrays.copyOf(p.getData(), len);
+        if (d[0] == de.droiddrone.common.PacketIds.NAME_QUERY || d[0] == de.droiddrone.common.PacketIds.NAME_ASSIGN) return false;
+        InetAddress from = p.getAddress();
+        int port = p.getPort();
+        long now = System.currentTimeMillis();
+        long id = de.droiddrone.common.SessionGate.sessionId(d, len);
+        synchronized (sessionLock) {
+            de.droiddrone.common.ReceiverBuffer b = session;
+            if (b.isConnected()) {
+                if (from.equals(sender.getIp()) && port == sender.getPort()) {
+                    lastPcIp = from;
+                    lastPcPort = port;
+                    de.droiddrone.common.SessionGate.Verdict v = gate.fromPilot(d, len, now, id);
+                    if (v == de.droiddrone.common.SessionGate.Verdict.SAME_SESSION) return true;
+                    if (v == de.droiddrone.common.SessionGate.Verdict.NEW_SESSION) b = newSession(b, from, port);
+                } else {
+                    de.droiddrone.common.SessionGate.Verdict v = gate.fromOther(d, len, from.equals(sender.getIp()), !armed, now, id);
+                    if (v != de.droiddrone.common.SessionGate.Verdict.NEW_SESSION) return true; // the phone tells it PILOT_AT
+                    b = newSession(b, from, port);
+                }
+            } else {
+                boolean pilotKnown = lastPcIp != null, sameAddress = from.equals(lastPcIp), samePc = sameAddress && port == lastPcPort;
+                de.droiddrone.common.SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress, () -> !armed, now, id);
+                if (v == de.droiddrone.common.SessionGate.Verdict.SPECTATOR && mayLead(from, now)) v = gate.leadSession(now, id);
+                if (v != de.droiddrone.common.SessionGate.Verdict.NEW_SESSION) return v != de.droiddrone.common.SessionGate.Verdict.DROP;
+                sessionStarted(from, port);
+            }
+            if (d[0] == de.droiddrone.common.UdpCommon.RcFrame) {
+                if (b.isConnected()) {
+                    if (firstStickAt == 0) firstStickAt = now;
+                    sticksTaken++;
+                }
+                return true;
+            }
+            if (d[0] == de.droiddrone.common.UdpCommon.Connect) de.droiddrone.common.SessionGate.markAnswer(d, len);
+            b.addPacket(new DatagramPacket(d, len, from, port));
+        }
+        return true;
+    }
+
+    private boolean mayLead(InetAddress from, long now) {
+        InetSocketAddress c = commander;
+        long at = leadOrderedAt;
+        if (!de.droiddrone.common.FleetCommandGate.leadConnect(at != 0, c != null && c.getAddress().equals(from), now - at)) return false;
+        leadOrderedAt = 0;
+        return true;
+    }
+
+    private de.droiddrone.common.ReceiverBuffer newSession(de.droiddrone.common.ReceiverBuffer old, InetAddress pilot, int port) {
+        de.droiddrone.common.ReceiverBuffer b = new de.droiddrone.common.ReceiverBuffer(sender, true, key, null);
+        session = b;
+        old.close();
+        sessionStarted(pilot, port);
+        return b;
+    }
+
+    private void sessionStarted(InetAddress pilot, int port) {
+        sessions++;
+        firstStickAt = 0;
+        InetSocketAddress c = commander; // FleetRole.pilotWas: the pilot's PC commands it from now on
+        if (c == null || !c.getAddress().equals(pilot)) commander = new InetSocketAddress(pilot, port);
+        commanderHeardAt = System.currentTimeMillis();
+    }
+
+    /** The session's numbered packets (the phone's buffer thread). */
+    private void sessionRun() {
+        while (open) {
+            try {
+                de.droiddrone.common.ReceiverBuffer b = session;
+                de.droiddrone.common.SavedPacket packet;
+                while ((packet = b.getNextPacket()) != null) sessionData(packet.data);
+                b.processTimer();
+                Thread.sleep(2);
+            } catch (InterruptedException e) {
+                return;
+            } catch (RuntimeException e) {
+                // the next packet
+            }
+        }
+    }
+
+    private void sessionData(byte[] data) {
+        de.droiddrone.common.DataReader r = new de.droiddrone.common.DataReader(data, true);
+        byte name = r.readByte();
+        if (de.droiddrone.common.UdpCommon.isPacketNumbered(name)) r.readShort();
+        try {
+            switch (name) {
+                case de.droiddrone.common.UdpCommon.Ping -> {
+                    boolean toEndPoint = r.readBoolean();
+                    long time = r.readLong();
+                    byte target = r.getRemaining() > 0 ? r.readByte() : -1;
+                    sender.sendPong(toEndPoint, time, target);
+                }
+                case de.droiddrone.common.UdpCommon.Config -> {
+                    int version = r.readShort();
+                    byte answer = version == de.droiddrone.common.SettingsCommon.versionCompatibleCode
+                            ? de.droiddrone.common.UdpCommon.ConfigReceived : de.droiddrone.common.UdpCommon.VersionMismatch;
+                    sender.sendPacket(new de.droiddrone.common.UdpPacketData(answer).getData());
+                }
+                case de.droiddrone.common.UdpCommon.FcInfo -> {
+                    de.droiddrone.common.UdpPacketData p = new de.droiddrone.common.UdpPacketData(de.droiddrone.common.UdpCommon.FcInfo);
+                    p.daos.writeByte(ARDUCOPTER.getFcVariant());
+                    p.daos.writeByte(4);
+                    p.daos.writeByte(6);
+                    p.daos.writeByte(0);
+                    p.daos.writeByte(0);
+                    p.daos.writeByte(0);
+                    p.daos.writeByte(3);
+                    p.daos.writeByte(2);
+                    sender.sendPacket(p.getData());
+                }
+                default -> {
+                    // video, audio, the profile: a fleet phone here has no camera
+                }
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // the next one
+        }
+    }
+
+    /** In a session: ArduPilot's heartbeat - its mode and armed word - as the phone forwards it, once a second. */
+    private void sessionTelemetry(long now) {
+        if (now < heartbeatAt) return;
+        heartbeatAt += 1000;
+        if (now >= heartbeatAt) heartbeatAt = now + 1000;
+        if (!inSession() || !linkUp) return;
+        try {
+            de.droiddrone.common.DataWriter w = new de.droiddrone.common.DataWriter(true);
+            w.writeInt(auto ? 3 : 5);
+            w.writeBoolean(armed && !copter.landed);
+            de.droiddrone.common.UdpPacketData p = new de.droiddrone.common.UdpPacketData(de.droiddrone.common.UdpCommon.TelemetryData);
+            de.droiddrone.common.TelemetryRecords.write(new de.droiddrone.common.TelemetryData(de.droiddrone.common.FcCommon.DD_MAVLINK_MODE,
+                    w.getData()), ARDUCOPTER, p.daos);
+            sender.sendPacket(p.getData());
+        } catch (IOException | RuntimeException ignored) {
+            // the next heartbeat
+        }
+    }
+
     @Override
     public void close() {
         open = false;
+        sender.close();
+        session.close();
         socket.close();
     }
 }
