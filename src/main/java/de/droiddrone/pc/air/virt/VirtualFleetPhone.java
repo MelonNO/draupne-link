@@ -97,6 +97,21 @@ public final class VirtualFleetPhone implements AutoCloseable {
                     FollowerBrain b = brain;
                     if (plan != null && b != null) b.plan(plan);
                 }
+                case de.droiddrone.common.MissionBlock.PACKET -> { // a route: kept, "read back" at once (the real phone uploads it over USB)
+                    de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
+                    if (b != null) synchronized (copter) {
+                        route = b.items;
+                        routeBlock = b.blockId;
+                        routeNext = 1;
+                        holding = false;
+                    }
+                }
+                case de.droiddrone.common.FcCommand.PACKET -> {
+                    de.droiddrone.common.FcCommand k = de.droiddrone.common.FcCommand.read(java.util.Arrays.copyOfRange(c.data, c.at, c.at + c.length), c.length);
+                    if (k != null && k.kind == de.droiddrone.common.FcCommand.MISSION_START) synchronized (copter) {
+                        auto = route != null;
+                    }
+                }
                 case FleetCmd.MARK -> launchMark(c.data, c.at, c.length, now);
                 case FleetCmd.LAUNCH -> {
                     de.droiddrone.common.launch.LaunchWire.Order o = de.droiddrone.common.launch.LaunchWire.decodeOrder(c.data, c.at + 1, c.length - 1);
@@ -122,6 +137,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             }
             long now = System.currentTimeMillis();
             synchronized (copter) {
+                autoTick();
                 launchTick(now);
                 FollowerBrain b = brain;
                 if (b != null && now - lastBrain >= 100) {
@@ -151,6 +167,10 @@ public final class VirtualFleetPhone implements AutoCloseable {
             s.velU = copter.vu;
             s.battery = (int) Math.round(copter.battery);
             s.homeAmsl = copter.homeAmsl;
+            s.routeBlock = routeBlock;
+            s.routeState = route == null ? 0 : de.droiddrone.common.MissionUpload.DONE;
+            s.routePercent = route == null ? 0 : 100;
+            s.mode = auto ? 3 : 5;
             if (armed && !copter.landed) s.flags |= FleetStatus.ARMED;
             if (copter.gnssOk) s.flags |= FleetStatus.GNSS;
             if (copter.landed) s.flags |= FleetStatus.LANDED;
@@ -164,6 +184,42 @@ public final class VirtualFleetPhone implements AutoCloseable {
             socket.send(new DatagramPacket(d, d.length, to.getAddress(), to.getPort()));
         } catch (IOException ignored) {
             // the next report
+        }
+    }
+
+    // ---- fleet FD-3: a route flown in AUTO (waypoints one after another; at the end it holds, as B5 says)
+
+    private java.util.List<de.droiddrone.common.MissionItem> route;
+    private int routeBlock, routeNext;
+    private volatile boolean auto;
+
+    public boolean flyingRoute() {
+        return auto;
+    }
+
+    /** At the route's hold (or its end): YOUR TURN. */
+    public boolean routeDone() {
+        return route != null && (holding || routeNext >= route.size());
+    }
+
+    private boolean holding;
+
+    private void autoTick() {
+        if (!auto || route == null) return;
+        while (routeNext < route.size() && route.get(routeNext).command != de.droiddrone.common.MissionItem.NAV_WAYPOINT
+                && route.get(routeNext).command != de.droiddrone.common.MissionItem.NAV_LOITER_UNLIM) routeNext++;
+        if (routeNext >= route.size() || holding) { // the end, or its hold: it stays there (LOITER) until told
+            auto = false;
+            copter.apply(FleetIntent.HOLD, refLat, refLon);
+            return;
+        }
+        de.droiddrone.common.MissionItem w = route.get(routeNext);
+        double lat = w.x / 1e7, lon = w.y / 1e7;
+        copter.apply(FleetIntent.guided(lat, lon, w.z, Double.NaN, copter.guidedSpeed), refLat, refLon);
+        double[] ll = latLon();
+        if (GeoLocal.distance(ll[0], ll[1], lat, lon) < 3 && Math.abs(copter.u - w.z) < 2) {
+            if (w.command == de.droiddrone.common.MissionItem.NAV_LOITER_UNLIM) holding = true; // B5: holds, calls the pilot
+            else routeNext++;
         }
     }
 

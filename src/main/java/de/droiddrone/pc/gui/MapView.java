@@ -322,6 +322,13 @@ class MapView extends JComponent {
         fleetItems = items;
     }
 
+    /** Fleet FD-3: the items for a place on the map (DISPATCH here); null: none. */
+    private volatile java.util.function.BiFunction<Double, Double, List<JMenuItem>> fleetPlaceItems;
+
+    void setFleetPlaceItems(java.util.function.BiFunction<Double, Double, List<JMenuItem>> items) {
+        fleetPlaceItems = items;
+    }
+
     /** Fleet G4 / GU-3: the follower group from above (null: none). */
     private volatile de.droiddrone.pc.air.GroupLink.Picture group;
 
@@ -1192,6 +1199,12 @@ class MapView extends JComponent {
             fly.addActionListener(e -> onDroneConnect.accept(drone.name(), false));
             menu.add(fly);
             menu.addSeparator();
+        }
+        if (drone == null && fleetPlaceItems != null) { // fleet FD-3: DISPATCH here
+            double[] at = toLatLon(x, y);
+            List<JMenuItem> items = fleetPlaceItems.apply(at[0], at[1]);
+            for (JMenuItem it : items) menu.add(it);
+            if (!items.isEmpty()) menu.addSeparator();
         }
         if (drone != null && fleetItems != null) { // fleet G1: FOLLOW GROUP, the floor
             List<JMenuItem> items = fleetItems.apply(drone.name());

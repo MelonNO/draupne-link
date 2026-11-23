@@ -57,6 +57,174 @@ final class FleetOps {
         default boolean outOfAction(String phone) {
             return false;
         }
+
+        /** Where a dispatch's routes take the ground from: the offline store (TerrainStore.onDisk). */
+        default de.droiddrone.pc.route.TerrainSource terrain() {
+            return de.droiddrone.pc.route.TerrainStore.onDisk();
+        }
+
+        /** The elevation service, for terrain a dispatch's routes lack (null: none - the offline store only). */
+        default de.droiddrone.pc.map.Elevation elevation() {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------------ area C: DISPATCH
+
+    /** One drone's dispatch under way: its leg, its route's block, how far it got. */
+    private static final class Sent {
+        final de.droiddrone.pc.route.Dispatch.Leg leg;
+        final int block;
+        final long launchAt;
+        boolean uploaded, launched, started;
+        long sentAt;
+
+        Sent(de.droiddrone.pc.route.Dispatch.Leg leg, int block, long launchAt) {
+            this.leg = leg;
+            this.block = block;
+            this.launchAt = launchAt;
+        }
+    }
+
+    private final java.util.Map<String, Sent> dispatched = new java.util.LinkedHashMap<>();
+    private int nextBlock = (int) (System.nanoTime() & 0x7fff) + 1;
+    static final double DISPATCH_HEIGHT_M = 60;
+
+    /** The map's right-click on a place: DISPATCH every drone marked SAFE TO AUTOLAUNCH there (FD-3). */
+    List<JMenuItem> placeItems(double lat, double lon) {
+        List<JMenuItem> out = new ArrayList<>();
+        int n = 0;
+        for (String d : marked.keySet()) if (!dispatched.containsKey(d)) n++;
+        if (n == 0) return out;
+        JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(DISPATCH_HEIGHT_M) + " m above ground)");
+        go.addActionListener(e -> dispatch(lat, lon));
+        out.add(go);
+        return out;
+    }
+
+    /** FD-3: each a slot, a layer and a terrain route of its own, staggered launches; at the slot it holds (YOUR TURN). */
+    void dispatch(double lat, double lon) {
+        List<de.droiddrone.pc.route.Dispatch.Drone> drones = new ArrayList<>();
+        GroupLink l;
+        try {
+            l = ensureLink();
+        } catch (java.io.IOException e) {
+            host.alert("DISPATCH: " + e.getMessage());
+            return;
+        }
+        for (String d : marked.keySet()) {
+            if (dispatched.containsKey(d)) continue;
+            FleetStatus s = l.status(d);
+            if (s == null || !s.has(FleetStatus.GNSS)) {
+                host.alert("DISPATCH: " + d + " hasn't reported a position with a fix - left out.");
+                continue;
+            }
+            drones.add(new de.droiddrone.pc.route.Dispatch.Drone(d, s.lat, s.lon, s.homeAmsl));
+        }
+        if (drones.isEmpty()) return;
+        de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
+        Thread t = new Thread(() -> {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    List<de.droiddrone.pc.route.Dispatch.Leg> legs = de.droiddrone.pc.route.Dispatch.plan(drones, lat, lon, DISPATCH_HEIGHT_M,
+                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT);
+                    SwingUtilities.invokeLater(() -> begin(legs));
+                    return;
+                } catch (de.droiddrone.pc.route.RoutePlanner.MissingTerrain m) {
+                    de.droiddrone.pc.map.Elevation el = host.elevation();
+                    if (el == null || attempt > 0 || !(terrain instanceof de.droiddrone.pc.route.TerrainStore store)) {
+                        SwingUtilities.invokeLater(() -> host.alert("DISPATCH: the terrain there isn't known (" + m.nodes().size() + " heights)."));
+                        return;
+                    }
+                    SwingUtilities.invokeLater(() -> host.log("DISPATCH: looking up " + m.nodes().size() + " terrain heights ..."));
+                    de.droiddrone.pc.route.TerrainFill.fill(store, m.nodes(), de.droiddrone.pc.route.TerrainFill.of(el), (a, b, c) -> { }, () -> false);
+                }
+            }
+        }, "dispatchPlan");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void begin(List<de.droiddrone.pc.route.Dispatch.Leg> legs) {
+        long now = System.currentTimeMillis();
+        for (de.droiddrone.pc.route.Dispatch.Leg leg : legs) {
+            Sent s = new Sent(leg, nextBlock++ & 0xffff, now + Math.round(leg.launchAfterS() * 1000));
+            dispatched.put(leg.name(), s);
+            host.wake(leg.name());
+            sendRoute(leg.name(), s);
+        }
+        host.log("DISPATCH: " + legs.size() + " drones, each its own slot and layer; launches " + Math.round(de.droiddrone.pc.route.Dispatch.STAGGER_S) + " s apart.");
+    }
+
+    private void sendRoute(String drone, Sent s) {
+        GroupLink l = link;
+        InetSocketAddress a = host.addressOf(drone);
+        if (l == null || a == null) return;
+        l.phone(drone, a);
+        l.command(drone, de.droiddrone.common.MissionBlock.packet(s.block, s.leg.mission().items()));
+        s.sentAt = System.currentTimeMillis();
+    }
+
+    /** Once a second: each dispatch on to its next step. */
+    private void tickDispatch() {
+        GroupLink l = link;
+        if (l == null) return;
+        long now = System.currentTimeMillis();
+        for (java.util.Map.Entry<String, Sent> e : dispatched.entrySet()) {
+            String d = e.getKey();
+            Sent s = e.getValue();
+            FleetStatus st = l.status(d);
+            if (!s.uploaded) {
+                if (st != null && st.routeBlock == s.block && st.routeState == de.droiddrone.common.MissionUpload.DONE) {
+                    s.uploaded = true;
+                    host.log("DISPATCH: " + d + "'s route is on the drone, read back.");
+                } else if (st != null && st.routeBlock == s.block && st.routeState == de.droiddrone.common.MissionUpload.FAILED) {
+                    host.alert("DISPATCH: " + d + "'s route upload failed.");
+                    s.uploaded = true;
+                    s.launched = s.started = true; // not launched: no route
+                } else if (now - s.sentAt >= 1000) {
+                    sendRoute(d, s);
+                }
+                continue;
+            }
+            if (!s.launched && now >= s.launchAt) {
+                Marked m = marked.get(d);
+                if (m == null) continue;
+                de.droiddrone.common.launch.LaunchWire.Order o = new de.droiddrone.common.launch.LaunchWire.Order();
+                o.markId = m.markId();
+                o.callId = s.block;
+                o.approachHeightM = s.leg.climbToM();
+                o.floorM = Math.min(floorM, s.leg.climbToM());
+                o.columnLat = st == null ? m.lat() : st.lat;
+                o.columnLon = st == null ? m.lon() : st.lon;
+                pending.put(d, o);
+                sendOrder(d);
+                s.launched = true;
+                host.log("DISPATCH: " + d + " launching (climbs to " + Math.round(s.leg.climbToM()) + " m).");
+            }
+        }
+    }
+
+    /** The launch past the floor: the route starts (AUTO). Called from onLaunchStatus. */
+    private boolean dispatchClimbed(String drone, de.droiddrone.common.launch.LaunchWire.Status st) {
+        Sent s = dispatched.get(drone);
+        if (s == null || s.started || !st.passedFloor) return s != null;
+        GroupLink l = link;
+        if (l == null) return true;
+        l.command(drone, de.droiddrone.common.FcCommand.simple(de.droiddrone.common.FcCommand.MISSION_START));
+        s.started = true;
+        marked.remove(drone);
+        host.log("DISPATCH: " + drone + " TRANSIT to its slot. At the end it holds: YOUR TURN.");
+        return true;
+    }
+
+    /** FD-4: TAKE CONTROL of a dispatched drone (the sticks to it, centred pickup: it holds in LOITER at its slot). */
+    private void takeControlItems(String phone, List<JMenuItem> out) {
+        Sent s = dispatched.get(phone);
+        if (s == null || !s.started) return;
+        JMenuItem take = new JMenuItem("TAKE CONTROL: " + phone);
+        take.addActionListener(e -> host.flyNow(phone));
+        out.add(take);
     }
 
     // ------------------------------------------------------------------ area F: reserves
@@ -136,6 +304,7 @@ final class FleetOps {
         java.util.List<de.droiddrone.pc.launch.ReserveChoice.Reserve> out = new ArrayList<>();
         GroupLink l = link;
         for (java.util.Map.Entry<String, Marked> e : marked.entrySet()) {
+            if (dispatched.containsKey(e.getKey())) continue; // on its way somewhere else
             Marked m = e.getValue();
             FleetStatus s = l == null ? null : l.status(e.getKey());
             double lat = s != null ? s.lat : m.lat(), lon = s != null ? s.lon : m.lon();
@@ -188,7 +357,14 @@ final class FleetOps {
 
     /** Once a second (the window's refresh): calls waiting for their column, orders sent again until answered. */
     void tickReserves() {
-        if (reserves == null) return;
+        tickDispatch();
+        if (reserves == null) {
+            for (String d : new ArrayList<>(pending.keySet())) {
+                Long at = orderSentAt.get(d);
+                if (at == null || System.currentTimeMillis() - at >= 2000) sendOrder(d);
+            }
+            return;
+        }
         handle(reserves.tick(System.currentTimeMillis()));
         for (String d : new ArrayList<>(pending.keySet())) {
             Long at = orderSentAt.get(d);
@@ -208,6 +384,11 @@ final class FleetOps {
 
     private void onLaunchStatus(String drone, de.droiddrone.common.launch.LaunchWire.Status s) {
         pending.remove(drone); // its phone has the order
+        if (dispatchClimbed(drone, s)) { // a dispatched drone: its route, not the group
+            if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
+                    + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason));
+            return;
+        }
         if (reserves == null) return;
         GroupLink.Picture p = picture();
         handle(reserves.onStatus(System.currentTimeMillis(), drone, s, reserveList(), p == null ? 0 : p.lat(), p == null ? 0 : p.lon()));
@@ -290,6 +471,7 @@ final class FleetOps {
     /** The right-click menu's fleet items for a drone. */
     List<JMenuItem> items(String phone) {
         List<JMenuItem> out = new ArrayList<>();
+        takeControlItems(phone, out); // FD-4
         // AL-1: SAFE TO AUTOLAUNCH on any drone but the one flown
         if (!phone.equalsIgnoreCase(String.valueOf(host.flownPhone()))) {
             JMenuItem m = new JMenuItem(isMarked(phone) ? "SAFE TO AUTOLAUNCH: clear " + phone : "SAFE TO AUTOLAUNCH: mark " + phone);

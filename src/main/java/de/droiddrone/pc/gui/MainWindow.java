@@ -219,6 +219,11 @@ public class MainWindow extends JFrame {
         public boolean outOfAction(String phone) {
             return isOutOfAction(phone);
         }
+
+        @Override
+        public de.droiddrone.pc.map.Elevation elevation() {
+            return elevation;
+        }
     });
 
     /** Fleet: the FOLLOW GROUP items of the right-click menus (FLEET rows, the map's drones). */

@@ -393,6 +393,7 @@ final class MapWindow extends JFrame {
             }
         });
         if (main != null) map.setFleetItems(main::fleetItems); // fleet G1: the map's drones too
+        if (main != null) map.setFleetPlaceItems((lat, lon) -> main.fleetOps.placeItems(lat, lon)); // fleet FD-3: DISPATCH here
         if (main != null) fleetPanel.setLastKnown(main::lastKnownLine); // 1.0.71: the selected phone's last grid, from disk
         tools.lastKnown.setToolTipText("Every phone's last grid, time and battery");
         tools.lastKnown.addActionListener(e -> {
