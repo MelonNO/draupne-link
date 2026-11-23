@@ -283,6 +283,16 @@ public final class RoutePlanner {
      * climbs to RTL_ALT and flies straight home - clears it too. ArduPilot takes 200 - 300000 cm.
      */
     public static int rtlAltCm(Plan plan, TerrainSource terrain, double homeLat, double homeLon, double clearanceM) throws MissingTerrain {
+        return rtlAltCm(plan, terrain, homeLat, homeLon, homeLat, homeLon, clearanceM);
+    }
+
+    /**
+     * RT-9 with a rally point (AC-10): RTL flies to (toLat, toLon), not home - the straight lines to it and to home both
+     * clear the ground by clearanceM; the height is still above home (RTL_ALT's own reference).
+     */
+    public static int rtlAltCm(Plan plan, TerrainSource terrain, double homeLat, double homeLon, double toLat, double toLon,
+                               double clearanceM) throws MissingTerrain {
+        boolean rally = toLat != homeLat || toLon != homeLon;
         double homeGround = terrain.heightM(homeLat, homeLon);
         Map<Long, double[]> missing = new LinkedHashMap<>();
         if (Double.isNaN(homeGround)) missing.put(TerrainStore.key(TerrainStore.latIndex(homeLat), TerrainStore.lonIndex(homeLon)),
@@ -296,6 +306,7 @@ public final class RoutePlanner {
             if (!waypoint && l.along()[i] < nextAt && i != l.along().length - 1) continue;
             nextAt = l.along()[i] + 50;
             highest = Math.max(highest, highestOnLine(l.lat()[i], l.lon()[i], homeLat, homeLon, terrain, missing));
+            if (rally) highest = Math.max(highest, highestOnLine(l.lat()[i], l.lon()[i], toLat, toLon, terrain, missing));
         }
         if (!missing.isEmpty()) throw new MissingTerrain(new ArrayList<>(missing.values()));
         double cm = (highest - homeGround + clearanceM) * 100;

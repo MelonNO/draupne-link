@@ -349,6 +349,9 @@ final class RouteWindow extends JDialog {
         refreshButtons();
         // AC-10: its own rally point first (where it took off, or the nearest free spot), sent only when it changed
         double[] at = rallyPlace.apply(home.latDeg(), home.lonDeg());
+        returnHome = new double[]{home.latDeg(), home.lonDeg()}; // RT-9: its way home, after the route (setReturn)
+        returnRally = at;
+        returnHomeAmsl = homeAmsl;
         List<MissionItem> rally = de.droiddrone.pc.launch.RallyPlan.items(at[0], at[1], route == null ? 60 : route.heightM());
         if (!sameItems(rally, rallySent)) {
             say("Sending its rally point ...", Theme.WARN);
@@ -391,13 +394,109 @@ final class RouteWindow extends JDialog {
                     if (sending) say("On the drone: " + pct + " %", Theme.WARN);
                 }),
                 r -> SwingUtilities.invokeLater(() -> {
+                    // GO only for the plan that went up: edited meanwhile, the drone has the route before the edit
+                    if (r.done() && plan == p) {
+                        setReturn(l, m, p, r.text()); // RT-9: its RTL_ALT before GO
+                        return;
+                    }
                     sending = false;
                     say(r.text(), r.done() ? Theme.OK : Theme.BAD);
-                    // GO only for the plan that went up: edited meanwhile, the drone has the route before the edit
-                    if (r.done() && plan == p) mission = m;
-                    else if (r.done()) say("Route edited while it went up: UPLOAD again.", Theme.WARN);
+                    if (r.done()) say("Route edited while it went up: UPLOAD again.", Theme.WARN);
                     refreshButtons();
                 }));
+    }
+
+    /** RT-9 / FD-6: the drone's height given the route's own (FleetOps.returnForFlown: planned with the others out alone). */
+    interface ReturnPlan {
+        double height(double minM, double farLat, double farLon, double homeAmsl);
+    }
+
+    private ReturnPlan returnPlan = (minM, farLat, farLon, homeAmsl) -> minM;
+    private java.util.function.IntConsumer returnOnDrone = dm -> { };
+    /** Sets RTL_ALT (cm) on the drone and reads it back: null when taken, else why not. The tunnel; a stand-in in tests. */
+    private java.util.function.BiFunction<ControlLink, Integer, String> rtlSetter = RouteWindow::rtlThroughTunnel;
+
+    void setReturnPlan(ReturnPlan plan, java.util.function.IntConsumer onDrone) {
+        returnPlan = plan == null ? (minM, farLat, farLon, homeAmsl) -> minM : plan;
+        returnOnDrone = onDrone == null ? dm -> { } : onDrone;
+    }
+
+    void setRtlSetter(java.util.function.BiFunction<ControlLink, Integer, String> setter) {
+        rtlSetter = setter == null ? RouteWindow::rtlThroughTunnel : setter;
+    }
+
+    /** Where the route's RTL goes: the home and rally point of the last upload. */
+    private double[] returnHome, returnRally;
+    private double returnHomeAmsl;
+
+    /**
+     * RT-9: RTL_ALT over the highest ground on the straight way home (and to its rally point) from anywhere on the route,
+     * clear by the route's lowest set height - a failsafe RTL clears it too - set and read back before GO.
+     */
+    private void setReturn(ControlLink l, MissionBuilder.Mission m, RoutePlanner.Plan p, String routeText) {
+        say("Setting its return height ...", Theme.WARN);
+        double[] home = returnHome, rally = returnRally;
+        double homeAmsl = returnHomeAmsl;
+        Route r = p.route();
+        double clearance = Double.MAX_VALUE, far = -1;
+        double[] farthest = {home[0], home[1]};
+        for (int i = 0; i < r.size(); i++) {
+            clearance = Math.min(clearance, r.heightAt(i));
+            double d = de.droiddrone.pc.map.Mercator.distanceM(home[0], home[1], r.point(i).lat(), r.point(i).lon());
+            if (d > far) {
+                far = d;
+                farthest = new double[]{r.point(i).lat(), r.point(i).lon()};
+            }
+        }
+        double clear = clearance, farLat = farthest[0], farLon = farthest[1];
+        Thread t = new Thread(() -> {
+            double min = Double.NaN;
+            String why = null;
+            for (int attempt = 0; attempt < 2 && Double.isNaN(min); attempt++) {
+                try {
+                    min = RoutePlanner.rtlAltCm(p, terrain, home[0], home[1], rally[0], rally[1], clear) / 100.0;
+                } catch (RoutePlanner.MissingTerrain mt) {
+                    if (attempt > 0 || TerrainFill.fill(terrain, mt.nodes(), lookup, (a, b, c) -> { }, () -> false) == 0) why = "terrain not known";
+                }
+            }
+            double[] h = {Double.NaN};
+            if (why == null) {
+                double lowest = min;
+                try {
+                    SwingUtilities.invokeAndWait(() -> h[0] = Math.max(lowest, returnPlan.height(lowest, farLat, farLon, homeAmsl)));
+                } catch (Exception e) {
+                    why = "stopped";
+                }
+            }
+            int dm = Double.isNaN(h[0]) ? -1 : (int) Math.ceil(h[0] * 10 - 1e-6);
+            if (why == null) why = rtlSetter.apply(l, dm * 10);
+            String no = why;
+            SwingUtilities.invokeLater(() -> {
+                sending = false;
+                if (no != null) {
+                    say("Return height: " + no + " No GO.", Theme.BAD);
+                } else if (plan == p) {
+                    mission = m;
+                    returnOnDrone.accept(dm);
+                    say(routeText + " Comes home " + Math.round(dm / 10.0) + " m up.", Theme.OK);
+                } else {
+                    say("Route edited while it went up: UPLOAD again.", Theme.WARN);
+                }
+                refreshButtons();
+            });
+        }, "routeReturn");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** RTL_ALT through the tunnel (MavSession), read back; null when taken. */
+    static String rtlThroughTunnel(ControlLink l, int cm) {
+        de.droiddrone.pc.setup.ardu.TunnelWire wire = new de.droiddrone.pc.setup.ardu.TunnelWire(l);
+        try (de.droiddrone.pc.setup.ardu.MavSession s = new de.droiddrone.pc.setup.ardu.MavSession(wire, false)) {
+            return s.setParam("RTL_ALT", cm, 2000) == cm ? null : "RTL_ALT not taken.";
+        } catch (Exception e) {
+            return "RTL_ALT: " + e.getMessage();
+        }
     }
 
     /**

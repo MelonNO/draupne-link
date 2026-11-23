@@ -148,6 +148,7 @@ final class FleetOps {
     void dispatch(double lat, double lon) {
         if (host.watchOnly() || closed) return; // GU-8; nothing after close
         List<de.droiddrone.pc.route.Dispatch.Drone> drones = new ArrayList<>();
+        java.util.Map<String, double[]> rallyTo = new java.util.HashMap<>();
         GroupLink l;
         try {
             l = ensureLink();
@@ -163,6 +164,8 @@ final class FleetOps {
                 continue;
             }
             drones.add(new de.droiddrone.pc.route.Dispatch.Drone(d, s.lat, s.lon, s.homeAmsl));
+            Rally r = rallyAt(d, s.lat, s.lon); // AC-10 / RT-9: the way home goes to it
+            rallyTo.put(d, new double[]{r.lat, r.lon});
         }
         if (drones.isEmpty()) return;
         de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
@@ -170,7 +173,7 @@ final class FleetOps {
             for (int attempt = 0; attempt < 2; attempt++) {
                 try {
                     List<de.droiddrone.pc.route.Dispatch.Leg> legs = de.droiddrone.pc.route.Dispatch.plan(drones, lat, lon, DISPATCH_HEIGHT_M,
-                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT);
+                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT, rallyTo);
                     java.util.Map<String, double[]> starts = new java.util.HashMap<>();
                     for (de.droiddrone.pc.route.Dispatch.Drone d : drones) starts.put(d.name(), new double[]{d.lat(), d.lon()});
                     SwingUtilities.invokeLater(() -> {
@@ -208,6 +211,9 @@ final class FleetOps {
             }
             dispatched.put(leg.name(), s);
             host.wake(leg.name());
+            FleetStatus st = link == null ? null : link.status(leg.name()); // RT-9 / FD-6: its return height, the others again
+            soloOut(leg.name(), leg.slotLat(), leg.slotLon(), st == null ? 0 : st.homeAmsl,
+                    Double.isNaN(leg.rtlMinM()) ? DISPATCH_HEIGHT_M + leg.layerM() : leg.rtlMinM());
             sendRoute(leg.name(), s);
         }
         host.log("DISPATCH: " + legs.size() + " drones, each its own slot and layer; launches " + Math.round(de.droiddrone.pc.route.Dispatch.STAGGER_S) + " s apart.");
@@ -240,6 +246,7 @@ final class FleetOps {
                     host.alert("DISPATCH: " + d + "'s route upload failed.");
                     s.uploaded = true;
                     s.launched = s.started = true; // not launched: no route
+                    soloBack(d);
                 } else if (now - s.sentAt >= 1000) {
                     sendRoute(d, s);
                 }
@@ -452,6 +459,7 @@ final class FleetOps {
             for (java.util.Map.Entry<String, Marked> e : marked.entrySet()) {
                 if (e.getValue().markId() != o.markId) continue;
                 pending.put(e.getKey(), o);
+                reserveOut(e.getKey(), o); // RT-9 / FD-6: its return height before it leaves
                 host.wake(e.getKey());
                 sendOrder(e.getKey());
             }
@@ -603,6 +611,7 @@ final class FleetOps {
 
     /** Once a second (the window's refresh): calls waiting for their column, orders sent again until answered. */
     void tickReserves() {
+        tickReturns(de.droiddrone.pc.MonoClock.ms());
         tickRallies(System.currentTimeMillis());
         tickDispatch();
         dropRefusedMarks();
@@ -643,6 +652,7 @@ final class FleetOps {
         InetSocketAddress a = host.addressOf(drone);
         if (o == null || l == null || a == null) return;
         if (!rallyReady(drone, System.currentTimeMillis())) return; // AC-10: not off the ground before its rally point is on it
+        if (!returnReady(drone, de.droiddrone.pc.MonoClock.ms())) return; // RT-9 / FD-6: nor before its return height is
         l.phone(drone, a);
         l.command(drone, de.droiddrone.common.FleetCmd.launch(de.droiddrone.common.launch.LaunchWire.encode(o)));
         orderSentAt.put(drone, System.currentTimeMillis());
@@ -652,6 +662,7 @@ final class FleetOps {
         pending.remove(drone); // its phone has the order
         keepLaunch(drone, s);
         if (dispatchClimbed(drone, s)) { // a dispatched drone: its route, not the group
+            if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) soloBack(drone);
             if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
                     + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason));
             return;
@@ -660,6 +671,7 @@ final class FleetOps {
         GroupLink.Picture p = picture();
         handle(reserves.onStatus(System.currentTimeMillis(), drone, s, reserveList(), p == null ? 0 : p.lat(), p == null ? 0 : p.lon()));
         if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED || s.state == de.droiddrone.common.launch.LaunchSequence.NOT_LAUNCHED) {
+            soloBack(drone);
             marked.remove(drone);
             if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
                     + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason) + ". The next reserve is called.");
@@ -691,12 +703,14 @@ final class FleetOps {
                 joinedTo.put(drone, g);
                 holdSaid.remove(drone);
                 marked.remove(drone);
+                soloBack(drone); // a follower now: its exit plan sets its return height (AC-41)
                 l.addReserve(drone, st.battery == 255 ? 50 : st.battery, l.nextApproachAlt(), System.currentTimeMillis()); // GU-9: under the group's lock
                 host.log(again ? drone + " joins " + d.lead() + "'s group." : drone + " joins the group.");
             }
             case NEW_GROUP -> {
                 holdSaid.remove(drone);
                 marked.remove(drone);
+                soloBack(drone); // in a group now: its exit plan sets its return height (AC-41)
                 forming.add(drone);
                 host.log(drone + ": group lost - joins " + d.lead() + ".");
                 start(d.lead(), List.of(drone), why -> {
@@ -1290,5 +1304,152 @@ final class FleetOps {
         String e = event.toUpperCase(java.util.Locale.ROOT);
         return e.contains("LINK LOST") || e.contains("GNSS LOST") || e.contains("TRAFFIC") || e.contains("LEAD DOWN")
                 || e.contains("LEAD TAKEN OVER") || e.contains("LAUNCH FAILED") || e.contains("HOME NOW");
+    }
+
+    // ------------------------------------------------------------------ RT-9 / FD-6: return heights of drones out alone
+
+    /** Every drone out on its own: its RTL_ALT over the terrain, a layer apart where ways home cross, read back. */
+    private final de.droiddrone.pc.air.ReturnHeights returns = new de.droiddrone.pc.air.ReturnHeights();
+    /** Reserves whose RT-9 height is being worked out (terrain looked up): held until it is. */
+    private final Set<String> returnPlanning = new java.util.HashSet<>();
+
+    /** Its RTL height is planned and on the drone, read back: it may leave the ground. Said once when it waits long. */
+    private boolean returnReady(String drone, long now) {
+        if (returns.confirmed(drone)) return true;
+        if (returns.overdue(drone, now)) host.alert(drone + ": return height not confirmed - stays on the ground.");
+        return false;
+    }
+
+    /** The planned height (m above home) of a drone out alone; NaN: none (tests, the map). */
+    double returnHeightOf(String drone) {
+        return returns.heightM(drone);
+    }
+
+    boolean returnOnDrone(String drone) {
+        return returns.confirmed(drone);
+    }
+
+    /** A drone goes out alone (or its plan changed): every drone's height again, the changed ones to their drones. */
+    private void soloOut(String drone, double farLat, double farLon, double homeAmsl, double minM) {
+        Rally r = rallies.get(drone);
+        applyReturns(returns.put(drone, farLat, farLon, r == null ? Double.NaN : r.lat, r == null ? Double.NaN : r.lon,
+                homeAmsl, minM, design));
+    }
+
+    private void soloBack(String drone) {
+        returnPlanning.remove(drone);
+        applyReturns(returns.remove(drone, design));
+    }
+
+    private void applyReturns(java.util.Map<String, Double> changed) {
+        if (changed.isEmpty()) return;
+        StringBuilder sb = new StringBuilder("Return heights:");
+        for (java.util.Map.Entry<String, Double> e : changed.entrySet()) sb.append(' ').append(e.getKey()).append(' ')
+                .append(Math.round(e.getValue())).append(" m");
+        host.log(sb.toString());
+        long now = de.droiddrone.pc.MonoClock.ms();
+        for (String d : changed.keySet()) sendReturn(d, now);
+    }
+
+    private void sendReturn(String drone, long now) {
+        GroupLink l = link;
+        InetSocketAddress a = host.addressOf(drone);
+        if (l == null || a == null || !returns.due(drone, now)) return;
+        l.phone(drone, a);
+        l.command(drone, de.droiddrone.common.FleetCmd.ret(returns.heightM(drone)));
+    }
+
+    /** Once a second: reports read (confirmed, or back on the ground), RETURN again where it isn't on the drone yet. */
+    private void tickReturns(long now) {
+        GroupLink l = link;
+        for (String d : returns.drones()) {
+            FleetStatus s = l == null ? null : l.status(d);
+            if (s != null) {
+                int r = returns.report(d, s.rtlAltDm, s.has(FleetStatus.ARMED), s.has(FleetStatus.LANDED));
+                if (r > 0) host.log(d + ": return height " + Math.round(returns.heightM(d)) + " m on the drone, read back.");
+                if (r < 0) {
+                    soloBack(d);
+                    continue;
+                }
+            }
+            sendReturn(d, now);
+            if (pending.containsKey(d) || dispatched.containsKey(d)) returnReady(d, now); // the alert, when it waits long
+        }
+    }
+
+    /**
+     * RT-9 for a called reserve: from its spot straight to the group at its approach height; the height over the ground
+     * on the way home is worked out off Swing's thread (terrain looked up once when missing). Until then it is held.
+     */
+    private void reserveOut(String drone, de.droiddrone.common.launch.LaunchWire.Order o) {
+        if (returns.contains(drone) || !returnPlanning.add(drone)) return;
+        GroupLink l = link;
+        FleetStatus s = l == null ? null : l.status(drone);
+        GroupLink.Picture p = picture();
+        if (s == null || p == null) {
+            returnPlanning.remove(drone);
+            return; // asked again at its next order
+        }
+        rallyAt(drone, s.lat, s.lon);
+        Rally r = rallies.get(drone);
+        double[] from = {s.lat, s.lon}, to = {p.lat(), p.lon()};
+        double homeAmsl = s.homeAmsl, height = Math.max(o.approachHeightM, floorM);
+        double rLat = r == null ? s.lat : r.lat, rLon = r == null ? s.lon : r.lon;
+        de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
+        Thread t = new Thread(() -> {
+            String why = null;
+            double min = Double.NaN;
+            for (int attempt = 0; attempt < 2 && Double.isNaN(min); attempt++) {
+                try {
+                    de.droiddrone.pc.route.Route route = new de.droiddrone.pc.route.Route(drone);
+                    route.setHeightM(height);
+                    route.add(to[0], to[1]);
+                    de.droiddrone.pc.route.RoutePlanner.Plan plan = de.droiddrone.pc.route.RoutePlanner.plan(route, from, true, terrain,
+                            de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT);
+                    min = de.droiddrone.pc.route.RoutePlanner.rtlAltCm(plan, terrain, from[0], from[1], rLat, rLon, height) / 100.0;
+                } catch (de.droiddrone.pc.route.RoutePlanner.MissingTerrain m) {
+                    de.droiddrone.pc.map.Elevation el = host.elevation();
+                    if (el == null || attempt > 0 || !(terrain instanceof de.droiddrone.pc.route.TerrainStore store)) {
+                        why = "terrain not known";
+                        break;
+                    }
+                    de.droiddrone.pc.route.TerrainFill.fill(store, m.nodes(), de.droiddrone.pc.route.TerrainFill.of(el), (a, b, c) -> { }, () -> false);
+                } catch (RuntimeException e) {
+                    why = e.getMessage();
+                    break;
+                }
+            }
+            double got = min;
+            String no = why;
+            SwingUtilities.invokeLater(() -> {
+                if (!returnPlanning.remove(drone) || closed) return;
+                if (Double.isNaN(got)) {
+                    host.alert(drone + ": no return height (" + no + ") - stays on the ground.");
+                    return;
+                }
+                soloOut(drone, to[0], to[1], homeAmsl, got);
+            });
+        }, "returnPlan");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * RT-9 / FD-6 for the pilot's own drone before a route's GO (RouteWindow): its lowest height (minM, the route's own
+     * RT-9), the far end of the route, its home's height above sea level. Planned with the others out alone; returns its
+     * height (m above home), which the route window sets through the tunnel and reads back ({@link #flownReturnOnDrone}).
+     */
+    double returnForFlown(double minM, double farLat, double farLon, double homeAmsl) {
+        String drone = host.flownPhone();
+        if (drone == null || host.watchOnly()) return minM;
+        soloOut(drone, farLat, farLon, homeAmsl, minM);
+        double h = returns.heightM(drone);
+        return Double.isNaN(h) ? minM : h;
+    }
+
+    /** The route window read RTL_ALT back on the pilot's own drone (dm). */
+    void flownReturnOnDrone(int dm) {
+        String drone = host.flownPhone();
+        if (drone != null) returns.confirm(drone, dm);
     }
 }
