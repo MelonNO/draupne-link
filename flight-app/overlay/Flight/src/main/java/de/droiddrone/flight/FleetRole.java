@@ -274,7 +274,10 @@ final class FleetRole {
     /** Centred sticks, the pilot's last switches (ARM stays on, the mode switch where it was): FL-7. */
     private void holdSticks(Udp udp, Mavlink m) {
         short[] last = udp.lastPilotFrame();
-        if (last == null || last.length < 4) return;
+        // never flown by the pilot (a reserve that launched by itself, a drone dispatched and never taken): the four
+        // sticks centred, the switches left alone. Before, it got no sticks at all - with no radio receiver ArduPilot's
+        // throttle then reads low, and LOITER (the follower's hold when its link is lost) sinks it to the ground
+        if (last == null || last.length < 4) last = new short[]{ArduLinkLoss.CENTRE, ArduLinkLoss.CENTRE, ArduLinkLoss.CENTRE, ArduLinkLoss.CENTRE};
         short[] hold = java.util.Arrays.copyOf(last, last.length);
         hold[0] = hold[1] = hold[2] = hold[3] = ArduLinkLoss.CENTRE;
         m.setRcChannelsOverride(hold);
