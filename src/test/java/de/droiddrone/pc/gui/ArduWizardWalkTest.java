@@ -196,7 +196,7 @@ class ArduWizardWalkTest {
         AbstractButton confirm = button(settings.view(), "CONFIRM");
         waitForOnSwing(() -> text(settings).contains("RC7_OPTION 0 -> 153"), 10_000, "the plan: " + text(settings));
         String plan = text(settings);
-        assertTrue(plan.contains("ADSB_TYPE - not in this firmware, left out"), plan);
+        assertTrue(plan.contains("NOT SET: ADSB_TYPE - not on this board"), plan); // never silent: said first
         assertTrue(plan.contains("RC5_OPTION 153 -> 0"), "the old ARM switch (AUX1) taken off: " + plan);
         assertTrue(plan.contains("FLTMODE_CH 5 -> 8"), plan);
         assertFalse(settings.canContinue(), "NEXT waits for CONFIRM");

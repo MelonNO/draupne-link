@@ -53,7 +53,17 @@ public final class ArduSetupWriter {
         log.accept("Backup: " + backup.getFileName());
         List<String> written = new ArrayList<>();
         for (ArduPlan.Change c : plan) {
-            if (c.missing()) continue;
+            if (!c.writable()) continue; // the other version's name, or not on this board (the plan said NOT SET)
+            if (c.missing()) { // shown by an enable written (or on) before it: looked for again now
+                float have;
+                try {
+                    have = fc.readParam(c.name(), PARAM_TIMEOUT_MS);
+                } catch (IOException e) {
+                    have = Float.NaN;
+                }
+                if (Float.isNaN(have)) return new Result(backup, written, c.name() + " didn't show with " + c.shownBy() + " on: stopped.");
+                if (ArduPlan.same(have, c.to())) continue;
+            }
             String failure = writeOne(c.name(), c.to());
             if (failure != null) return new Result(backup, written, failure);
             written.add(c.name());
