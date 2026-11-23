@@ -59,12 +59,18 @@ final class ArduSetupPages {
          */
         volatile int radioArmAux = 1, radioModeAux = 2;
 
+        /**
+         * Which board the pages work on: one more each time a board is found (FIND, a restart). A page's "written" and
+         * its plan belong to one board - another board found after Back starts them anew.
+         */
+        volatile int board;
+
         /** The radio's switches from this PC's settings. */
         void radioFrom(de.droiddrone.pc.PcConfig config) {
             int arm = de.droiddrone.pc.setup.ModeSwitch.parseArmAux(config.getString(de.droiddrone.pc.setup.ModeSwitch.ARM_KEY));
             de.droiddrone.pc.setup.ModeSwitch modes = de.droiddrone.pc.setup.ModeSwitch.parse(config.getString(de.droiddrone.pc.setup.ModeSwitch.KEY));
             radioArmAux = arm > 0 ? arm : 1;
-            radioModeAux = modes != null && modes.aux() != radioArmAux ? modes.aux() : radioArmAux == 2 ? 3 : 2;
+            radioModeAux = ArduPlan.modeAuxBeside(radioArmAux, modes != null ? modes.aux() : 2);
         }
 
         MavSession fc() {
@@ -72,10 +78,19 @@ final class ArduSetupPages {
             return f == null ? null : f.session();
         }
 
+        /** A board found: the pages start anew on it. */
+        void use(ArduUsb.Found f) {
+            params = null;
+            board++;
+            found = f;
+        }
+
+        /** The board let go: its parameters with it (another board may come next). */
         void close() {
             MavSession s = fc();
             if (s != null) s.close();
             found = null;
+            params = null;
         }
     }
 
@@ -83,17 +98,31 @@ final class ArduSetupPages {
     static void open(MainWindow main) {
         State state = new State();
         state.radioFrom(main.config());
-        List<WizardDialog.Page> pages = List.of(new FindPage(state), new SettingsPage(state), new PortsPage(state),
+        WizardDialog w = create(main, state, () -> main.logLine("ArduPilot drone setup finished."));
+        w.setVisible(true);
+        state.close();
+    }
+
+    /** The guide's window, not shown yet; closing it lets the board go (the tests drive it as the pilot would). */
+    static WizardDialog create(java.awt.Window owner, State state, Runnable finished) {
+        return create(owner, state, pages(state), finished);
+    }
+
+    /** FIND, SETTINGS, PORTS, FRAME AND TUNING, CALIBRATE, MOTORS, BENCH on one board's state. */
+    static List<WizardDialog.Page> pages(State state) {
+        return List.of(new FindPage(state), new SettingsPage(state), new PortsPage(state),
                 new TuningPage(state), new CalibratePage(state), new MotorsPage(state), new BenchPage(state));
-        WizardDialog w = new WizardDialog(main, "ArduPilot drone setup", pages, () -> main.logLine("ArduPilot drone setup finished."));
+    }
+
+    static WizardDialog create(java.awt.Window owner, State state, List<WizardDialog.Page> pages, Runnable finished) {
+        WizardDialog w = new WizardDialog(owner, "ArduPilot drone setup", pages, finished);
         w.addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent e) {
                 state.close();
             }
         });
-        w.setVisible(true);
-        state.close();
+        return w;
     }
 
     static JTextArea logArea() {
@@ -177,16 +206,18 @@ final class ArduSetupPages {
         }
 
         private void search() {
-            if (searching) return;
+            if (searching || flashing) return; // never while firmware is being written: the board is in its bootloader
             searching = true;
             state.close();
+            fwFile.setEnabled(false);
+            fwNewest.setEnabled(false);
             result.setText("Listening on USB ...");
             result.setForeground(Theme.MUTED);
             background(() -> {
                 try {
                     ArduUsb.Found f = ArduUsb.find();
                     if (f == null) return "No ArduPilot board heard on USB.";
-                    state.found = f;
+                    state.use(f);
                     return null;
                 } catch (Exception e) {
                     return e.getMessage();
@@ -343,6 +374,9 @@ final class ArduSetupPages {
             }
         }
 
+        /** Tests only: the file "picked" in place of the file chooser (null: the chooser). */
+        static volatile java.util.function.Supplier<java.nio.file.Path> fileForTest;
+
         /** One board the pilot may pick for DFU: a Betaflight board's serial port, or a board already in DFU. */
         record DfuPick(de.droiddrone.pc.setup.BetaflightUsb.Port port, String dfuId) {
             @Override
@@ -412,7 +446,11 @@ final class ArduSetupPages {
                 return;
             }
             java.nio.file.Path file = null;
-            if (!newest) {
+            java.util.function.Supplier<java.nio.file.Path> chosen = fileForTest;
+            if (!newest && chosen != null) {
+                file = chosen.get();
+                if (file == null) return;
+            } else if (!newest) {
                 javax.swing.JFileChooser c = new javax.swing.JFileChooser();
                 c.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("ArduPilot with bootloader (.hex, .bin)", "hex", "bin"));
                 if (c.showOpenDialog(result) != javax.swing.JFileChooser.APPROVE_OPTION) return;
@@ -581,6 +619,7 @@ final class ArduSetupPages {
             p.add(form, BorderLayout.NORTH);
             p.add(new JScrollPane(plan), BorderLayout.CENTER);
             confirm.addActionListener(e -> write());
+            confirm.setEnabled(false); // until there is a plan (a press before it did nothing)
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
             Theme.transparent(row);
             row.add(confirm);
@@ -590,17 +629,26 @@ final class ArduSetupPages {
 
         ArduPlan.Choices choices() {
             state.cells = (Integer) cells.getValue();
-            ArduPlan.Choices c = new ArduPlan.Choices((Integer) sysId.getValue(), (Integer) cells.getValue(), (Integer) capacity.getValue(), 
-                    state.radioArmAux, state.radioModeAux,
-                    de.droiddrone.pc.setup.ardu.ArduTuning.modesWith(ArduPlan.DEFAULT_MODES, state.autotunePos), (Integer) rtlAlt.getValue(), 10, 2.5, 1.5, true);
             de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
             // the switches from Betaflight; cells and pack went into the boxes (and can be changed there)
-            return bf == null ? c : new ArduPlan.Choices(c.sysId(), c.cells(), c.capacityMah(), bf.armAux() != null ? bf.armAux() : c.armAux(),
-                    bf.modeAux() != null ? bf.modeAux() : c.modeAux(), c.flightModes(), c.rtlAltM(), c.cruiseMs(), c.climbMs(), c.descentMs(), c.avoidance());
+            int arm = bf != null && bf.armAux() != null ? bf.armAux() : state.radioArmAux;
+            int mode = bf != null && bf.modeAux() != null ? bf.modeAux() : state.radioModeAux;
+            // ARM from Betaflight and the mode switch from this PC's radio may name one AUX: never both on one channel
+            if (mode == arm) mode = ArduPlan.modeAuxBeside(arm, state.radioModeAux);
+            return new ArduPlan.Choices((Integer) sysId.getValue(), (Integer) cells.getValue(), (Integer) capacity.getValue(), arm, mode,
+                    de.droiddrone.pc.setup.ardu.ArduTuning.modesWith(ArduPlan.DEFAULT_MODES, state.autotunePos), (Integer) rtlAlt.getValue(), 10, 2.5, 1.5, true);
         }
+
+        /** The board the plan and "written" belong to. */
+        private int seenBoard = -1;
 
         @Override
         void onShow() {
+            if (seenBoard != state.board) { // another board since: written on that one, not on this
+                seenBoard = state.board;
+                written = false;
+                changes = List.of();
+            }
             de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
             if (bf != null && !seeded) { // fleet AS-11: once, then the pilot's
                 seeded = true;
@@ -633,32 +681,58 @@ final class ArduSetupPages {
             List<String> lines = ArduPlan.lines(changes);
             if (lines.isEmpty()) append(plan, "Nothing to change.");
             for (String l : lines) append(plan, l);
+            confirm.setEnabled(!writing && changes.stream().anyMatch(c -> !c.missing()));
             if (id != null && !written && id.intValue() != 1 && (Integer) sysId.getValue() == 2) sysId.setValue(id.intValue());
         }
 
+        /** After a write: the plan against what the board holds now (the lines written stay shown); CONFIRM only for what is left. */
+        private void replanAfterWrite() {
+            Map<String, Float> now = state.params;
+            if (now == null) return;
+            de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
+            changes = ArduPlan.plan(choices(), bf == null ? Map.of() : bf.extra(), now);
+            confirm.setEnabled(changes.stream().anyMatch(c -> !c.missing()));
+        }
+
+        /** A write runs: CONFIRM stays grey until it is over (a second press would write it all again). */
+        private boolean writing;
+
         private void write() {
             MavSession fc = state.fc();
-            if (fc == null || changes.isEmpty()) return;
+            if (fc == null || changes.isEmpty() || writing) return;
+            writing = true;
             confirm.setEnabled(false);
             append(plan, "--- writing");
+            List<ArduPlan.Change> todo = changes;
+            int board = state.board;
             background(() -> {
+                ArduSetupWriter.Result r;
                 try {
-                    return new ArduSetupWriter(fc, l -> append(plan, l)).write(changes, AppPaths.arduPilotBackupsDir(), java.time.LocalDateTime.now());
+                    r = new ArduSetupWriter(fc, l -> append(plan, l)).write(todo, AppPaths.arduPilotBackupsDir(), java.time.LocalDateTime.now());
                 } catch (Exception e) {
                     return new ArduSetupWriter.Result(null, List.of(), e.getMessage());
                 }
-            }, r -> {
-                confirm.setEnabled(true);
-                if (r.ok()) {
-                    written = true;
-                    append(plan, "Done: " + r.written().size() + " written, each read back. Backup: " + r.backup().getFileName());
-                    log("ArduPilot setup: " + r.written().size() + " parameters written, backup " + r.backup().getFileName());
-                    try {
+                if (r.ok() && board == state.board) {
+                    try { // read again here, off Swing's thread (it was read on it: up to 30 s of a frozen window)
                         state.params = fc.readAllParams(30_000);
                     } catch (Exception ignored) {
                         // the next plan reads again
                     }
+                }
+                return r;
+            }, r -> {
+                writing = false;
+                if (r == null) { // the worker failed outright (the footer says how)
+                    confirm.setEnabled(true);
+                    return;
+                }
+                if (r.ok()) {
+                    if (board == state.board) written = true;
+                    append(plan, "Done: " + r.written().size() + " written, each read back. Backup: " + r.backup().getFileName());
+                    log("ArduPilot setup: " + r.written().size() + " parameters written, backup " + r.backup().getFileName());
+                    if (board == state.board) replanAfterWrite();
                 } else {
+                    confirm.setEnabled(true);
                     append(plan, "STOPPED: " + r.failure());
                     log("ArduPilot setup stopped: " + r.failure());
                 }
@@ -711,6 +785,7 @@ final class ArduSetupPages {
             p.add(form(), BorderLayout.NORTH);
             p.add(new JScrollPane(plan), BorderLayout.CENTER);
             confirm.addActionListener(e -> write());
+            confirm.setEnabled(false); // until there is a plan
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
             Theme.transparent(row);
             row.add(confirm);
@@ -719,8 +794,21 @@ final class ArduSetupPages {
             return p;
         }
 
+        /** The board the page's plan belongs to. */
+        int seenBoard = -1;
+
+        /** Another board since the page was last shown: its choices seeded anew (none by default). */
+        void newBoard() {
+        }
+
         @Override
         void onShow() {
+            if (seenBoard != state.board) {
+                seenBoard = state.board;
+                written = false;
+                changes = List.of();
+                newBoard();
+            }
             if (state.params != null) {
                 replan();
                 return;
@@ -743,7 +831,7 @@ final class ArduSetupPages {
 
         void replan() {
             Map<String, Float> now = state.params;
-            if (now == null || replanning) return;
+            if (now == null || replanning || writing) return;
             replanning = true;
             try {
                 replanNow(now);
@@ -765,12 +853,17 @@ final class ArduSetupPages {
             confirm.setEnabled(blocked.isEmpty() && !changes.isEmpty());
         }
 
+        /** A write runs: CONFIRM stays grey and choices don't replan until it is over. */
+        boolean writing;
+
         void write() {
             MavSession fc = state.fc();
-            if (fc == null || changes.isEmpty() || !blocked.isEmpty()) return;
+            if (fc == null || changes.isEmpty() || !blocked.isEmpty() || writing) return;
+            writing = true;
             confirm.setEnabled(false);
             append(plan, "--- writing");
             List<ArduPlan.Change> todo = changes;
+            int board = state.board;
             background(() -> {
                 try {
                     return new ArduSetupWriter(fc, l -> append(plan, l)).write(todo, AppPaths.arduPilotBackupsDir(), java.time.LocalDateTime.now());
@@ -778,13 +871,22 @@ final class ArduSetupPages {
                     return new ArduSetupWriter.Result(null, List.of(), e.getMessage());
                 }
             }, r -> {
-                if (r.ok()) {
+                writing = false;
+                if (r == null) { // the worker failed outright (the footer says how)
+                    confirm.setEnabled(true);
+                    return;
+                }
+                Map<String, Float> now = state.params;
+                if (r.ok() && board == state.board && now != null) {
                     written = true;
-                    append(plan, "Done: " + r.written().size() + " written, each read back. Backup: " + r.backup().getFileName());
-                    log("ArduPilot setup, " + title() + ": " + r.written().size() + " written, backup " + r.backup().getFileName());
-                    Map<String, Float> p = new java.util.HashMap<>(state.params);
+                    Map<String, Float> p = new java.util.HashMap<>(now);
                     for (ArduPlan.Change c : todo) if (r.written().contains(c.name())) p.put(c.name(), c.to());
                     state.params = p;
+                    replan(); // what is left now (nothing, unless a choice changed meanwhile); CONFIRM only for that
+                    append(plan, "Done: " + r.written().size() + " written, each read back. Backup: " + r.backup().getFileName());
+                    log("ArduPilot setup, " + title() + ": " + r.written().size() + " written, backup " + r.backup().getFileName());
+                } else if (r.ok()) {
+                    append(plan, "Done on the board found before; this one is not written.");
                 } else {
                     confirm.setEnabled(true);
                     append(plan, "STOPPED: " + r.failure());
@@ -793,14 +895,15 @@ final class ArduSetupPages {
             });
         }
 
+        /** Next: the plan shown is on the board - nothing left to write, nothing blocked (a changed choice after CONFIRM needs CONFIRM again). */
         @Override
         boolean canContinue() {
-            return written || state.params != null && blocked.isEmpty() && changes.stream().allMatch(ArduPlan.Change::missing);
+            return !writing && state.params != null && blocked.isEmpty() && changes.stream().allMatch(ArduPlan.Change::missing);
         }
 
         @Override
         String status() {
-            return canContinue() ? null : blocked.isEmpty() ? "CONFIRM writes the plan." : "A port is blocked: see the plan.";
+            return canContinue() ? null : blocked.isEmpty() ? "CONFIRM writes the plan." : "Blocked: see the plan.";
         }
     }
 
@@ -856,17 +959,32 @@ final class ArduSetupPages {
             return f;
         }
 
+        /** The GPS's port was preselected once for this board: after that "Not set here" is the pilot's own choice. */
+        private boolean gpsSeeded;
+
+        @Override
+        void newBoard() {
+            gpsSeeded = false;
+            gps.setSelectedIndex(0);
+        }
+
         @Override
         void replan() {
             Map<String, Float> p = state.params;
-            if (p != null && !replanning) {
+            if (p != null && !replanning && !writing) {
                 StringBuilder sb = new StringBuilder("<html>");
+                int gpsNow = 0;
                 for (de.droiddrone.pc.setup.ardu.ArduPorts.Port port : de.droiddrone.pc.setup.ardu.ArduPorts.ports(p)) {
                     sb.append("SERIAL").append(port.n()).append(": ").append(de.droiddrone.pc.setup.ardu.ArduPorts.name(port.protocol())).append("<br>");
-                    if (port.n() > 0 && port.protocol() == de.droiddrone.pc.setup.ardu.ArduPorts.GPS && gps.getSelectedIndex() == 0 && !written)
-                        gps.setSelectedIndex(port.n()); // the GPS where it is now
+                    if (port.n() > 0 && port.protocol() == de.droiddrone.pc.setup.ardu.ArduPorts.GPS && gpsNow == 0) gpsNow = port.n();
                 }
                 now.setText(sb.append("</html>").toString());
+                if (!gpsSeeded) {
+                    // once: the GPS where it is now (it was set back on every change: a pilot could never choose another
+                    // port for the radio where the GPS was without a GPS port too)
+                    gpsSeeded = true;
+                    if (gpsNow > 0 && gps.getSelectedIndex() == 0) gps.setSelectedIndex(gpsNow);
+                }
             }
             super.replan();
         }
@@ -957,14 +1075,20 @@ final class ArduSetupPages {
         @Override
         Map<String, ArduPlan.Wanted> wanted(Map<String, Float> params) {
             int pos = autotune.isSelected() ? (Integer) position.getValue() : 0;
+            String no = de.droiddrone.pc.setup.ardu.ArduTuning.autotuneRefused(pos);
+            if (no != null) {
+                blocked = List.of(no);
+                pos = 0;
+            }
             state.autotunePos = pos;
             Object s = size.getSelectedItem();
             de.droiddrone.pc.setup.ardu.ArduTuning.Size sz = s instanceof de.droiddrone.pc.setup.ardu.ArduTuning.Size z ? z : null;
             String text = sz == null ? "Its tune is kept." : de.droiddrone.pc.setup.ardu.ArduTuning.summary(sz) + ".";
             if (pos > 0) text += " Position " + pos + ": " + de.droiddrone.pc.setup.ardu.ArduTuning.AUTOTUNE_HOWTO;
             howto.setText("<html><div style='width:560px'>" + text + "</div></html>");
+            // AUTOTUNE taken off (or moved): the position it had gets its own mode back
             return de.droiddrone.pc.setup.ardu.ArduTuning.wanted(new de.droiddrone.pc.setup.ardu.ArduTuning.Choice(
-                    (de.droiddrone.pc.setup.ardu.ArduTuning.Frame) frame.getSelectedItem(), sz, state.cells, pos));
+                    (de.droiddrone.pc.setup.ardu.ArduTuning.Frame) frame.getSelectedItem(), sz, state.cells, pos), params);
         }
 
         /** Ports and frame take effect after a restart: the board restarts and is found again (it must speak first). */
@@ -984,7 +1108,7 @@ final class ArduSetupPages {
                     Thread.sleep(6000);
                     ArduUsb.Found f = ArduUsb.find();
                     if (f == null) return "Not back yet: FIND, Search again.";
-                    state.found = f;
+                    state.use(f);
                     state.params = f.session().readAllParams(30_000);
                     return null;
                 } catch (Exception e) {
@@ -1079,6 +1203,8 @@ final class ArduSetupPages {
             MavSession fc = state.fc();
             if (fc == null) return;
             accel.setEnabled(false);
+            level.setEnabled(false); // LEVEL or COMPASS in the middle of the six positions would start another calibration
+            compass.setEnabled(false);
             background(() -> {
                 try {
                     cal = new ArduTools(fc).startAccelCal(pos -> SwingUtilities.invokeLater(() -> show(pos)),
@@ -1087,6 +1213,8 @@ final class ArduSetupPages {
                                 ask.setText(ok ? "Accelerometer: done" : "Accelerometer: failed, again");
                                 placed.setEnabled(false);
                                 accel.setEnabled(true);
+                                level.setEnabled(true);
+                                compass.setEnabled(true);
                                 append(out, ok ? "accelerometer: done" : "accelerometer: failed");
                             }));
                     return null;
@@ -1097,6 +1225,8 @@ final class ArduSetupPages {
                 if (failure != null) {
                     append(out, "accelerometer: " + failure);
                     accel.setEnabled(true);
+                    level.setEnabled(true);
+                    compass.setEnabled(true);
                 }
             });
         }
@@ -1199,6 +1329,7 @@ final class ArduSetupPages {
     static final class BenchPage extends WizardDialog.Page {
         private final State state;
         private final JTextArea out = logArea();
+        private final JButton arm = Theme.primaryButton("ARM TEST");
 
         BenchPage(State state) {
             this.state = state;
@@ -1219,7 +1350,6 @@ final class ArduSetupPages {
         JComponent build() {
             JPanel p = new JPanel(new BorderLayout(0, 10));
             Theme.transparent(p);
-            JButton arm = Theme.primaryButton("ARM TEST");
             arm.addActionListener(e -> armTest());
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
             Theme.transparent(row);
@@ -1230,23 +1360,42 @@ final class ArduSetupPages {
             return p;
         }
 
+        /** One test at a time (a second press sent the overrides twice over, arming while the first disarmed). */
+        private boolean testing;
+        /** ArduPilot's texts while a test runs (one listener for the page: one was added per press). */
+        private final List<String> texts = new ArrayList<>();
+        private MavSession listening;
+
         private void armTest() {
             MavSession fc = state.fc();
-            if (fc == null) return;
-            List<String> texts = new ArrayList<>();
-            fc.onText(t -> {
-                synchronized (texts) {
-                    texts.add(t);
-                }
-            });
+            if (fc == null || testing) return;
+            testing = true;
+            arm.setEnabled(false);
+            synchronized (texts) {
+                texts.clear();
+            }
+            if (listening != fc) {
+                listening = fc;
+                fc.onText(t -> {
+                    synchronized (texts) {
+                        texts.add(t);
+                    }
+                });
+            }
             background(() -> {
                 try {
-                    return ArduBenchCheck.armTest(fc, 1, l -> append(out, l));
+                    // the ARM switch where the board has it now (SETTINGS put it on this PC's radio's AUX, not always AUX1)
+                    Map<String, Float> p = state.params;
+                    int aux = ArduBenchCheck.armAux(p != null ? p : fc.readAllParams(30_000));
+                    if (aux < 1) return "No ARM switch on the board: SETTINGS first.";
+                    return ArduBenchCheck.armTest(fc, aux, l -> append(out, l));
                 } catch (Exception e) {
                     return "arm test: " + e.getMessage();
                 }
             }, line -> {
-                append(out, line);
+                testing = false;
+                arm.setEnabled(true);
+                append(out, String.valueOf(line));
                 synchronized (texts) {
                     for (String t : texts) if (t.startsWith("PreArm") || t.startsWith("Arm")) append(out, "  " + t);
                 }
