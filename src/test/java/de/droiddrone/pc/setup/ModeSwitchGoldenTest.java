@@ -23,7 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * plans on purpose: run with GOLDEN_DUMP=&lt;file&gt; before and after, diff the two, then put the new hash here.
  */
 class ModeSwitchGoldenTest {
-    private static final String RECORDED = "0aba0d7e2247edf0e38c4fd46fd93f922366c90253d04a1d1d61d62af3ed2b59";
+    // F-086: recorded anew - checked against 0aba0d7e... to differ in 1240 of 44928 plans, each one whose chosen POS HOLD
+    // can't be written (blocked, or not offered) with a mode on the board at that position: that slot is no longer
+    // cleared (commands and replaced; nothing else of any plan changed)
+    private static final String RECORDED = "3be82153b215e11325e58cc123069760d5576489b1696b59ec5d3e5d99c47a39";
 
     /** 20 slots, these set, the rest empty; 6 fields per line for an old Betaflight. */
     private static String aux(int fields, String... used) {

@@ -881,8 +881,6 @@ final class DroneSetup {
          * switch as it was is remembered: Yes again puts it back). The same switch stays, so the radio needs no redo.
          */
         private void offerGpsModes(boolean gps) {
-            ModeSwitch.Mode[] items = gps ? ModeSwitch.Mode.values()
-                    : java.util.Arrays.stream(ModeSwitch.Mode.values()).filter(m -> !m.needsGps).toArray(ModeSwitch.Mode[]::new);
             ModeSwitch current = modeSwitch == null ? ModeSwitch.DEFAULT : modeSwitch;
             ModeSwitch wanted = gps ? current : withoutGps(current);
             if (gps) { // the switch from before the No, if nothing was changed since
@@ -891,16 +889,13 @@ final class DroneSetup {
             } else if (!wanted.equals(current)) {
                 main.save(Map.of(MODES_WITH_GPS_KEY, current.format()));
             }
-            revertingChoice = true;
-            for (int i = 0; i < 3; i++) {
-                var c = positionChoices.get(i);
-                if (c.getModel().getSize() != items.length) c.setModel(new DefaultComboBoxModel<>(items));
-                c.setSelectedItem(wanted.positions()[i]);
-            }
-            revertingChoice = false;
-            if (modeSwitch == null || wanted.equals(modeSwitch)) return;
-            modeSwitch = wanted;
-            main.save(Map.of(ModeSwitch.KEY, wanted.format()));
+            // F-086: shown and written as this board's Betaflight can fly it; saved as chosen (the next drone may have it)
+            ModeSwitch shown = ModeSwitch.forVersion(wanted, fcVersion);
+            showPositions(gps, shown);
+            if (modeSwitch == null) return;
+            if (!wanted.equals(ModeSwitch.parse(main.config().getString(ModeSwitch.KEY)))) main.save(Map.of(ModeSwitch.KEY, wanted.format()));
+            if (shown.equals(modeSwitch)) return;
+            modeSwitch = shown;
             choiceChanged();
             showModeChoice();
             showManual();
@@ -915,6 +910,49 @@ final class DroneSetup {
             ModeSwitch.Mode[] p = m.positions();
             for (int i = 0; i < 3; i++) if (p[i].needsGps) p[i] = ModeSwitch.Mode.ANGLE;
             return new ModeSwitch(m.aux(), p[0], p[1], p[2]);
+        }
+
+        private static final String POSITION_TIP = "Mode in this position";
+
+        /**
+         * F-086: the position lists offer what this board can fly - no GPS modes without a GPS, none its Betaflight is
+         * too old for (the reason is the lists' hint) - and show this switch.
+         */
+        private void showPositions(boolean gps, ModeSwitch shown) {
+            ModeSwitch.Mode[] items = ModeSwitch.offered(gps, fcVersion);
+            String tip = positionTip(fcVersion);
+            revertingChoice = true;
+            for (int i = 0; i < 3; i++) {
+                var c = positionChoices.get(i);
+                boolean same = c.getModel().getSize() == items.length;
+                for (int k = 0; same && k < items.length; k++) same = items[k] == c.getModel().getElementAt(k);
+                if (!same) c.setModel(new DefaultComboBoxModel<>(items));
+                c.setSelectedItem(shown.positions()[i]);
+                c.setToolTipText(tip);
+            }
+            revertingChoice = false;
+        }
+
+        /** A position list's hint: what it is, and why it lacks a mode on this board ("GPS position hold needs Betaflight 2025.12 ..."). */
+        static String positionTip(String version) {
+            String why = ModeSwitch.notOffered(version);
+            return why == null ? POSITION_TIP : POSITION_TIP + ". " + why;
+        }
+
+        /**
+         * F-086: the board's Betaflight is known (another board, or the first read): the lists offer what it can fly, and
+         * a mode it is too old for becomes Angle on the switch shown and written - not saved, the pilot's next drone may
+         * have it. The round that follows reads again for that switch; CONFIRM stays as it was - no choice was changed.
+         */
+        private void fitModesToBoard() {
+            ModeSwitch chosen = ModeSwitch.parse(main.config().getString(ModeSwitch.KEY));
+            ModeSwitch shown = chosen == null ? null : ModeSwitch.forVersion(gpsYes ? chosen : withoutGps(chosen), fcVersion);
+            showPositions(gpsYes, shown != null ? shown : ModeSwitch.forVersion(ModeSwitch.DEFAULT, fcVersion));
+            enablePositions();
+            if (java.util.Objects.equals(shown, modeSwitch)) return;
+            modeSwitch = shown;
+            showModeChoice();
+            showManual();
         }
 
         /** GPS rescue is on the failsafe list only with a GPS; chosen without one it becomes Drop (the pilot's default). */
@@ -1015,7 +1053,7 @@ final class DroneSetup {
                 javax.swing.JComboBox<ModeSwitch.Mode> c = new javax.swing.JComboBox<>(ModeSwitch.Mode.values());
                 c.setPrototypeDisplayValue(ModeSwitch.Mode.POS_HOLD);
                 c.setSelectedItem(shown.positions()[i]);
-                c.setToolTipText("Mode in this position");
+                c.setToolTipText(POSITION_TIP);
                 TacticalCombo.install(c);
                 c.addActionListener(e -> modeChoiceChanged());
                 positionChoices.add(c);
@@ -1693,7 +1731,10 @@ final class DroneSetup {
             sameErrorCount = 0;
             lastFcPort = r.port();
             restartedAt = now; // the CLI was open and is closed now: Betaflight restarts
-            if (!r.version().isEmpty()) fcVersion = r.version();
+            if (!r.version().isEmpty() && !r.version().equals(fcVersion)) { // F-086: what this board's Betaflight can fly
+                fcVersion = r.version();
+                fitModesToBoard(); // a switch changed by it is read for again below (the target differs)
+            }
             // the first board read here, or another drone: its ESCs are not read yet on this page - red if held (F-080)
             if ((!escRowRead || r.boardId() != null && !r.boardId().equals(lastBoardId)) && !escBusy && escWanted == 0) {
                 escRowRead = true;
@@ -2189,24 +2230,21 @@ final class DroneSetup {
                 modeRow.set(State.WARN, p.problem());
                 return true;
             }
+            if (!p.empty().isEmpty()) { // F-086: a position whose mode can't be written here, and none on the board: red, never "set"
+                modeRow.set(State.BAD, positionsWithoutMode(p.empty()));
+                return true;
+            }
             if (!p.isSet()) {
-                modeRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + SetupPlanner.takenOff(r.replaced())
+                modeRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + SetupPlanner.takenOff(r.replaced()) + keptLines(p.kept())
                         : "Not set - use the Modes tab (<b>By hand</b>).");
                 return !pendingWrite;
             }
-            boolean partly = !p.blocked().isEmpty() || !p.missing().isEmpty();
+            // F-086: a position whose chosen mode can't be written here keeps what the board flies there, said in short;
+            // what can't be had elsewhere (GPS rescue's own switch) is that row's, not this one's
+            boolean partly = !p.kept().isEmpty();
             StringBuilder text = new StringBuilder(partly ? "Partly set." : setText());
-            text.append(SetupPlanner.takenOff(lastReplaced));
-            for (var b : p.blocked().entrySet()) { // the reason names the mode itself when it is "too old": not twice
-                text.append("<br>");
-                if (!b.getValue().startsWith(b.getKey().title)) text.append("<b>").append(b.getKey().title).append(":</b> ");
-                text.append(b.getValue());
-            }
+            text.append(SetupPlanner.takenOff(lastReplaced)).append(keptLines(p.kept()));
             if (r.rescueNote() != null) text.append("<br>").append(r.rescueNote());
-            for (ModeSwitch.Mode missing : p.missing()) {
-                text.append("<br><b>").append(missing.title).append("</b> not in this Betaflight (")
-                        .append(missing.detail).append("): that position flies acro.");
-            }
             if (!p.elsewhere().isEmpty()) {
                 text.append("<br>Other modes, unchanged: ").append(String.join(", ", p.elsewhere())).append('.');
             }
@@ -2216,9 +2254,27 @@ final class DroneSetup {
                 text.append("<br>On several switches: ").append(String.join("; ", p.doubled()))
                         .append(" - put each on one.");
             }
-            boolean warn = !p.missing().isEmpty() || !p.blocked().isEmpty() || doubled;
+            boolean warn = partly || doubled;
             modeRow.set(warn ? State.WARN : okState(), text.toString());
             return false;
+        }
+
+        /** F-086: "<br>High keeps ANGLE: GPS position hold needs Betaflight 2025.12 or newer - this one is 4.4." a line each; "" for none. */
+        static String keptLines(List<String> kept) {
+            StringBuilder sb = new StringBuilder();
+            for (String k : kept) sb.append("<br>").append(Character.toUpperCase(k.charAt(0))).append(k.substring(1));
+            return sb.toString();
+        }
+
+        /** F-086: the flight mode row for positions left with no mode: "<b>High has no mode</b>: why ... Choose another mode there." */
+        static String positionsWithoutMode(List<String> empty) {
+            StringBuilder sb = new StringBuilder();
+            for (String e : empty) {
+                int colon = e.indexOf(':');
+                sb.append(sb.length() > 0 ? "<br>" : "").append("<b>").append(Character.toUpperCase(e.charAt(0))).append(e, 1, colon).append("</b>")
+                        .append(e.substring(colon));
+            }
+            return sb.append("<br>Choose another mode there.").toString();
         }
 
         @Override

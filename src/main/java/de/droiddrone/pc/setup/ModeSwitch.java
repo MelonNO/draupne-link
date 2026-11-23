@@ -15,6 +15,11 @@ import java.util.Set;
  * Anything else on that switch is replaced, ARM on it is refused (pick another switch), and the modes this setup
  * manages (ANGLE, HORIZON, POS HOLD, GPS RESCUE) are taken off every other switch, so each is in one place - a switch
  * left as it is keeps them, reported, and a mode on two switches is reported as doubled.
+ * <p>
+ * F-086: a position whose chosen mode can't be written on this board (too old a Betaflight, no GPS found, not offered)
+ * is never emptied: it keeps the mode the board flies there now ({@link Plan#kept}), and one with none there is said
+ * and not set ({@link Plan#empty}) - before, a 4.4 board lost ANGLE at the top for a GPS position hold it can't have,
+ * and flew acro there.
  */
 public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     public static final String KEY = "drone.modeSwitch";
@@ -123,6 +128,19 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<String> parts = new ArrayList<>();
         Mode[] m = positions();
         for (int i = 0; i < 3; i++) parts.add(POSITIONS[i] + " " + m[i].title);
+        return String.join(", ", parts);
+    }
+
+    /** F-086: as {@link #describe()}, with what each position gets by this plan: "low Acro, middle Angle, high keeps ANGLE". */
+    public String describe(Plan p) {
+        List<String> parts = new ArrayList<>();
+        Mode[] m = positions();
+        for (int i = 0; i < 3; i++) {
+            String said = POSITIONS[i] + " " + m[i].title;
+            for (String k : p.kept()) if (k.startsWith(POSITIONS[i] + " keeps ")) said = k.substring(0, k.indexOf(':'));
+            for (String e : p.empty()) if (e.startsWith(POSITIONS[i] + " has no mode")) said = POSITIONS[i] + " no mode";
+            parts.add(said);
+        }
         return String.join(", ", parts);
     }
 
@@ -312,10 +330,15 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
      * @param prearmProblem why the PREARM switch can't be written, or null
      * @param doubled       managed modes Betaflight has on more than one switch ("ANGLE on AUX2, AUX5"), as read
      * @param beeperProblem why BEEPER can't go on its channel (ARM or PREARM is there: move it first), or null
+     * @param kept          F-086: the flight mode switch's positions whose chosen mode can't be written here (too old a
+     *                      Betaflight, no GPS found, not offered) and that keep the mode the board flies there now -
+     *                      "high keeps ANGLE: GPS position hold needs Betaflight 2025.12 or newer - this one is 4.4."
+     * @param empty         F-086: such positions where the board flies no mode now: they would fly acro, unasked -
+     *                      "high has no mode: No GPS found - see the GPS row." Not set.
      */
     public record Plan(List<String> commands, String problem, String rescueProblem, List<Mode> missing,
                        java.util.Map<Mode, String> blocked, List<String> elsewhere, List<String> replaced, String armProblem,
-                       String prearmProblem, List<String> doubled, String beeperProblem) {
+                       String prearmProblem, List<String> doubled, String beeperProblem, List<String> kept, List<String> empty) {
         public boolean isSet() {
             return problem == null && commands.isEmpty();
         }
@@ -435,6 +458,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<Mode> missing = new ArrayList<>();
         String problem = null, rescueProblem = null;
         java.util.Map<Integer, List<int[]>> wanted = new java.util.LinkedHashMap<>(); // channel -> {mode, start, end}
+        List<String> kept = new ArrayList<>(), empty = new ArrayList<>();
+        Set<Integer> leave = new HashSet<>(); // F-086: slots no loop below clears - what a position keeps as it is
         if (modes != null) {
             int channel = modes.aux - 1;
             if (armChannels.contains(channel)) {
@@ -445,12 +470,33 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 List<int[]> list = new ArrayList<>();
                 Mode[] m = modes.positions();
                 for (int i = 0; i < 3; i++) {
-                    if (m[i] == Mode.ACRO || blocked.containsKey(m[i])) continue;
-                    if (available != null && !available.contains(m[i].id)) {
+                    if (m[i] == Mode.ACRO) continue;
+                    String why = blocked.get(m[i]);
+                    if (why == null && available != null && !available.contains(m[i].id)) {
                         if (!missing.contains(m[i])) missing.add(m[i]);
+                        why = m[i].title + " isn't in this Betaflight (" + m[i].detail + ").";
+                    }
+                    if (why == null) {
+                        list.add(new int[]{m[i].id, RANGES[i][0], RANGES[i][1]});
                         continue;
                     }
-                    list.add(new int[]{m[i].id, RANGES[i][0], RANGES[i][1]});
+                    // F-086: the chosen mode can't be written here. Before, the position was emptied and flew acro - on a
+                    // 4.4 board ANGLE was taken off the top for a GPS position hold it can't have. Now it keeps the mode
+                    // the board flies there: rewritten to the position's range when that mode can be written, else left
+                    // as it is; with none there it is said, and not set
+                    List<String> there = new ArrayList<>();
+                    for (Slot s : slots) {
+                        int middle = (RANGES[i][0] + RANGES[i][1]) / 2;
+                        if (!s.used() || s.channel() != channel || s.start() > middle || s.end() <= middle) continue;
+                        if (s.mode() == MODE_ARM || s.mode() == MODE_PREARM || s.mode() == BEEPER_MODE) continue;
+                        int[] keep = {s.mode(), RANGES[i][0], RANGES[i][1]};
+                        if (!writable(s.mode(), available, blocked)) leave.add(s.index());
+                        else if (list.stream().noneMatch(w -> java.util.Arrays.equals(w, keep))) list.add(keep);
+                        String name = modeName(s.mode());
+                        if (!there.contains(name)) there.add(name);
+                    }
+                    if (there.isEmpty()) empty.add(POSITIONS[i] + " has no mode: " + why);
+                    else kept.add(POSITIONS[i] + " keeps " + String.join(", ", there) + ": " + why);
                 }
                 wanted.put(channel, list);
             }
@@ -489,7 +535,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             }
         }
         for (Slot s : slots) {
-            if (offOwn.contains(s.index())) continue;
+            if (offOwn.contains(s.index()) || leave.contains(s.index())) continue;
             if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
             if (beeperChannel >= 0 && (s.mode() == BEEPER_MODE || s.channel() == beeperChannel)) continue; // below
             if (wanted.containsKey(s.channel())) {
@@ -548,7 +594,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         free.sort(null);
         if (free.size() < place.size()) {
             return new Plan(List.of(), "Modes full - free some in Betaflight Configurator.", rescueProblem,
-                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem);
+                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem, List.copyOf(kept), List.copyOf(empty));
         }
         // the clears stay, also for a slot filled again below: they all come before the first fill
         for (int i = 0; i < place.size(); i++) {
@@ -558,10 +604,52 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         String unsafe = sharedWithArm(after(slots, commands), commands);
         if (unsafe != null) { // never expected: a last check on the result, so no plan can ever put a mode beside ARM
             return new Plan(List.of(), unsafe + " - nothing written; set Modes by hand.", rescueProblem, missing, blocked,
-                    elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem);
+                    elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem, List.copyOf(kept), List.copyOf(empty));
         }
         return new Plan(List.copyOf(commands), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,
-                prearmProblem, doubled, beeperProblem);
+                prearmProblem, doubled, beeperProblem, List.copyOf(kept), List.copyOf(empty));
+    }
+
+    /** F-086: a mode this plan may write - offered by this Betaflight (MSP_BOXIDS; unknown: yes) and not blocked now. */
+    private static boolean writable(int mode, Set<Integer> available, java.util.Map<Mode, String> blocked) {
+        if (available != null && !available.contains(mode)) return false;
+        for (Mode m : blocked.keySet()) if (m.id == mode) return false;
+        return true;
+    }
+
+    /**
+     * F-086: the switch as this flight controller's Betaflight can fly it - a mode it is too old for (GPS position hold
+     * before 2025.12, GPS rescue before 4.4) becomes Angle there, the default for such a board; the same switch otherwise.
+     * Unknown version: as chosen.
+     */
+    public static ModeSwitch forVersion(ModeSwitch m, String versionLine) {
+        if (m == null) return null;
+        Mode[] p = m.positions();
+        boolean changed = false;
+        for (int i = 0; i < 3; i++) {
+            if (p[i].tooOld(versionLine) != null) {
+                p[i] = Mode.ANGLE;
+                changed = true;
+            }
+        }
+        return changed ? new ModeSwitch(m.aux(), p[0], p[1], p[2]) : m;
+    }
+
+    /** F-086: the modes a position list offers on a board of this version, GPS or not: none it is too old for. */
+    public static Mode[] offered(boolean gps, String versionLine) {
+        List<Mode> out = new ArrayList<>();
+        for (Mode m : Mode.values()) if ((gps || !m.needsGps) && m.tooOld(versionLine) == null) out.add(m);
+        return out.toArray(new Mode[0]);
+    }
+
+    /** F-086: why a position list lacks modes on a board of this version ("GPS position hold needs Betaflight 2025.12 ..."); null: it lacks none. */
+    public static String notOffered(String versionLine) {
+        List<String> why = new ArrayList<>();
+        for (Mode m : Mode.values()) {
+            String old = m.tooOld(versionLine);
+            if (old != null) why.add(old);
+        }
+        return why.isEmpty() ? null : String.join(" ", why);
     }
 
     /**

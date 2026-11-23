@@ -210,7 +210,7 @@ public final class SetupPlanner {
         ModeSwitch.Plan modes = switches.none() ? null : ModeSwitch.plan(aux, modesOffered, blocked, switches);
         if (modes != null && !modes.commands().isEmpty()) {
             List<String> what = new ArrayList<>();
-            if (modeTarget != null && modes.problem() == null) what.add("flight modes on AUX" + modeTarget.aux() + ": " + modeTarget.describe());
+            if (modeTarget != null && modes.problem() == null) what.add("flight modes on AUX" + modeTarget.aux() + ": " + modeTarget.describe(modes));
             if (rescueOn > 0 && modes.rescueProblem() == null) what.add("GPS rescue up on AUX" + rescueOn);
             if (w.armTarget() > 0 && modes.armProblem() == null) what.add("ARM on AUX" + w.armTarget());
             if (w.prearmTarget() > 0 && modes.prearmProblem() == null) what.add("PREARM on AUX" + w.prearmTarget());

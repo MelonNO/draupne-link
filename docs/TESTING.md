@@ -365,7 +365,9 @@ and proved on the made-up board behind a real keeper only (`gradlew test --tests
   setup would write on this drone: GPS Yes with `feature GPS` on (its UART the one with the GPS function), the compass
   Yes unless `mag_hardware` is NONE, the cells as Betaflight forces them. A board that counts its cells itself gets the
   hardware file's `battery.cells`; without one CONFIRM is not pressed (it would force the page's 6S). The rest is the
-  page's own default: flight modes on AUX2, ARM on AUX1, PREARM on AUX3, GPS rescue on AUX4 and as the failsafe.
+  page's own default: flight modes on AUX2, ARM on AUX1, PREARM on AUX3, GPS rescue on AUX4 and as the failsafe. On a
+  Betaflight older than 2025.12 the lists offer no GPS position hold (their hint says why) and the top is Angle (F-086):
+  checked, with the lists' words in the film.
 - **Every row's words** go into the film and `drone-setup-rows.txt`: the USB row (port, Betaflight's version, board and
   craft name), RECEIVER, STICK DELAY, BATTERY, GPS and its PORT, COMPASS, FLIGHT MODES, ARM, PREARM, GPS RESCUE,
   SIGNAL LOST, ESCS, what CONFIRM would write, BY HAND's text; on the second step the accelerometer, the motors, the

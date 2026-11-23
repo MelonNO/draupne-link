@@ -80,6 +80,7 @@ final class DroneSetupRun {
     private final List<String> rows = new ArrayList<>();
     private List<String> written = List.of(), said = List.of();
     private HwDroneSetup.Verdict verdict;
+    private String modeLists;
 
     /**
      * @param keeperPort the keeper's control port
@@ -210,6 +211,13 @@ final class DroneSetupRun {
         ui.shot("Drone setup's first step: the board read through the keeper, CONFIRM offered");
         String usb = HwDroneSetup.row(w, "Flight controller on USB");
         rig.check(usb.contains(KeeperWire.PORT_NAME) && usb.matches(".*\\d+\\.\\d+\\.\\d+.*"), "the USB row names the board's port and its Betaflight version: " + usb);
+        modeLists = modeLists();
+        film.remark("FLIGHT MODE LISTS: " + modeLists);
+        if (de.droiddrone.pc.setup.ModeSwitch.Mode.POS_HOLD.tooOld(before.version()) != null) { // F-086
+            String offered = modeLists.contains(" - hint:") ? modeLists.substring(0, modeLists.indexOf(" - hint:")) : modeLists;
+            rig.check(!offered.contains("GPS position hold") && modeLists.contains("needs Betaflight 2025.12"),
+                    "on a Betaflight older than 2025.12 the lists offer no GPS position hold, and their hint says why: " + modeLists);
+        }
         film.remark("Before CONFIRM the page says it will write: " + plan(w));
         film.remark("BATTERY OUT: the keeper reads " + state().get("volts") + " V; the page's battery line: \"" + HwDroneSetup.row(w, "BATTERY") + "\"; its GPS line: \""
                 + HwDroneSetup.row(w, "GPS ") + "\"; its ESC line: \"" + HwDroneSetup.row(w, "ESCS") + "\" - no failure by itself.");
@@ -379,6 +387,27 @@ final class DroneSetupRun {
                     + "; \"save\" " + tap.saves() + " time(s).");
             rig.check(!said.isEmpty() && rig.logged("Its settings before:"), "the app's log says what CONFIRM wrote and where the board's settings before it are kept");
         }
+    }
+
+    /** F-086: what the flight mode position lists offer and their hint: "offers Acro, Angle, GPS rescue - hint: ...". */
+    private String modeLists() {
+        Window guide = ui.window(GUIDE);
+        if (guide == null) return "no guide";
+        return Ui.edt(() -> {
+            for (Component c : all(guide)) {
+                if (!(c instanceof javax.swing.JComboBox<?> box) || box.getItemCount() == 0
+                        || !(box.getItemAt(0) instanceof de.droiddrone.pc.setup.ModeSwitch.Mode)) continue;
+                List<String> items = new ArrayList<>();
+                for (int i = 0; i < box.getItemCount(); i++) items.add(String.valueOf(box.getItemAt(i)));
+                return "offers " + String.join(", ", items) + " - hint: " + box.getToolTipText();
+            }
+            return "no flight mode lists shown";
+        });
+    }
+
+    /** What the flight mode lists offered on the first step, and their hint ({@link #modeLists()}); null before. */
+    String modeListsSeen() {
+        return modeLists;
     }
 
     /** The page's own words for what CONFIRM writes: the lines to set on it, "Also sets", the footer. */

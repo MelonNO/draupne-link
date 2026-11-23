@@ -174,10 +174,82 @@ class ModeSwitchTest {
                 java.util.Map.of(ModeSwitch.Mode.POS_HOLD, "No GPS found"));
         assertEquals(List.of("aux 1 1 1 1300 1700 0 0"), p.commands());
         assertEquals("No GPS found", p.blocked().get(ModeSwitch.Mode.POS_HOLD));
-        // once written, a blocked mode still on the switch from before is taken off: the switch flies acro there
+        assertEquals(List.of("high has no mode: No GPS found"), p.empty(), "F-086: nothing at the top - said, not set");
+        // F-086: a blocked mode still on the switch from before stays (it was taken off, and the top flew acro): a 2025.12
+        // drone with its GPS off for a moment keeps its POS HOLD
         ModeSwitch.Plan q = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0",
                 "aux 2 11 1 1700 2100 0 0"), ALL, java.util.Map.of(ModeSwitch.Mode.POS_HOLD, "No GPS found"));
-        assertEquals(List.of("aux 2 0 0 900 900 0 0"), q.commands());
+        assertEquals(List.of(), q.commands());
+        assertEquals(List.of("high keeps GPS POSITION HOLD: No GPS found"), q.kept());
+    }
+
+    // ---- F-086: a position whose chosen mode can't be written keeps what the board flies there ----
+
+    private static final String BF44 = "Betaflight / STM32F405 (S405) 4.4.1 Apr 11 2023 / 01:20:48 (abc) MSP API: 1.45";
+    private static final String BF2025 = "Betaflight / STM32F7X2 (S7X2) 2025.12.0 Dec  1 2025 / 12:00:00 (abc) MSP API: 1.47";
+
+    /** The pilot's drone (2026-11-23): 4.4.1, ANGLE at the top of AUX2. The default's POS HOLD can't be had there. */
+    @Test
+    void onA44BoardTheTopKeepsItsAngleWhereTheDefaultsPosHoldCantGo() {
+        java.util.Map<ModeSwitch.Mode, String> tooOld = java.util.Map.of(ModeSwitch.Mode.POS_HOLD, ModeSwitch.Mode.POS_HOLD.tooOld(BF44));
+        String board = aux("aux 0 0 0 1700 2100 0 0", "aux 5 1 1 1700 2100 0 0");
+        ModeSwitch.Plan p = ModeSwitch.DEFAULT.plan(board, ALL, tooOld);
+        assertEquals(List.of("aux 1 1 1 1300 1700 0 0"), p.commands(), "ANGLE at the middle; the top's ANGLE (slot 5) not taken off");
+        assertEquals(List.of(), p.replaced());
+        assertEquals(List.of("high keeps ANGLE: GPS position hold needs Betaflight 2025.12 or newer - this one is 4.4."), p.kept());
+        assertEquals(List.of(), p.empty());
+        assertEquals("low Acro, middle Angle, high keeps ANGLE", ModeSwitch.DEFAULT.describe(p));
+        // and once written it stays so: nothing more to write
+        assertTrue(ModeSwitch.DEFAULT.plan(board.replace("aux 1 0 0 900 900 0 0", "aux 1 1 1 1300 1700 0 0"), ALL, tooOld).isSet());
+        // the same where Betaflight doesn't offer POS HOLD at all (no GPS feature): kept, POS HOLD named as missing
+        ModeSwitch.Plan q = ModeSwitch.DEFAULT.plan(board, Set.of(0, 1, 2, 46), java.util.Map.of());
+        assertEquals(List.of("aux 1 1 1 1300 1700 0 0"), q.commands());
+        assertEquals(List.of(ModeSwitch.Mode.POS_HOLD), q.missing());
+        assertTrue(q.kept().get(0).startsWith("high keeps ANGLE: GPS position hold isn't in this Betaflight"), q.kept().toString());
+    }
+
+    @Test
+    void onA2025BoardPosHoldIsWrittenAsBefore() {
+        assertNull(ModeSwitch.Mode.POS_HOLD.tooOld(BF2025));
+        ModeSwitch.Plan p = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 5 1 1 1700 2100 0 0"), ALL, java.util.Map.of());
+        assertEquals(List.of("aux 5 0 0 900 900 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"), p.commands());
+        assertEquals(List.of("ANGLE on AUX2"), p.replaced());
+        assertEquals(List.of(), p.kept());
+        assertEquals("low Acro, middle Angle, high GPS position hold", ModeSwitch.DEFAULT.describe(p));
+    }
+
+    @Test
+    void aKeptModeSpanningTwoPositionsIsWrittenForEachAndTheRuleOfOnePlaceStays() {
+        java.util.Map<ModeSwitch.Mode, String> tooOld = java.util.Map.of(ModeSwitch.Mode.POS_HOLD, "too old");
+        // ANGLE over the middle and the top in one slot, and on AUX5 as well: AUX5 goes (ANGLE is placed here), the top keeps ANGLE
+        String board = aux("aux 0 0 0 1700 2100 0 0", "aux 5 1 1 1300 2100 0 0", "aux 6 1 4 1300 1700 0 0");
+        ModeSwitch.Plan p = ModeSwitch.DEFAULT.plan(board, ALL, tooOld);
+        assertEquals(List.of("aux 5 0 0 900 900 0 0", "aux 6 0 0 900 900 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 1 1 1700 2100 0 0"), p.commands());
+        assertEquals(List.of("ANGLE on AUX2", "ANGLE on AUX5"), p.replaced());
+        String after = aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 1 1 1700 2100 0 0");
+        assertTrue(ModeSwitch.DEFAULT.plan(after, ALL, tooOld).isSet(), "and then nothing more");
+        // a mode the board has there that can't be written either (POS HOLD, blocked) is left as it is, whatever its range
+        ModeSwitch.Plan q = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 11 1 1800 2100 0 0"), ALL, tooOld);
+        assertEquals(List.of("aux 1 1 1 1300 1700 0 0"), q.commands());
+        assertEquals(List.of("high keeps GPS POSITION HOLD: too old"), q.kept());
+        // a position chosen as acro is still the pilot's acro: what is there is taken off
+        ModeSwitch acroTop = new ModeSwitch(2, ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE, ModeSwitch.Mode.ACRO);
+        assertEquals(List.of("ANGLE on AUX2"), acroTop.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 5 1 1 1700 2100 0 0"), ALL, tooOld).replaced());
+    }
+
+    @Test
+    void theListsOfferWhatTheBoardsBetaflightHasAndTheDefaultTopThereIsAngle() {
+        assertEquals(new ModeSwitch(2, ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE, ModeSwitch.Mode.ANGLE), ModeSwitch.forVersion(ModeSwitch.DEFAULT, BF44));
+        assertSame(ModeSwitch.DEFAULT, ModeSwitch.forVersion(ModeSwitch.DEFAULT, BF2025), "POS HOLD stays the default where Betaflight has it");
+        assertSame(ModeSwitch.DEFAULT, ModeSwitch.forVersion(ModeSwitch.DEFAULT, ""), "the version not read yet: as chosen");
+        assertNull(ModeSwitch.forVersion(null, BF44));
+        assertFalse(List.of(ModeSwitch.offered(true, BF44)).contains(ModeSwitch.Mode.POS_HOLD));
+        assertTrue(List.of(ModeSwitch.offered(true, BF44)).contains(ModeSwitch.Mode.GPS_RESCUE));
+        assertEquals(List.of(ModeSwitch.Mode.values()), List.of(ModeSwitch.offered(true, BF2025)));
+        assertEquals(List.of(ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE), List.of(ModeSwitch.offered(false, BF2025)), "no GPS: no GPS modes");
+        assertEquals("GPS position hold needs Betaflight 2025.12 or newer - this one is 4.4.", ModeSwitch.notOffered(BF44));
+        assertNull(ModeSwitch.notOffered(BF2025));
+        assertNull(ModeSwitch.notOffered(""));
     }
 
     @Test

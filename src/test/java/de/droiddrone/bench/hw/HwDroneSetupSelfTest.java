@@ -20,17 +20,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * motor test window read and closed, CONFIRM, the board read again and held to what Drone setup said, the keeper's
  * board at rest at the end - on the made-up board behind a real keeper that reads the board's settings in its CLI after
  * every lease, as on the real one. The board is one somebody set up and flew (a serial receiver, a GPS on UART2, ARM
- * on AUX3, GPS rescue as its failsafe, its cells forced), the battery out: CONFIRM has things to write, and the
- * scenario's judge has every kind of difference to hold to Drone setup's words. The made-up board has no attitude to
- * read: CALIBRATE is not pressed there (HwDroneSetupTest holds its difference to the judge).
+ * on AUX3, GPS rescue as its failsafe, its cells forced, ANGLE at the top of AUX2 as on the pilot's 4.4.1 drone), the
+ * battery out: CONFIRM has things to write, and the scenario's judge has every kind of difference to hold to Drone
+ * setup's words. F-086: the top keeps its ANGLE. The made-up board has no attitude to read: CALIBRATE is not pressed
+ * there (HwDroneSetupTest holds its difference to the judge).
  */
 @Tag("benchself")
 class HwDroneSetupSelfTest {
     @Test
     @Timeout(value = 15, unit = TimeUnit.MINUTES)
     void theHardwareScenarioGoesThroughDroneSetupOnTheMadeUpBoardBehindARealKeeper() throws Exception {
-        // its cells forced as a Drone setup before left them: the page takes that count itself, no hardware file's needed
-        FakeFlightBoard board = FakeFlightBoard.flown().setUp("set failsafe_procedure = GPS-RESCUE", "set force_battery_cell_count = 4");
+        // its cells forced as a Drone setup before left them: the page takes that count itself, no hardware file's needed;
+        // F-086: ANGLE at the top of AUX2, as on the pilot's 4.4.1 drone (the made-up board is 4.4.1 too)
+        FakeFlightBoard board = FakeFlightBoard.flown().setUp("set failsafe_procedure = GPS-RESCUE", "set force_battery_cell_count = 4",
+                "aux 5 1 1 1700 2100 0 0");
         try (KeeperBench keeper = new KeeperBench(board)) {
             keeper.config.readSettings = true; // as on the real board: after every lease its settings are read in its CLI, a restart
             keeper.start().beat();
@@ -50,6 +53,11 @@ class HwDroneSetupSelfTest {
             assertTrue(board.saved().contains("set force_battery_cell_count = 4"), "the board's own forced count kept");
             assertTrue(v.differences().stream().noneMatch(d -> d.line().contains("force_battery_cell_count")), "CONFIRM forced no other count: " + v.differences());
             assertTrue(board.saved().contains("set mag_hardware = AUTO"), "its compass left on, as the board had it");
+            // F-086: the top keeps its ANGLE on 4.4; the lists offered no GPS position hold, and said why
+            assertTrue(board.saved().contains("aux 5 1 1 1700 2100 0 0"), "ANGLE still at the top of AUX2: " + board.saved());
+            assertTrue(board.saved().lines().anyMatch(l -> l.matches("aux \\d+ 1 1 1300 1700 0 0")), "ANGLE at the middle");
+            assertFalse(board.saved().lines().anyMatch(l -> l.matches("aux \\d+ 11 .*")), "no POS HOLD on 4.4");
+            assertTrue(run.modeListsSeen().startsWith("offers Acro, Angle, GPS rescue - hint: ") && run.modeListsSeen().contains("2025.12"), run.modeListsSeen());
             KeeperClient.State s = keeper.state();
             assertTrue(s.boardUp() && !s.lease().equals("setup") && Boolean.TRUE.equals(s.locked()) && Boolean.FALSE.equals(s.armed()), s.toString());
             assertTrue(board.armingLocked(), "the keeper's lock is on the board again");

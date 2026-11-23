@@ -219,6 +219,38 @@ class SetupPlannerTest {
         assertEquals(List.of("beacon RX_LOST"), r.plan().get(1).commands());
     }
 
+    // ---- F-086: the pilot's drone (2026-11-23): 4.4.1, ANGLE at the top of AUX2; CONFIRM took it off for a POS HOLD 4.4 can't have ----
+
+    static final String BF44 = "# Betaflight / STM32F405 (S405) 4.4.1 Apr 11 2023 / 01:20:48 (abc) MSP API: 1.45\r\n";
+
+    private static List<String> modeCommands(SetupPlanner.Result r) {
+        for (BetaflightPlan.Change c : r.plan()) if (c.description().startsWith("Modes:")) return c.commands();
+        return List.of();
+    }
+
+    @Test
+    void onA44BoardTheDefaultChoicesKeepAngleAtTheTop() throws IOException {
+        FakeCli cli = new FakeCli().with("version", BF44).with("aux", aux("aux 0 0 0 1700 2100 0 0", "aux 5 1 1 1700 2100 0 0"));
+        SetupPlanner.Result r = SetupPlanner.plan(cli, new SetupPlanner.Fc(BOXES, MSP_RX_GPS, false, true), wanted(true, 0, ModeSwitch.Failsafe.KEEP));
+        List<String> c = modeCommands(r);
+        assertFalse(c.contains("aux 5 0 0 900 900 0 0"), "the top's ANGLE is not taken off: " + c);
+        assertTrue(c.contains("aux 1 1 1 1300 1700 0 0"), c.toString());
+        assertFalse(c.stream().anyMatch(x -> x.matches("aux \\d+ 11 .*")), "no POS HOLD on 4.4: " + c);
+        assertEquals(List.of("high keeps ANGLE: GPS position hold needs Betaflight 2025.12 or newer - this one is 4.4."), r.modes().kept());
+        assertFalse(r.replaced().contains("ANGLE on AUX2"), r.replaced().toString());
+        assertTrue(described(r).stream().anyMatch(d -> d.contains("high keeps ANGLE")), "the log says what the top gets: " + described(r));
+    }
+
+    @Test
+    void onA2025BoardTheDefaultChoicesWritePosHoldAsBefore() throws IOException {
+        FakeCli cli = new FakeCli().with("version", NEW).with("aux", aux("aux 0 0 0 1700 2100 0 0", "aux 5 1 1 1700 2100 0 0"));
+        SetupPlanner.Result r = SetupPlanner.plan(cli, new SetupPlanner.Fc(BOXES, MSP_RX_GPS, false, true), wanted(true, 0, ModeSwitch.Failsafe.KEEP));
+        List<String> c = modeCommands(r);
+        assertTrue(c.contains("aux 5 0 0 900 900 0 0") && c.stream().anyMatch(x -> x.matches("aux \\d+ 11 1 1700 2100 0 0")), c.toString());
+        assertEquals(List.of(), r.modes().kept());
+        assertTrue(described(r).stream().anyMatch(d -> d.contains("high GPS position hold")), described(r).toString());
+    }
+
     @Test
     void takenOffReadsAsASentence() {
         assertEquals("", SetupPlanner.takenOff(List.of()));
@@ -281,7 +313,10 @@ class SetupPlannerTest {
     // 1.0.71: recorded anew for the field round - checked to differ from 1.0.53's (49d15c23...) in three things only:
     // the two vbat limits asked for, "beacon RX_LOST" after "beacon RX_SET", and the beepers' line saying so
 
-    private static final String RECORDED = "b7a0338e553a047b66d16f4917cffaae4b12b86d5e4fd2e9c6953daf0c89b92f";
+    // F-086: recorded anew - checked against b7a0338e... to differ in 1920 of 3888 rounds, all with the default switch's
+    // POS HOLD blocked: the Modes line says what the top gets ("high no mode", "high keeps HORIZON") instead of a POS HOLD
+    // never written, and HORIZON at the top of AUX2 is kept rather than taken off (its commands and "replaced")
+    private static final String RECORDED = "bed66e6c579aba74be46c9a0d8f405e835dd04acc61dd4c3bf3c6a55617692c3";
 
     static String grid() throws IOException {
         StringBuilder sb = new StringBuilder();
