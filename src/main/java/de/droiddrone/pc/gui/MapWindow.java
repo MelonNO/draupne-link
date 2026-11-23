@@ -61,6 +61,11 @@ final class MapWindow extends JFrame {
     /** Fleet PRD area B: the ROUTE window, made at its first use. */
     private RouteWindow routeWindow;
 
+    /** Fleet G4: the follower group to draw (null: none). */
+    void setGroup(de.droiddrone.pc.air.GroupLink.Picture p) {
+        map.setGroup(p);
+    }
+
     RouteWindow routes() {
         if (routeWindow == null) {
             MainWindow main = getOwner() instanceof MainWindow m ? m : null;

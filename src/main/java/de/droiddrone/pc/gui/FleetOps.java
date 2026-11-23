@@ -166,6 +166,12 @@ final class FleetOps {
         t.start();
     }
 
+    /** The group for the map (G4), or null: none. */
+    GroupLink.Picture picture() {
+        GroupLink l = link;
+        return l == null ? null : l.picture();
+    }
+
     void end() {
         GroupLink l = link;
         if (l != null) l.disband();

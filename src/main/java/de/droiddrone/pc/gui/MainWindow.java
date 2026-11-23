@@ -5480,6 +5480,8 @@ public class MainWindow extends JFrame {
     /** Once a second: every phone's card for the map window (only while it is open). */
     private void refreshFleet() {
         if (fleets != null) fleets.refresh();
+        MapWindow mw = mapWindowIfOpen(); // fleet G4: the follower group on the map
+        if (mw != null) mw.setGroup(fleetOps.picture());
     }
 
     /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */

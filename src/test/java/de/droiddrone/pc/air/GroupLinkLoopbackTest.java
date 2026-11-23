@@ -77,6 +77,12 @@ class GroupLinkLoopbackTest {
         for (String d : all) assertNotNull(link.status(d), d + " reported");
 
         assertNull(link.form("Lead", List.of(names), GROUND), "formed");
+        GroupLink.Picture pic = link.picture(); // G4: what the map draws
+        assertEquals(8, pic.cells().size(), "the ring round the empty core");
+        assertEquals(4, pic.shafts().size());
+        assertTrue(pic.keepOutHalfM() > pic.edgeHalfM() && pic.leashM() > pic.keepOutHalfM());
+        assertEquals(4, pic.followers());
+        assertEquals("Lead", pic.lead());
         double closest = Double.MAX_VALUE;
         long end = System.currentTimeMillis() + 8000;
         while (System.currentTimeMillis() < end) {

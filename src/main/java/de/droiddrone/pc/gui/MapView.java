@@ -322,6 +322,15 @@ class MapView extends JComponent {
         fleetItems = items;
     }
 
+    /** Fleet G4 / GU-3: the follower group from above (null: none). */
+    private volatile de.droiddrone.pc.air.GroupLink.Picture group;
+
+    void setGroup(de.droiddrone.pc.air.GroupLink.Picture p) {
+        if (p == null && group == null) return;
+        group = p;
+        repaint();
+    }
+
     void setRouteHost(RouteHost host) {
         routeHost = host;
     }
@@ -1802,6 +1811,7 @@ class MapView extends JComponent {
             if (home != null) MapPlaceLayer.paintRings(g, home, proj);
             if (oldTrack != null) MapTrackLayer.paintOldTrack(g, oldTrackPath, oldTrackName, proj);
             MapTrackLayer.paintKept(g, kept, keptPaths, proj);
+            if (group != null) MapGroupLayer.paint(g, group, proj); // fleet G4
             if (route != null) MapRouteLayer.paint(g, route, routePlanned, routeSelected, proj); // fleet RT-1
             MapTrackLayer.paintTrack(g, trackPath, proj);
             if (home != null) MapPlaceLayer.paintHome(g, home, proj);

@@ -158,6 +158,35 @@ public final class GroupLink implements AutoCloseable {
         listener.event("Group ended: the followers hold where they are.");
     }
 
+    /**
+     * GU-3 / G4: the group as the map draws it - the centre, each cell, the four transit shafts (lat, lon), the half
+     * widths of its edge and of the keep-out zone round it, the leash, the floor, how many follow, the lead.
+     */
+    public record Picture(double lat, double lon, List<double[]> cells, List<double[]> shafts, double edgeHalfM,
+                          double keepOutHalfM, double leashM, double shaftHalfM, double floorM, int followers, String lead) {}
+
+    public synchronized Picture picture() {
+        GroupController g = group;
+        if (g == null || Double.isNaN(lat0)) return null;
+        AirParams p = g.params();
+        HollowCube cube = g.cube();
+        V2 c = g.centre();
+        double[] centre = GeoLocal.offset(lat0, lon0, c.e(), c.n());
+        List<double[]> cells = new ArrayList<>(), shafts = new ArrayList<>();
+        for (int i = 0; i < HollowCube.CELLS; i++) { // the ring round the empty core
+            V2 at = c.plus(cube.cell(i));
+            cells.add(GeoLocal.offset(lat0, lon0, at.e(), at.n()));
+        }
+        double edge = 0;
+        for (HollowCube.Face f : HollowCube.Face.values()) {
+            V2 s = c.plus(cube.shaft(f));
+            shafts.add(GeoLocal.offset(lat0, lon0, s.e(), s.n()));
+            edge = Math.max(edge, Math.abs(cube.shaft(f).e()) + Math.abs(cube.shaft(f).n()) + p.radiusM());
+        }
+        return new Picture(centre[0], centre[1], cells, shafts, edge, edge + p.keepOutM(), p.leashM(), p.radiusM(),
+                p.floorM(), g.members().size(), lead);
+    }
+
     private V2 local(double lat, double lon) {
         return new V2(GeoLocal.east(lat0, lon0, lat, lon), GeoLocal.north(lat0, lon0, lat, lon));
     }
