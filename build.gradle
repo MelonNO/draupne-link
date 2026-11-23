@@ -46,6 +46,8 @@ sourceSets {
             srcDir 'upstream/Common/src/main/java'
             srcDir 'flight-app/overlay/Common/src/main/java'
             srcDir 'upstream/Server/src'
+            // fleet: upstream's MAVLink library (plain Java) - the PC builds and reads the same frames the phone does
+            srcDir 'upstream/mavlink/src/main/java'
             exclude '**/server/Main.java'
             exclude '**/common/MediaCodecBuffer.java'
             exclude '**/common/MediaCommon.java'
