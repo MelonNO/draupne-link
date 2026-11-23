@@ -66,12 +66,6 @@ class MavSessionEdgeTest {
         return new msg_heartbeat(customMode, (short) type, (short) autopilot, (short) baseMode, (short) 4, (short) 3, sysId, compId, true).pack();
     }
 
-    static void waitFor(java.util.function.BooleanSupplier c) throws InterruptedException {
-        long end = System.nanoTime() + 3_000_000_000L;
-        while (!c.getAsBoolean() && System.nanoTime() < end) Thread.sleep(5);
-        assertTrue(c.getAsBoolean());
-    }
-
     /**
      * ArduPilot routes the heartbeats of what hangs on its other ports to USB. A gimbal's (MAV_AUTOPILOT_INVALID, base
      * mode 0, component 154) was taken as the FC's: DISARMED, STABILIZE, and every command went to component 154.
@@ -81,7 +75,7 @@ class MavSessionEdgeTest {
         TestWire w = new TestWire();
         try (MavSession s = new MavSession(w, false)) {
             w.feed(heartbeat(2, 3, 128 | 1, 5, 7, 1)); // the FC: armed, LOITER
-            waitFor(() -> s.fcSysId() == 7);
+            de.droiddrone.testing.Waits.waitFor(() -> s.fcSysId() == 7, 3000, "the FC's heartbeat");
             w.feed(heartbeat(26, 8, 0, 0, 7, 154)); // its gimbal
             w.feed(heartbeat(27, 8, 0, 0, 9, 156)); // an ADS-B receiver
             w.feed(heartbeat(6, 8, 0, 0, 255, 190)); // another ground station
@@ -115,7 +109,7 @@ class MavSessionEdgeTest {
         TestWire w = new TestWire();
         try (MavSession s = new MavSession(w, false)) {
             w.feed(heartbeat(2, 3, 1, 0, 1, 1));
-            waitFor(() -> s.fcSysId() == 1);
+            de.droiddrone.testing.Waits.waitFor(() -> s.fcSysId() == 1, 3000, "the FC's heartbeat");
             Thread t = new Thread(() -> {
                 try {
                     Thread.sleep(100);
