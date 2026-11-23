@@ -189,6 +189,10 @@ public final class VirtualFleetPhone implements AutoCloseable {
                     if (!lead) leadOrderedAt = 0;
                     else if (!inSession() && follower && (leadOrderedAt == 0 || now - leadOrderedAt > FleetCommandGate.LEAD_CONNECT_MS)) leadOrderedAt = now;
                 }
+                case FleetCmd.RETURN -> { // RT-9 / FD-6: as FleetRole - its RTL_ALT, "read back" at once
+                    double h = FleetCmd.readReturnHeight(c);
+                    if (h > 0) rtlAltDm = (int) Math.round(h * 10);
+                }
                 case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 default -> {
                 }
@@ -246,6 +250,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             if (copter.landed) s.flags |= FleetStatus.LANDED;
             if (now - commanderHeardAt <= 3000) s.flags |= FleetStatus.PC_HEARD;
             s.errM = copter.errorM((now - start) / 1000.0);
+            s.rtlAltDm = rtlAltDm;
             FollowerBrain b = brain;
             s.phase = b == null ? 255 : b.phase();
         }
@@ -306,6 +311,12 @@ public final class VirtualFleetPhone implements AutoCloseable {
     private final de.droiddrone.common.launch.LaunchSequence seq = new de.droiddrone.common.launch.LaunchSequence(check);
     /** FD-8 / AC-11: the last TRAFFIC from the PC - what its FC would get as ADS-B targets - and how many came. */
     public volatile de.droiddrone.common.group.Traffic traffic;
+    /** RT-9: RTL_ALT on its "FC" (dm above home): ArduPilot Copter's default 15 m until the PC sets it. */
+    public volatile int rtlAltDm = 150;
+
+    public double rtlAltM() {
+        return rtlAltDm / 10.0;
+    }
     public final java.util.concurrent.atomic.AtomicInteger trafficCount = new java.util.concurrent.atomic.AtomicInteger();
 
     /** Every ARM this phone gave, with whether it held a mark then (the AL-12 invariant, for the tests). */

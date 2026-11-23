@@ -548,6 +548,7 @@ public class Mavlink {
         s.battery = batteryPercent;
         s.mode = customModeNow < 0 || customModeNow > 254 ? 255 : customModeNow;
         s.homeAmsl = Double.isNaN(homeAmslM) ? 0 : homeAmslM;
+        s.rtlAltDm = rtlAltCmRead < 0 ? -1 : (int) Math.round(rtlAltCmRead / 10.0); // RT-9: as ArduPilot answered
         if (armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.ARMED;
         if (gnssOk()) s.flags |= de.droiddrone.common.FleetStatus.GNSS;
         if (!armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.LANDED;
@@ -582,6 +583,9 @@ public class Mavlink {
                 (float) altAmsl, (float) velNorth, (float) velEast, 0f, 0f, 0f, 0f, Double.isNaN(yawDeg) ? 0f : (float) Math.toRadians(yawDeg),
                 0f, mask, targetSys(), targetComponent, FRAME_GLOBAL_INT, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
+
+    /** RTL_ALT (cm) as the FC last answered it (PARAM_VALUE); -1 not known. Fleet RT-9: the PC's check before a launch. */
+    private volatile float rtlAltCmRead = -1;
 
     /** RTL_ALT (cm above home) for the follower's or lead's way home (AC-41). */
     void setRtlAltM(double relM) {
@@ -982,6 +986,7 @@ public class Mavlink {
                     }
                     case msg_param_value.MAVLINK_MSG_ID_PARAM_VALUE: {
                         msg_param_value message = new msg_param_value(packet);
+                        if ("RTL_ALT".equals(message.getParam_Id())) rtlAltCmRead = message.param_value; // DRAUPNE Link (fleet RT-9)
                         if (fcParams == null) break;
                         fcParams.setParam(message.getParam_Id(), message.param_value);
                         break;
