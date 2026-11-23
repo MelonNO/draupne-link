@@ -395,9 +395,30 @@ public class Mavlink {
         return customModeNow;
     }
 
-    /** A 3D fix or better (GPS_RAW_INT). */
+    /** A 3D fix or better (GPS_RAW_INT), said within 3 s: the last fix of an FC that stopped talking is none. */
     public boolean gnssOk() {
-        return checkGpsFix();
+        long at = gpsRawAtMs;
+        return checkGpsFix() && at != 0 && android.os.SystemClock.elapsedRealtime() - at <= FcArmedState.MAVLINK_FRESH_MS;
+    }
+
+    /** Fleet: when the FC last sent its attitude, SYS_STATUS and GPS_RAW_INT (elapsedRealtime, 0 never). */
+    private volatile long attitudeAtMs, sysStatusAtMs, gpsRawAtMs;
+
+    /** The FC's armed word is fresh: a heartbeat within 3 s. */
+    boolean armedKnown(long nowMs) {
+        return heartbeatAtMs != 0 && nowMs - heartbeatAtMs <= FcArmedState.MAVLINK_FRESH_MS;
+    }
+
+    /** Known DISARMED: a fresh heartbeat that says so (not known counts as armed). */
+    boolean disarmedKnown(long nowMs) {
+        return armedKnown(nowMs) && !isArmed;
+    }
+
+    /** How old the oldest of the attitude, SYS_STATUS and GPS_RAW_INT is, ms; Long.MAX_VALUE if one never came. */
+    long fcDataAgeMs(long nowMs) {
+        long a = attitudeAtMs, s = sysStatusAtMs, g = gpsRawAtMs;
+        if (a == 0 || s == 0 || g == 0) return Long.MAX_VALUE;
+        return Math.max(0, nowMs - Math.min(a, Math.min(s, g)));
     }
 
     /** An ArduPilot flight controller is on the port and known (its version read). */
@@ -476,9 +497,10 @@ public class Mavlink {
         if (!isArduPilot()) return;
         tunnelUsedAtMs = android.os.SystemClock.elapsedRealtime();
         de.droiddrone.common.MavTunnel.split(data, 0, data.length, (d, off, len) -> {
-            int id = de.droiddrone.common.MavTunnel.msgId(d, off, len);
-            if (de.droiddrone.common.MavTunnel.isLogRequest(id) && armedNow(android.os.SystemClock.elapsedRealtime())) return; // AP-10: logs on the ground only
-            if (de.droiddrone.common.MavTunnel.toFc(d, off, len)) {
+            // AP-10: logs on the ground only - known DISARMED (a stale heartbeat read as "not armed" let a log read start in the air)
+            boolean disarmed = disarmedKnown(android.os.SystemClock.elapsedRealtime());
+            if (de.droiddrone.common.MavTunnel.isLogRequest(de.droiddrone.common.MavTunnel.msgId(d, off, len)) && !disarmed) return;
+            if (de.droiddrone.common.MavTunnel.toFc(d, off, len, disarmed)) {
                 serial.writeDataMavlink(java.util.Arrays.copyOfRange(d, off, off + len));
             } else if (!tunnelRefusedSaid) {
                 tunnelRefusedSaid = true;
@@ -899,7 +921,9 @@ public class Mavlink {
                 switch (packet.msgid) {
                     case msg_heartbeat.MAVLINK_MSG_ID_HEARTBEAT: {
                         msg_heartbeat message = new msg_heartbeat(packet);
-                        if (message.type == MAV_TYPE_GCS) break; // DRAUPNE Link (fleet): another ground station's, not the FC's
+                        // DRAUPNE Link (fleet): another ground station's, or a gimbal's, an ADS-B receiver's ... (MAV_AUTOPILOT_INVALID) that
+                        // ArduPilot routes to USB - not the FC's: its base mode 0 read as DISARMED, its sysid became the target
+                        if (!de.droiddrone.common.MavlinkSniff.isFlightController(message.type, message.autopilot)) break;
                         isArmed = (message.base_mode & MAV_MODE_FLAG.MAV_MODE_FLAG_SAFETY_ARMED) != 0;
                         // DRAUPNE Link (fleet): every heartbeat is the FC's word on armed - before, only the mode record
                         // (sent once the FC's parameters were read) told the guards, so a new board was UNKNOWN for longer
@@ -955,6 +979,7 @@ public class Mavlink {
                     case msg_attitude.MAVLINK_MSG_ID_ATTITUDE: {
                         msg_attitude message = new msg_attitude(packet);
                         lastAttitudeTs = System.currentTimeMillis();
+                        attitudeAtMs = android.os.SystemClock.elapsedRealtime(); // DRAUPNE Link (fleet): the launch's check reads its age
                         rollNow = Math.toDegrees(message.roll); // DRAUPNE Link (fleet): the launch's checks (AL-13, AL-14)
                         pitchNow = Math.toDegrees(message.pitch);
                         yawNow = (Math.toDegrees(message.yaw) + 360) % 360;
@@ -979,6 +1004,7 @@ public class Mavlink {
                     case msg_sys_status.MAVLINK_MSG_ID_SYS_STATUS: {
                         msg_sys_status message = new msg_sys_status(packet);
                         lastSysStatusTs = System.currentTimeMillis();
+                        sysStatusAtMs = android.os.SystemClock.elapsedRealtime(); // DRAUPNE Link (fleet)
                         batteryPercent = message.battery_remaining < 0 ? 255 : message.battery_remaining; // DRAUPNE Link (fleet)
                         sensorsPresent = message.onboard_control_sensors_present;
                         sensorsHealth = message.onboard_control_sensors_health;
@@ -1010,6 +1036,7 @@ public class Mavlink {
                     case msg_gps_raw_int.MAVLINK_MSG_ID_GPS_RAW_INT: {
                         msg_gps_raw_int message = new msg_gps_raw_int(packet);
                         lastGpsRawIntTs = System.currentTimeMillis();
+                        gpsRawAtMs = android.os.SystemClock.elapsedRealtime(); // DRAUPNE Link (fleet): a fix this old is none
                         if (message.fix_type >= 0 && message.fix_type < FcCommon.GpsFixTypesMavlink.values().length) {
                             this.fixTypeArduPilot = FcCommon.GpsFixTypesMavlink.values()[message.fix_type];
                         }

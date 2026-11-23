@@ -19,6 +19,9 @@ public final class TunnelWire implements MavSession.Wire {
     private final ControlLink link;
     private final BlockingQueue<byte[]> in = new LinkedBlockingQueue<>(MAX_QUEUED);
     private volatile boolean closed;
+    /** What a read with a smaller buffer left of the last packet: given first by the next read (the reader thread's own). */
+    private byte[] rest;
+    private int restAt;
     private java.util.function.Consumer<byte[]> listener;
 
     public TunnelWire(ControlLink link) {
@@ -42,10 +45,22 @@ public final class TunnelWire implements MavSession.Wire {
     public int read(byte[] buf, int timeoutMs) {
         if (closed) return -1;
         try {
-            byte[] f = in.poll(timeoutMs, TimeUnit.MILLISECONDS);
+            byte[] f = rest;
+            int at = restAt;
+            if (f == null) {
+                f = in.poll(timeoutMs, TimeUnit.MILLISECONDS);
+                at = 0;
+            }
             if (f == null) return 0;
-            int n = Math.min(buf.length, f.length);
-            System.arraycopy(f, 0, buf, 0, n);
+            // a packet larger than the buffer is given in parts (it was cut and its tail lost: a broken frame)
+            int n = Math.min(buf.length, f.length - at);
+            System.arraycopy(f, at, buf, 0, n);
+            if (at + n < f.length) {
+                rest = f;
+                restAt = at + n;
+            } else {
+                rest = null;
+            }
             return n;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

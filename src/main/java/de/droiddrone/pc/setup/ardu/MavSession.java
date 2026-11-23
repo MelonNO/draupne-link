@@ -77,7 +77,7 @@ public final class MavSession implements AutoCloseable {
 
     /** The FC's armed flag from a heartbeat no older than 3 s; true (not known) without one - nothing is written then. */
     public boolean armed() {
-        return heartbeatAt == 0 || System.currentTimeMillis() - heartbeatAt > 3000 || armed;
+        return heartbeatAt == 0 || de.droiddrone.pc.MonoClock.ms() - heartbeatAt > 3000 || armed;
     }
 
     private volatile int customMode = -1, gpsFix = -1;
@@ -119,15 +119,15 @@ public final class MavSession implements AutoCloseable {
     /** The flight controller's last heartbeat is no older than 3 s. */
     public boolean heartbeatFresh() {
         long at = heartbeatAt;
-        return at != 0 && System.currentTimeMillis() - at <= 3000;
+        return at != 0 && de.droiddrone.pc.MonoClock.ms() - at <= 3000;
     }
 
     /** A heartbeat came from the flight controller within timeoutMs. */
     public boolean awaitHeartbeat(long timeoutMs) throws InterruptedException {
-        long end = System.currentTimeMillis() + timeoutMs;
+        long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
         synchronized (lock) {
             while (fcSysId < 0 && open) {
-                long left = end - System.currentTimeMillis();
+                long left = end - de.droiddrone.pc.MonoClock.ms();
                 if (left <= 0) return false;
                 lock.wait(left);
             }
@@ -171,18 +171,18 @@ public final class MavSession implements AutoCloseable {
         onPacket(l);
         try {
             send(new msg_param_request_list(target(), (short) fcCompId, GCS_SYSID, GCS_COMPID, true).pack());
-            long end = System.currentTimeMillis() + timeoutMs;
-            long lastAsk = System.currentTimeMillis();
+            long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
+            long lastAsk = de.droiddrone.pc.MonoClock.ms();
             while (true) {
                 synchronized (got) {
                     if (count[0] >= 0 && names.size() >= count[0]) break;
-                    long left = end - System.currentTimeMillis();
+                    long left = end - de.droiddrone.pc.MonoClock.ms();
                     if (left <= 0) throw new IOException("parameters: " + names.size() + " of " + Math.max(count[0], 0) + " read");
                     got.wait(Math.min(left, 300));
                 }
                 // quiet for a moment with some missing: ask for those by index
-                if (count[0] > 0 && System.currentTimeMillis() - lastAsk > 1000) {
-                    lastAsk = System.currentTimeMillis();
+                if (count[0] > 0 && de.droiddrone.pc.MonoClock.ms() - lastAsk > 1000) {
+                    lastAsk = de.droiddrone.pc.MonoClock.ms();
                     List<Integer> missing = new java.util.ArrayList<>();
                     synchronized (got) {
                         for (int i = 0; i < count[0] && missing.size() < 20; i++) if (!names.containsKey(i)) missing.add(i);
@@ -225,10 +225,10 @@ public final class MavSession implements AutoCloseable {
         try {
             for (int attempt = 0; attempt < 3; attempt++) {
                 send(new msg_param_set(value, target(), (short) fcCompId, id16(name), PARAM_REAL32, GCS_SYSID, GCS_COMPID, true).pack());
-                long end = System.currentTimeMillis() + timeoutMs;
+                long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
                 synchronized (got) {
                     while (!answered[0]) {
-                        long left = end - System.currentTimeMillis();
+                        long left = end - de.droiddrone.pc.MonoClock.ms();
                         if (left <= 0) break;
                         got.wait(left);
                     }
@@ -257,10 +257,10 @@ public final class MavSession implements AutoCloseable {
         onPacket(l);
         try {
             send(new msg_param_request_read((short) -1, target(), (short) fcCompId, id16(name), GCS_SYSID, GCS_COMPID, true).pack());
-            long end = System.currentTimeMillis() + timeoutMs;
+            long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
             synchronized (got) {
                 while (Float.isNaN(back[0])) {
-                    long left = end - System.currentTimeMillis();
+                    long left = end - de.droiddrone.pc.MonoClock.ms();
                     if (left <= 0) break;
                     got.wait(left);
                 }
@@ -291,10 +291,10 @@ public final class MavSession implements AutoCloseable {
         try {
             send(new msg_command_long(p1, p2, p3, p4, p5, p6, p7, command, target(), (short) fcCompId, (short) 0,
                     GCS_SYSID, GCS_COMPID, true).pack());
-            long end = System.currentTimeMillis() + timeoutMs;
+            long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
             synchronized (got) {
                 while (result[0] < 0) {
-                    long left = end - System.currentTimeMillis();
+                    long left = end - de.droiddrone.pc.MonoClock.ms();
                     if (left <= 0) break;
                     got.wait(left);
                 }
@@ -392,10 +392,12 @@ public final class MavSession implements AutoCloseable {
         }
         if (p.msgid == msg_heartbeat.MAVLINK_MSG_ID_HEARTBEAT) {
             msg_heartbeat h = new msg_heartbeat(p);
-            if (h.type != 6) { // not another ground station's
+            // the FC's own: not another ground station's, nor a gimbal's or ADS-B receiver's (MAV_AUTOPILOT_INVALID) that
+            // ArduPilot routes on - its component id became the one every command and parameter went to
+            if (de.droiddrone.common.MavlinkSniff.isFlightController(h.type, h.autopilot)) {
                 customMode = (int) h.custom_mode;
                 armed = (h.base_mode & 128) != 0; // MAV_MODE_FLAG_SAFETY_ARMED
-                heartbeatAt = System.currentTimeMillis();
+                heartbeatAt = de.droiddrone.pc.MonoClock.ms();
                 fcCompId = p.compid;
                 synchronized (lock) {
                     fcSysId = p.sysid;

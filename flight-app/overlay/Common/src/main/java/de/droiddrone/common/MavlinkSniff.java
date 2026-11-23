@@ -129,6 +129,19 @@ public final class MavlinkSniff {
         return true;
     }
 
+    /** MAV_AUTOPILOT_INVALID: "no valid autopilot" - a ground station, a gimbal, an ADS-B receiver, a camera, a companion. */
+    public static final int AUTOPILOT_INVALID = 8;
+
+    /**
+     * Whether a HEARTBEAT is the flight controller's own: not a ground station's and not another component's
+     * (MAV_AUTOPILOT_INVALID). ArduPilot routes the heartbeats of what hangs on its other ports (a gimbal, an ADS-B
+     * receiver, a MAVLink OSD) to USB; taken as the FC's, their base mode 0 read as DISARMED and their custom mode as
+     * STABILIZE, and their component id became the one every command was sent to.
+     */
+    public static boolean isFlightController(int mavType, int autopilot) {
+        return mavType != MAV_TYPE_GCS && autopilot != AUTOPILOT_INVALID;
+    }
+
     /** MAVLink's X.25 checksum, one byte. */
     static int crcAccumulate(int b, int crc) {
         int tmp = b ^ (crc & 0xff);

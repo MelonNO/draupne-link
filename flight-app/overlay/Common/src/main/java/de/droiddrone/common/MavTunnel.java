@@ -92,6 +92,15 @@ public final class MavTunnel {
         }
     }
 
+    /**
+     * What the phone writes to the FC: {@link #toFc}, and a log request (AP-10) only while the FC is known DISARMED - its
+     * fresh heartbeat says so. Not known (no heartbeat for 3 s) counts as armed: a log read slows an FC in the air.
+     */
+    public static boolean toFc(byte[] f, int off, int len, boolean fcKnownDisarmed) {
+        if (!toFc(f, off, len)) return false;
+        return fcKnownDisarmed || !isLogRequest(msgId(f, off, len));
+    }
+
     /** AP-10: a log request - the phone writes it to the FC only while it is disarmed (a log read slows the FC). */
     public static boolean isLogRequest(int msgId) {
         return msgId == LOG_REQUEST_LIST || msgId == LOG_REQUEST_DATA || msgId == LOG_REQUEST_END;

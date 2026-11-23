@@ -48,12 +48,12 @@ public final class RouteSender {
     }
 
     static Result run(int block, byte[] packet, Predicate<byte[]> send, Supplier<FcTelemetry.RouteUpload> status, Consumer<Integer> progress) {
-        long start = System.currentTimeMillis();
+        long start = de.droiddrone.pc.MonoClock.ms();
         int sends = 0;
         boolean heard = false;
         int lastPercent = -1;
         try {
-            while (System.currentTimeMillis() - start < FINISH_MS) {
+            while (de.droiddrone.pc.MonoClock.ms() - start < FINISH_MS) {
                 FcTelemetry.RouteUpload s = status.get();
                 boolean ours = s != null && s.block() == block;
                 if (ours) {

@@ -39,6 +39,33 @@ class MavTunnelEdgeTest {
         assertEquals(-1, MavTunnel.command(f, 0, 12));
     }
 
+    /** AP-10: a log read only on the ground. A stale heartbeat (not known) read as "not armed" and let one through. */
+    @Test
+    void logRequestsOnlyWhileKnownDisarmed() {
+        byte[] list = new com.MAVLink.common.msg_log_request_list(0, 0xffff, (short) 1, (short) 1, 255, 190, true).pack().encodePacket();
+        byte[] data = new com.MAVLink.common.msg_log_request_data(0, 90, 1, (short) 1, (short) 1, 255, 190, true).pack().encodePacket();
+        for (byte[] f : new byte[][]{list, data}) {
+            assertTrue(MavTunnel.toFc(f, 0, f.length, true));
+            assertFalse(MavTunnel.toFc(f, 0, f.length, false), "armed, or not known");
+        }
+        byte[] mode = commandLong(176, 1, 1, true);
+        assertTrue(MavTunnel.toFc(mode, 0, mode.length, false), "the rest goes armed or not");
+        byte[] arm = commandLong(400, 1, 1, true);
+        assertFalse(MavTunnel.toFc(arm, 0, arm.length, true));
+    }
+
+    /** A gimbal's or ADS-B receiver's heartbeat, routed to USB by ArduPilot, is not the FC's. */
+    @Test
+    void onlyTheFlightControllersHeartbeatCounts() {
+        assertTrue(MavlinkSniff.isFlightController(2, 3), "a quad, ArduPilot");
+        assertTrue(MavlinkSniff.isFlightController(13, 12), "a hexa, PX4");
+        assertFalse(MavlinkSniff.isFlightController(6, 8), "a ground station");
+        assertFalse(MavlinkSniff.isFlightController(6, 3), "a ground station calling itself ArduPilot");
+        assertFalse(MavlinkSniff.isFlightController(26, 8), "a gimbal");
+        assertFalse(MavlinkSniff.isFlightController(27, 8), "an ADS-B receiver");
+        assertFalse(MavlinkSniff.isFlightController(18, 8), "a companion computer");
+    }
+
     @Test
     void neverTheBenchsCommands() {
         int[] never = {400, 241, 209, 246, 410, 0, 65535, 176 + 256};
