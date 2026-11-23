@@ -67,6 +67,21 @@ class SitlDispatchTest {
                     + " ArduPilot said " + e.getValue().texts.subList(Math.max(0, e.getValue().texts.size() - 10), e.getValue().texts.size()) + " " + log);
         }
         assertTrue(worst > 0, "never two inside 10 m and 10 m: " + worst);
+        // AC-10: each had its own rally point on ArduPilot, read back from it, RTL to it (not home)
+        List<double[]> rallies = new ArrayList<>();
+        for (Map.Entry<String, SitlFleetPhone> e : phones.entrySet()) {
+            List<de.droiddrone.common.MissionItem> r = e.getValue().rallyRead;
+            assertNotNull(r, e.getKey() + ": its rally point read back from ArduPilot " + log);
+            assertEquals(1, r.size());
+            assertEquals(0f, e.getValue().rallyInclHome, e.getKey() + ": RALLY_INCL_HOME 0");
+            rallies.add(new double[]{r.get(0).x / 1e7, r.get(0).y / 1e7});
+        }
+        for (int i = 0; i < rallies.size(); i++) {
+            for (int j = i + 1; j < rallies.size(); j++) {
+                assertTrue(GeoLocal.distance(rallies.get(i)[0], rallies.get(i)[1], rallies.get(j)[0], rallies.get(j)[1])
+                        >= de.droiddrone.pc.launch.RallyPlan.MIN_APART_M, "rally points twice the protection radius apart");
+            }
+        }
         List<Long> heights = new ArrayList<>();
         for (SitlFleetPhone p : phones.values()) heights.add(Math.round(p.fc.position()[2] / 5.0));
         assertEquals(3, heights.stream().distinct().count(), "each its own height: " + heights);

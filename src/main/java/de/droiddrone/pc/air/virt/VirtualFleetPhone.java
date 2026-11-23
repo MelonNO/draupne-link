@@ -141,7 +141,16 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 }
                 case de.droiddrone.common.MissionBlock.PACKET -> { // a route: kept, "read back" at once (the real phone uploads it over USB)
                     de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
-                    if (b != null) synchronized (copter) {
+                    if (b != null && b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY) synchronized (copter) {
+                        rally = b.items; // AC-10: the FC's rally list - its RTL lands there
+                        rallyBlocks.add(b.blockId);
+                        routeBlock = b.blockId;
+                        if (!b.items.isEmpty()) {
+                            double rLat = b.items.get(0).x / 1e7, rLon = b.items.get(0).y / 1e7;
+                            copter.rallyE = GeoLocal.east(refLat, refLon, rLat, rLon);
+                            copter.rallyN = GeoLocal.north(refLat, refLon, rLat, rLon);
+                        }
+                    } else if (b != null) synchronized (copter) {
                         route = b.items;
                         routeBlock = b.blockId;
                         routeNext = 1;
@@ -221,7 +230,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             s.battery = (int) Math.round(copter.battery);
             s.homeAmsl = copter.homeAmsl;
             s.routeBlock = routeBlock;
-            s.routeState = route == null ? 0 : de.droiddrone.common.MissionUpload.DONE;
+            s.routeState = route == null && rally == null ? 0 : de.droiddrone.common.MissionUpload.DONE;
             s.routePercent = route == null ? 0 : 100;
             s.mode = auto ? 3 : 5;
             if (armed && !copter.landed) s.flags |= FleetStatus.ARMED;
@@ -241,6 +250,13 @@ public final class VirtualFleetPhone implements AutoCloseable {
     }
 
     // ---- fleet FD-3: a route flown in AUTO (waypoints one after another; at the end it holds, as B5 says)
+
+    /** AC-10: the rally list the PC sent (null: none). */
+    private volatile java.util.List<de.droiddrone.common.MissionItem> rally;
+
+    public java.util.List<de.droiddrone.common.MissionItem> rally() {
+        return rally;
+    }
 
     private java.util.List<de.droiddrone.common.MissionItem> route;
     private int routeBlock, routeNext;
@@ -282,6 +298,8 @@ public final class VirtualFleetPhone implements AutoCloseable {
     private final de.droiddrone.common.launch.LaunchSequence seq = new de.droiddrone.common.launch.LaunchSequence(check);
     /** Every ARM this phone gave, with whether it held a mark then (the AL-12 invariant, for the tests). */
     public final java.util.List<String> arms = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** AC-10: every rally block it was sent (the same one again counts again). */
+    public final java.util.List<Integer> rallyBlocks = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** On the ground, disarmed: a reserve (call before the PC marks it). */
     public void landed() {
@@ -353,7 +371,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
         for (de.droiddrone.common.launch.LaunchIntent i : todo) {
             switch (i.type) {
                 case de.droiddrone.common.launch.LaunchIntent.ARM -> {
-                    arms.add(copter.id + (seq.mark() != null || seq.order() != null ? " marked" : " UNMARKED"));
+                    arms.add(copter.id + (seq.mark() != null || seq.order() != null ? " marked" : " UNMARKED") + (rally == null ? " NO RALLY" : ""));
                     armed = true;
                 }
                 case de.droiddrone.common.launch.LaunchIntent.TAKEOFF -> copter.climbTo(groundAmsl + i.heightM);

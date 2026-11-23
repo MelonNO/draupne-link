@@ -303,6 +303,42 @@ final class RouteWindow extends JDialog {
         }
         MissionBuilder.Mission m = MissionBuilder.build(p, home.latDeg(), home.lonDeg(), homeAmsl);
         upload.setEnabled(false);
+        // AC-10: its own rally point first (where it took off, or the nearest free spot), sent only when it changed
+        double[] at = rallyPlace.apply(home.latDeg(), home.lonDeg());
+        List<MissionItem> rally = de.droiddrone.pc.launch.RallyPlan.items(at[0], at[1], route == null ? 60 : route.heightM());
+        if (!sameItems(rally, rallySent)) {
+            say("Sending its rally point ...", Theme.WARN);
+            RouteSender.send(de.droiddrone.common.MissionUpload.TYPE_RALLY, rally, l::sendMissionBlock, l.getTelemetry()::getRouteUpload, null,
+                    r -> SwingUtilities.invokeLater(() -> {
+                        if (!r.done()) {
+                            say("Rally point: " + r.text(), Theme.BAD);
+                            refreshButtons();
+                            return;
+                        }
+                        rallySent = rally;
+                        sendRoute(l, m);
+                    }));
+            return;
+        }
+        sendRoute(l, m);
+    }
+
+    /** The rally list last read back on the drone (null: none sent from here). */
+    private List<MissionItem> rallySent;
+    /** AC-10: where the flown drone's rally point goes, from where it took off (FleetOps.rallyForFlown). */
+    private java.util.function.BiFunction<Double, Double, double[]> rallyPlace = (lat, lon) -> new double[]{lat, lon};
+
+    void setRallyPlace(java.util.function.BiFunction<Double, Double, double[]> place) {
+        rallyPlace = place == null ? (lat, lon) -> new double[]{lat, lon} : place;
+    }
+
+    static boolean sameItems(List<MissionItem> a, List<MissionItem> b) {
+        if (a == null || b == null || a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) if (!a.get(i).sameAs(b.get(i))) return false;
+        return true;
+    }
+
+    private void sendRoute(ControlLink l, MissionBuilder.Mission m) {
         say("Sending the route ...", Theme.WARN);
         List<MissionItem> items = m.items();
         RouteSender.send(items, l::sendMissionBlock, l.getTelemetry()::getRouteUpload,
