@@ -180,8 +180,9 @@ public final class GroupLink implements AutoCloseable {
         if (ls == null) return "The lead hasn't reported.";
         lat0 = sumLat / followers.size();
         lon0 = sumLon / followers.size();
-        GroupController g = new GroupController(AirParams.defaults(), groundAmsl, lat0, lon0,
-                de.droiddrone.pc.air.virt.VirtualAirspace.prover(AirParams.defaults(), groundAmsl));
+        AirParams ap = params; // FL-9: the group designer's settings
+        GroupController g = new GroupController(ap, groundAmsl, lat0, lon0,
+                de.droiddrone.pc.air.virt.VirtualAirspace.prover(ap, groundAmsl));
         V2 rally = local(ls.lat, ls.lon);
         g.form(leadDrone, batteries, new V2(0, 0), rally);
         group = g;
@@ -209,6 +210,13 @@ public final class GroupLink implements AutoCloseable {
             listener.newLead(next);
         }
         return next;
+    }
+
+    /** FL-9: the settings the next FOLLOW GROUP is formed with (the group designer's; the PRD's by default). */
+    private volatile AirParams params = AirParams.defaults();
+
+    public void setParams(AirParams p) {
+        params = p == null ? AirParams.defaults() : p;
     }
 
     /** A floor asked for and not yet taken by the tick (NaN: none). */

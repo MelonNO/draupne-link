@@ -20,8 +20,22 @@ final class MapGroupLayer {
     private MapGroupLayer() {
     }
 
+    /** FL-14: the label's floor buttons and its floor figure, in the map's pixels. */
+    record FloorButtons(java.awt.Rectangle minus, java.awt.Rectangle plus, java.awt.Rectangle value) {}
+
+    static final int BUTTON = 18;
+
     static void paint(Graphics2D g, GroupLink.Picture p, MapProjection proj) {
-        if (p == null) return;
+        paint(g, p, proj, false);
+    }
+
+    /**
+     * As above; with floorControls (the pilot's PC, a group flown from it) the label gets the floor's - and + (5 m each)
+     * and its figure can be clicked for a typed value. Returns where they are (null: none drawn).
+     */
+    static FloorButtons paint(Graphics2D g, GroupLink.Picture p, MapProjection proj, boolean floorControls) {
+        if (p == null) return null;
+        FloorButtons out = null;
         Graphics2D g2 = (Graphics2D) g.create();
         try {
             Theme.smooth(g2);
@@ -53,15 +67,34 @@ final class MapGroupLayer {
                 g2.fill(new Ellipse2D.Double(at.getX() - 3, at.getY() - 3, 6, 6));
             }
             g2.setFont(Theme.headingFont(12f));
-            String label = "GROUP " + p.followers() + " FOLLOW " + (p.lead() == null ? "-" : p.lead()) + "  FLOOR " + Math.round(p.floorM()) + " M";
+            String head = "GROUP " + p.followers() + " FOLLOW " + (p.lead() == null ? "-" : p.lead()) + "  ";
+            String floor = "FLOOR " + Math.round(p.floorM()) + " M";
+            String label = head + floor;
+            java.awt.FontMetrics fm = g2.getFontMetrics();
+            int w = fm.stringWidth(label), extra = floorControls ? 2 * (BUTTON + 4) : 0;
+            int x = (int) (c.getX() - (w + extra) / 2.0), top = (int) (c.getY() - keep) - 20;
             g2.setColor(new Color(0, 0, 0, 160));
-            int w = g2.getFontMetrics().stringWidth(label);
-            g2.fillRect((int) (c.getX() - w / 2.0) - 4, (int) (c.getY() - keep) - 20, w + 8, 18);
+            g2.fillRect(x - 4, top, w + 8 + extra, 18);
             g2.setColor(Color.WHITE);
-            g2.drawString(label, (int) (c.getX() - w / 2.0), (int) (c.getY() - keep) - 6);
+            g2.drawString(label, x, top + 14);
+            if (floorControls) {
+                java.awt.Rectangle value = new java.awt.Rectangle(x + fm.stringWidth(head), top, fm.stringWidth(floor), 18);
+                java.awt.Rectangle minus = new java.awt.Rectangle(x + w + 6, top, BUTTON, 18), plus = new java.awt.Rectangle(minus.x + BUTTON + 4, top, BUTTON, 18);
+                for (java.awt.Rectangle b : new java.awt.Rectangle[]{minus, plus}) {
+                    g2.setColor(Theme.ACCENT);
+                    g2.fillRoundRect(b.x, b.y + 1, b.width, b.height - 2, 5, 5);
+                    g2.setColor(Theme.BG);
+                    String t = b == minus ? "-" : "+";
+                    g2.drawString(t, b.x + (b.width - fm.stringWidth(t)) / 2, top + 14);
+                }
+                g2.setColor(Color.WHITE);
+                g2.drawLine(value.x, top + 16, value.x + value.width, top + 16); // the figure: click for a value
+                out = new FloorButtons(minus, plus, value);
+            }
         } finally {
             g2.dispose();
         }
+        return out;
     }
 
     /** Metres per screen pixel at this latitude (two points 100 m apart east-west). */

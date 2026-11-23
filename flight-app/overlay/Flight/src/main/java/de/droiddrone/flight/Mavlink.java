@@ -650,6 +650,8 @@ public class Mavlink {
             return;
         }
         startUpload(b.blockId, b.missionType, b.items, true);
+        // AC-10: the PC's rally point for a drone it sends out - its RTL goes there, not home
+        if (b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY && !b.items.isEmpty()) setParam("RALLY_INCL_HOME", 0);
     }
 
     /** The phone's own rally upload (AC-10) waiting while another upload runs: started when it ends. */
@@ -664,7 +666,9 @@ public class Mavlink {
     void rallyPoint(double lat, double lon, double relAltM) {
         if (!isArduPilot() || Double.isNaN(lat) || Double.isNaN(lon)) return;
         java.util.List<de.droiddrone.common.MissionItem> want = java.util.Collections.singletonList(new de.droiddrone.common.MissionItem(0,
-                6, 5100, true, 0, 0, 0, 0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) relAltM)); // NAV_RALLY_POINT, MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                // NAV_RALLY_POINT in MAV_FRAME_GLOBAL_RELATIVE_ALT (3), whole metres: as ArduPilot reads it back (frame 6
+                // came back as 3 and failed every read-back - found in SITL, DRAUPNE Link's SitlRallyTest)
+                3, 5100, true, 0, 0, 0, 0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) Math.round(relAltM)));
         if (sameItems(want, rallyOnFc) || sameItems(want, rallyWaiting)) return;
         de.droiddrone.common.MissionUpload u = upload;
         if (u != null && !u.done() && !u.failed()) {

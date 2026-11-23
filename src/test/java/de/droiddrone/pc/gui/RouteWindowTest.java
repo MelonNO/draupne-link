@@ -101,11 +101,19 @@ class RouteWindowTest {
             return new FcInfo(FcInfo.FC_VARIANT_ARDUPILOT, 4, 6, 0, 0, 0, 3, 2);
         }
 
+        /** Rally blocks (type 2) apart from the route's; every block's type in the order sent. */
+        final List<byte[]> rallies = new CopyOnWriteArrayList<>();
+        final List<Integer> order = new CopyOnWriteArrayList<>();
+        /** The phone fails the rally point (the route's answer is {@link #phone}'s). */
+        volatile boolean rallyFails;
+
         @Override
         public boolean sendMissionBlock(byte[] packet) {
-            blocks.add(packet);
+            boolean isRally = packet[3] == MissionUpload.TYPE_RALLY;
+            (isRally ? rallies : blocks).add(packet);
+            order.add((int) packet[3]);
             int block = (packet[1] & 0xff) << 8 | (packet[2] & 0xff);
-            Phone p = phone;
+            Phone p = isRally ? (rallyFails ? Phone.FAILS : Phone.ANSWERS) : phone;
             if (p == Phone.SILENT) return true;
             Thread answer = new Thread(() -> {
                 try {
@@ -285,6 +293,37 @@ class RouteWindowTest {
     }
 
     // ------------------------------------------------------------------ what goes wrong
+
+    @Test
+    void theRallyPointGoesUpBeforeTheRouteOnlyWhenItChanged() throws Exception {
+        route(new double[]{LAT + 0.002, LON}, new double[]{LAT + 0.002, LON + 0.003});
+        planned();
+        click(upload());
+        waitForOnSwing(() -> go().isEnabled(), 10_000, "uploaded: " + window.statusText());
+        assertEquals(List.of((int) MissionUpload.TYPE_RALLY, (int) MissionUpload.TYPE_MISSION), link.order, "the rally point first, then the route");
+        click(upload());
+        waitForOnSwing(() -> link.blocks.size() == 2 && go().isEnabled(), 10_000, "again: " + window.statusText());
+        assertEquals(1, link.rallies.size(), "the same rally point is not sent again");
+        SwingUtilities.invokeAndWait(() -> window.setRallyPlace((la, lo) -> new double[]{la + 0.0005, lo}));
+        click(upload());
+        waitForOnSwing(() -> link.blocks.size() == 3 && go().isEnabled(), 10_000, "moved: " + window.statusText());
+        assertEquals(2, link.rallies.size(), "a new place goes up");
+        assertEquals((int) MissionUpload.TYPE_RALLY, link.order.get(link.order.size() - 2));
+        // the rally point refused: no route after it, no GO, UPLOAD again
+        link.rallyFails = true;
+        SwingUtilities.invokeAndWait(() -> window.setRallyPlace((la, lo) -> new double[]{la + 0.001, lo}));
+        SwingUtilities.invokeAndWait(() -> {
+            upload().doClick();
+            assertFalse(go().isEnabled(), "no GO while the rally point goes up");
+            assertFalse(upload().isEnabled());
+        });
+        waitForOnSwing(() -> window.statusText().startsWith("Rally point:"), 10_000, window.statusText());
+        assertEquals(3, link.blocks.size(), "no route after a refused rally point");
+        SwingUtilities.invokeAndWait(() -> {
+            assertFalse(go().isEnabled());
+            assertTrue(upload().isEnabled());
+        });
+    }
 
     @Test
     void aSecondUploadWhileTheFirstRunsSendsNothingAndGoWaits() throws Exception {

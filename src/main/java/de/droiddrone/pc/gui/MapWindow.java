@@ -71,6 +71,7 @@ final class MapWindow extends JFrame {
             MainWindow main = getOwner() instanceof MainWindow m ? m : null;
             routeWindow = new RouteWindow(this, map, elevation, () -> main == null ? null : main.flownLink(), () -> track,
                     () -> main != null && main.fleetWatchOnly()); // GU-8: a watching PC sends no route
+            if (main != null) routeWindow.setRallyPlace((lat, lon) -> main.fleetOps.rallyForFlown(lat, lon)); // AC-10
         }
         return routeWindow;
     }
@@ -396,6 +397,19 @@ final class MapWindow extends JFrame {
         });
         if (main != null) map.setFleetItems(main::fleetItems); // fleet G1: the map's drones too
         if (main != null) map.setFleetPlaceItems((lat, lon) -> main.fleetOps.placeItems(lat, lon)); // fleet FD-3: DISPATCH here
+        if (main != null) map.setGroupFloor(new MapView.GroupFloor() { // FL-14: the floor on the group's label
+            public boolean shown() {
+                return main.fleetOps.floorControls();
+            }
+
+            public void step(double deltaM) {
+                main.fleetOps.floor(main.fleetOps.floorM() + deltaM);
+            }
+
+            public void typed() {
+                main.fleetOps.floorTyped();
+            }
+        });
         if (main != null) fleetPanel.setLastKnown(main::lastKnownLine); // 1.0.71: the selected phone's last grid, from disk
         tools.lastKnown.setToolTipText("Every phone's last grid, time and battery");
         tools.lastKnown.addActionListener(e -> {

@@ -13,7 +13,13 @@ final class SitlMission {
     }
 
     static MissionUpload.Link link(MavSession fc) {
+        return link(fc, MissionUpload.TYPE_MISSION);
+    }
+
+    /** The upload of one of the FC's lists (MissionUpload.TYPE_: route, fence, rally points), as the phone sends it. */
+    static MissionUpload.Link link(MavSession fc, int missionType) {
         short gcs = (short) MavSession.GCS_SYSID;
+        short mt = (short) missionType;
         return new MissionUpload.Link() {
             short t() {
                 return (short) Math.max(1, fc.fcSysId());
@@ -28,24 +34,24 @@ final class SitlMission {
             }
 
             public void sendCount(int count) {
-                send(new com.MAVLink.common.msg_mission_count(count, t(), (short) 1, (short) 0, 0L, gcs, MavSession.GCS_COMPID, true).pack());
+                send(new com.MAVLink.common.msg_mission_count(count, t(), (short) 1, mt, 0L, gcs, MavSession.GCS_COMPID, true).pack());
             }
 
             public void sendItem(MissionItem m) {
                 send(new com.MAVLink.common.msg_mission_item_int(m.param1, m.param2, m.param3, m.param4, m.x, m.y, m.z, m.seq, m.command,
-                        t(), (short) 1, (short) m.frame, (short) 0, (short) (m.autocontinue ? 1 : 0), (short) 0, gcs, MavSession.GCS_COMPID, true).pack());
+                        t(), (short) 1, (short) m.frame, (short) 0, (short) (m.autocontinue ? 1 : 0), mt, gcs, MavSession.GCS_COMPID, true).pack());
             }
 
             public void sendRequestList() {
-                send(new com.MAVLink.common.msg_mission_request_list(t(), (short) 1, (short) 0, gcs, MavSession.GCS_COMPID, true).pack());
+                send(new com.MAVLink.common.msg_mission_request_list(t(), (short) 1, mt, gcs, MavSession.GCS_COMPID, true).pack());
             }
 
             public void sendRequest(int seq) {
-                send(new com.MAVLink.common.msg_mission_request_int(seq, t(), (short) 1, (short) 0, gcs, MavSession.GCS_COMPID, true).pack());
+                send(new com.MAVLink.common.msg_mission_request_int(seq, t(), (short) 1, mt, gcs, MavSession.GCS_COMPID, true).pack());
             }
 
             public void sendAck(int type) {
-                send(new com.MAVLink.common.msg_mission_ack(t(), (short) 1, (short) type, (short) 0, 0L, gcs, MavSession.GCS_COMPID, true).pack());
+                send(new com.MAVLink.common.msg_mission_ack(t(), (short) 1, (short) type, mt, 0L, gcs, MavSession.GCS_COMPID, true).pack());
             }
         };
     }
@@ -57,14 +63,23 @@ final class SitlMission {
             if (u == null) return;
             long now = System.currentTimeMillis();
             switch (p.msgid) {
-                case com.MAVLink.common.msg_mission_request_int.MAVLINK_MSG_ID_MISSION_REQUEST_INT ->
-                        u.onRequest(new com.MAVLink.common.msg_mission_request_int(p).seq, now);
+                case com.MAVLink.common.msg_mission_request_int.MAVLINK_MSG_ID_MISSION_REQUEST_INT -> {
+                    com.MAVLink.common.msg_mission_request_int m = new com.MAVLink.common.msg_mission_request_int(p);
+                    if (m.mission_type == u.missionType()) u.onRequest(m.seq, now);
+                }
                 case com.MAVLink.common.msg_mission_request.MAVLINK_MSG_ID_MISSION_REQUEST ->
                         u.onRequest(new com.MAVLink.common.msg_mission_request(p).seq, now);
-                case com.MAVLink.common.msg_mission_ack.MAVLINK_MSG_ID_MISSION_ACK -> u.onAck(new com.MAVLink.common.msg_mission_ack(p).type, now);
-                case com.MAVLink.common.msg_mission_count.MAVLINK_MSG_ID_MISSION_COUNT -> u.onCount(new com.MAVLink.common.msg_mission_count(p).count, now);
+                case com.MAVLink.common.msg_mission_ack.MAVLINK_MSG_ID_MISSION_ACK -> {
+                    com.MAVLink.common.msg_mission_ack m = new com.MAVLink.common.msg_mission_ack(p);
+                    if (m.mission_type == u.missionType()) u.onAck(m.type, now);
+                }
+                case com.MAVLink.common.msg_mission_count.MAVLINK_MSG_ID_MISSION_COUNT -> {
+                    com.MAVLink.common.msg_mission_count m = new com.MAVLink.common.msg_mission_count(p);
+                    if (m.mission_type == u.missionType()) u.onCount(m.count, now);
+                }
                 case com.MAVLink.common.msg_mission_item_int.MAVLINK_MSG_ID_MISSION_ITEM_INT -> {
                     com.MAVLink.common.msg_mission_item_int m = new com.MAVLink.common.msg_mission_item_int(p);
+                    if (m.mission_type != u.missionType()) return;
                     u.onItem(new MissionItem(m.seq, m.frame, m.command, m.autocontinue != 0, m.param1, m.param2, m.param3, m.param4,
                             m.x, m.y, m.z), now);
                 }
