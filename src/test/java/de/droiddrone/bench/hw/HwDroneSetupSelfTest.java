@@ -60,6 +60,9 @@ class HwDroneSetupSelfTest {
             assertTrue(run.modeListsSeen().startsWith("offers Acro, Angle, GPS rescue - hint: ") && run.modeListsSeen().contains("2025.12"), run.modeListsSeen());
             // F-087: no GPS answered (battery out): not "Betaflight set up" - the rows that wait for it are named
             assertEquals("Not set: GPS, Compass, GPS rescue.", run.statusAfterConfirm());
+            // F-088: BY HAND names the board's forced 4S, the count the page writes (it said 6)
+            assertTrue(run.byHandWords().contains("set force_battery_cell_count = 4") && !run.byHandWords().contains("force_battery_cell_count = 6"),
+                    run.byHandWords());
             KeeperClient.State s = keeper.state();
             assertTrue(s.boardUp() && !s.lease().equals("setup") && Boolean.TRUE.equals(s.locked()) && Boolean.FALSE.equals(s.armed()), s.toString());
             assertTrue(board.armingLocked(), "the keeper's lock is on the board again");

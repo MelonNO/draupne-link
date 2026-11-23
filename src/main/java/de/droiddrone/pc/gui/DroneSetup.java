@@ -1290,7 +1290,10 @@ final class DroneSetup {
         private void cellsChanged(int n) {
             if (n == cells) return;
             cells = n;
-            if (syncingSpinner) return; // Betaflight's own forced count shown, not the pilot's choice
+            if (syncingSpinner) { // Betaflight's own forced count shown, not the pilot's choice - and BY HAND names it (F-088)
+                showManual();
+                return;
+            }
             cellsConfirmed = true; // touched: the pilot's count
             measuredCells.setVisible(measured > 0 && measured != cells);
             main.save(Map.of(CELLS_KEY, Integer.toString(n), CELLS_CONFIRMED_KEY, "true"));
@@ -1334,6 +1337,7 @@ final class DroneSetup {
 
         /** The manual way, for a drone without USB to this PC (and for whatever couldn't be set by itself). */
         private void showByHand() {
+            showManual(); // F-088: as the page is now - the count it writes is the one Betaflight forces, once read
             javax.swing.JLabel text = new javax.swing.JLabel("<html><div style='width:520px'>" + manualHtml + "</div></html>");
             text.setFont(Theme.font(java.awt.Font.PLAIN, 14f));
             Dialogs.message(javax.swing.SwingUtilities.getWindowAncestor(usb), text,
@@ -1346,11 +1350,18 @@ final class DroneSetup {
         }
 
         private void showManual() {
-            ModeSwitch m = modeSwitch;
+            manualHtml = manual(cells, gpsYes, gpsUart, compassYes, armAux, prearmAux, modeSwitch, failsafeChoice, rescueAux);
+        }
+
+        /**
+         * BY HAND's words: the page's settings for Betaflight Configurator. F-088: {@code cells} is the count the page
+         * writes - Betaflight's own forced count once read, which it showed in the battery row while BY HAND still named
+         * the spinner's 6 from before the read (its words were made then and not again).
+         */
+        static String manual(int cells, boolean gpsYes, int gpsUart, boolean compassYes, int arm, int prearm, ModeSwitch m,
+                             ModeSwitch.Failsafe failsafeChoice, int rescueAux) {
             int rescue = gpsYes ? rescueAux : 0;
-            int arm = armAux;
-            int prearm = prearmAux;
-            manualHtml = ("In Betaflight Configurator: "
+            return ("In Betaflight Configurator: "
                     + "<b>Receiver</b> tab > Receiver Mode <b>MSP RX input</b> > Save. "
                     + "<b>CLI</b> tab > <b>set serial_update_rate_hz = 2000</b> (1000 on F411 boards), "
                     + "<b>set force_battery_cell_count = " + cells + "</b> > <b>save</b>."

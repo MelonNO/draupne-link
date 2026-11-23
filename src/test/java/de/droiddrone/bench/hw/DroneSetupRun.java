@@ -238,7 +238,11 @@ final class DroneSetupRun {
         ui.click(b);
         ui.until("the by-hand words", 10_000, () -> ui.window("by hand") != null);
         Window d = ui.window("by hand");
-        film.remark("BY HAND (" + Ui.textOf(b) + "): " + String.join(" ", Ui.edt(() -> HwDroneSetup.words(d))));
+        byHandWords = String.join(" ", Ui.edt(() -> HwDroneSetup.words(d)));
+        film.remark("BY HAND (" + Ui.textOf(b) + "): " + byHandWords);
+        // F-088: it names the cell count the page writes - the one its battery line shows
+        int shown = cellsShown(HwDroneSetup.row(words(), "BATTERY"));
+        if (shown > 0) rig.check(byHandWords.contains("set force_battery_cell_count = " + shown), "BY HAND names the cell count the page writes, " + shown + "S");
         ui.closeWindow(d);
         ui.until("the by-hand words to close", 10_000, () -> ui.window("by hand") == null);
     }
@@ -552,6 +556,19 @@ final class DroneSetupRun {
         String said = row;
         return NO_GPS.stream().anyMatch(said::contains);
     }
+
+    /** The count in the battery line's spinner ("BATTERY [4] S: ..." -> 4); 0 when not shown. */
+    static int cellsShown(String batteryRow) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^BATTERY \\[(\\d+)]").matcher(batteryRow);
+        return m.find() ? Integer.parseInt(m.group(1)) : 0;
+    }
+
+    /** BY HAND's words as the page showed them; null before. */
+    String byHandWords() {
+        return byHandWords;
+    }
+
+    private String byHandWords;
 
     /** What the step's status said once CONFIRM's rounds were over; null before. */
     String statusAfterConfirm() {
