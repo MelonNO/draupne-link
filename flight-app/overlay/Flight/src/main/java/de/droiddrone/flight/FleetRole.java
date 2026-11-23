@@ -145,6 +145,9 @@ final class FleetRole {
             case FleetCmd.LAUNCH: // fleet AL-5 - AL-8: the pilot's call
                 if (!inSession) launch.order(udp, m, c.data, c.at, c.length);
                 break;
+            case FleetCmd.TRAFFIC: // FD-8 / AC-11: the other drones to the FC as ADS-B targets (the lead's too)
+                m.adsbTraffic(de.droiddrone.common.group.Traffic.decode(c.data, c.at + 1, c.length - 1));
+                break;
             case FleetCmd.TRACK:
                 if (c.length >= 2) reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 break;

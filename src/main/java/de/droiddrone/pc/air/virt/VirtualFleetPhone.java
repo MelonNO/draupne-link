@@ -119,6 +119,13 @@ public final class VirtualFleetPhone implements AutoCloseable {
                         act(seq.order(o, now));
                     }
                 }
+                case FleetCmd.TRAFFIC -> {
+                    de.droiddrone.common.group.Traffic t = de.droiddrone.common.group.Traffic.decode(c.data, c.at + 1, c.length - 1);
+                    if (t != null) {
+                        traffic = t;
+                        trafficCount.incrementAndGet();
+                    }
+                }
                 case FleetCmd.DISBAND -> brain = null;
                 case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 default -> {
@@ -227,6 +234,10 @@ public final class VirtualFleetPhone implements AutoCloseable {
 
     private final de.droiddrone.common.launch.PreArmCheck check = new de.droiddrone.common.launch.PreArmCheck(0);
     private final de.droiddrone.common.launch.LaunchSequence seq = new de.droiddrone.common.launch.LaunchSequence(check);
+    /** FD-8 / AC-11: the last TRAFFIC from the PC - what its FC would get as ADS-B targets - and how many came. */
+    public volatile de.droiddrone.common.group.Traffic traffic;
+    public final java.util.concurrent.atomic.AtomicInteger trafficCount = new java.util.concurrent.atomic.AtomicInteger();
+
     /** Every ARM this phone gave, with whether it held a mark then (the AL-12 invariant, for the tests). */
     public final java.util.List<String> arms = new java.util.concurrent.CopyOnWriteArrayList<>();
 

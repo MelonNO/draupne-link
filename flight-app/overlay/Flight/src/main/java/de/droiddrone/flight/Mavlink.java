@@ -28,6 +28,7 @@ import android.location.LocationManager;
 
 import com.MAVLink.MAVLinkPacket;
 import com.MAVLink.Messages.MAVLinkPayload;
+import com.MAVLink.common.msg_adsb_vehicle;
 import com.MAVLink.common.msg_attitude;
 import com.MAVLink.common.msg_autopilot_version;
 import com.MAVLink.common.msg_battery_status;
@@ -414,6 +415,35 @@ public class Mavlink {
                 (short) MAV_STATE_ACTIVE, (short) 3, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
         packet.seq = getSequence();
         serial.writeDataMavlink(packet.encodePacket());
+    }
+
+    /** ADSB_VEHICLE's flags and kinds (MAVLink common): coords, altitude, heading, velocity, callsign valid; GNSS height; a UAV. */
+    static final int ADSB_VALID_COORDS = 1, ADSB_VALID_ALTITUDE = 2, ADSB_VALID_HEADING = 4, ADSB_VALID_VELOCITY = 8,
+            ADSB_VALID_CALLSIGN = 16, ADSB_ALTITUDE_GEOMETRIC = 1, ADSB_EMITTER_UAV = 14;
+
+    /**
+     * DRAUPNE Link (fleet) FD-8 / AC-11: the other DRAUPNE drones to the FC as ADS-B targets, one ADSB_VEHICLE each
+     * (its address, place, height above sea level, course and speeds; callsign "DL" and the address in hex). ArduPilot
+     * takes them with ADSB_TYPE set and avoids them with AVD_ENABLE; without those it ignores them. False: no ArduPilot.
+     */
+    public boolean adsbTraffic(de.droiddrone.common.group.Traffic t) {
+        if (t == null || !isArduPilot()) return false;
+        for (de.droiddrone.common.group.Traffic.Entry e : t.entries) {
+            byte[] callsign = new byte[9];
+            byte[] name = String.format("DL%06X", e.address & 0xffffff).getBytes(StandardCharsets.US_ASCII);
+            System.arraycopy(name, 0, callsign, 0, Math.min(8, name.length));
+            int flags = ADSB_VALID_COORDS | ADSB_VALID_ALTITUDE | ADSB_VALID_VELOCITY | ADSB_VALID_CALLSIGN
+                    | (e.horSpeedMs >= 0.3 ? ADSB_VALID_HEADING : 0);
+            MAVLinkPacket packet = new msg_adsb_vehicle(e.address, (int) Math.round(e.lat * 1e7), (int) Math.round(e.lon * 1e7),
+                    (int) Math.round(e.altAmsl * 1000), (int) Math.round(e.headingDeg * 100) % 36000,
+                    (int) Math.max(0, Math.min(65535, Math.round(e.horSpeedMs * 100))),
+                    (short) Math.max(Short.MIN_VALUE, Math.min(Short.MAX_VALUE, Math.round(e.verSpeedMs * 100))),
+                    flags, 0, (short) ADSB_ALTITUDE_GEOMETRIC, callsign, (short) ADSB_EMITTER_UAV, (short) Math.min(255, e.ageS),
+                    config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
+            packet.seq = getSequence();
+            serial.writeDataMavlink(packet.encodePacket());
+        }
+        return true;
     }
 
     /** Fleet AP-6: the pilot's command from the PC (FcCommand), on the receive thread. False: no MAVLink FC to give it to. */
