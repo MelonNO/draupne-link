@@ -63,6 +63,53 @@ class BetaflightTest {
         assertFalse(BetaflightPlan.refused(""));
     }
 
+    /**
+     * F-089: Betaflight 4.4.1 and 4.5.1 answer "feature GPS" (and RANGEFINDER) on a build without it with a line
+     * "unavailable" (cli.c, cliFeature); 2025.12 with "Unavailable GPS". Only the latter, at the very start, was taken.
+     */
+    @Test
+    void aFeatureTheBuildLacksIsARefusalInEveryVersionsWords() {
+        assertTrue(BetaflightPlan.refused("unavailable"), "4.4 and 4.5, as BetaflightUsb.command gives it");
+        assertTrue(BetaflightPlan.refused("unavailable\r\n"));
+        assertTrue(BetaflightPlan.refused("feature GPS\r\nunavailable\r\n"), "with the echo before it");
+        assertTrue(BetaflightPlan.refused("\r\nunavailable"), "a blank line before it");
+        assertTrue(BetaflightPlan.refused("# unavailable"));
+        assertTrue(BetaflightPlan.refused("Unavailable GPS"), "2025.12");
+        assertTrue(BetaflightPlan.refused("UNAVAILABLE"));
+        assertFalse(BetaflightPlan.refused("Available:  GYRO_CALIBRATED RX_LOST"), "beeper list");
+        assertFalse(BetaflightPlan.refused("Disabled GPS"));
+        assertFalse(BetaflightPlan.refused("feature GPS\r\nEnabled GPS\r\n"));
+        assertFalse(BetaflightPlan.refused(null));
+        // what CliWrite then says, and that Drone setup knows it for a build without a GPS
+        assertTrue(GpsSetup.notBuilt("Betaflight refused \"feature GPS\": unavailable"));
+        assertTrue(GpsSetup.notBuilt("Betaflight refused \"feature GPS\": Unavailable GPS"));
+        assertFalse(GpsSetup.notBuilt("Betaflight refused \"feature RANGEFINDER\": unavailable"));
+        assertFalse(GpsSetup.notBuilt("Betaflight refused \"set gps_auto_baud = ON\": ###ERROR IN set: INVALID NAME###"));
+        assertFalse(GpsSetup.notBuilt(null));
+    }
+
+    /**
+     * F-089 on Drone setup's own round (the app's code, as its page writes): a 4.4 board built without a GPS, the GPS
+     * wanted. The write stops at "feature GPS" and nothing is saved - before, "unavailable" was taken as done, and
+     * the round went on and saved the rest, the GPS taken as switched on.
+     */
+    @Test
+    void droneSetupsWriteStopsAtAGpsTheBuildLacksAndSavesNothing() throws Exception {
+        de.droiddrone.bench.hw.FakeFlightBoard board = new de.droiddrone.bench.hw.FakeFlightBoard();
+        board.featuresNotBuilt.add("GPS");
+        BetaflightUsb.use(board.usb());
+        try {
+            java.io.IOException stopped = assertThrows(java.io.IOException.class,
+                    () -> de.droiddrone.bench.hw.AppWrites.droneSetup(board.port(), de.droiddrone.bench.hw.FakeFlightBoard.NO_WAITING, s -> { }));
+            assertTrue(GpsSetup.notBuilt(stopped.getMessage()), stopped.getMessage());
+            assertEquals(0, board.saves, "nothing saved");
+            assertFalse(board.saved().contains("\nfeature GPS\n"), "the GPS not on");
+            assertTrue(board.cli().contains("feature GPS") && !board.cli().contains("save"), board.cli().toString());
+        } finally {
+            BetaflightUsb.use(null);
+        }
+    }
+
     @Test
     void alreadyRightMeansNoChanges() {
         assertTrue(BetaflightPlan.plan(RATE_SET, F7).isEmpty());

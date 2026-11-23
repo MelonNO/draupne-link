@@ -303,7 +303,8 @@ public final class FakeFlightBoard {
     public volatile boolean cliNamesRxMsp = true;
     /**
      * Features this build was made without ("GPS", "RANGEFINDER"): the CLI knows their names, a dump lists them
-     * switched off, and "feature X" or "feature -X" is answered "Unavailable" (as BetaflightPlan.refused knows it).
+     * switched off, and "feature X" or "feature -X" is answered "unavailable", as 4.4 does (F-089: BetaflightPlan.refused knew
+     * 2025.12's "Unavailable GPS" only).
      */
     public final Set<String> featuresNotBuilt = new TreeSet<>();
     /**
@@ -1480,7 +1481,8 @@ public final class FakeFlightBoard {
         String name = off ? args.substring(1) : args;
         int bit = name.isEmpty() ? -1 : featureBit(name);
         if (bit < 0) return error("feature", "INVALID NAME: " + name);
-        if (featuresNotBuilt.contains(FEATURES[bit])) return "Unavailable"; // on or off alike; no error of the batch's
+        // on or off alike; no error of the batch's. F-089: 4.4's own word, a line "unavailable" (cli.c) - 2025.12 says "Unavailable GPS"
+        if (featuresNotBuilt.contains(FEATURES[bit])) return "unavailable";
         if (off) ram.features &= ~(1 << bit);
         else ram.features |= 1 << bit;
         return (off ? "Disabled " : "Enabled ") + FEATURES[bit];

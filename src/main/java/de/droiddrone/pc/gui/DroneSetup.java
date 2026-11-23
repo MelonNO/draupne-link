@@ -1755,7 +1755,9 @@ final class DroneSetup {
             lastBoardId = r.boardId();
             // CONFIRM, and the green rows, belong to the board they were given for: another one plugged in needs its own
             if (r.boardId() != null && confirm.seen(r.boardId())) main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
-            if (r.applied() || r.refused() != null) lastRefused = r.refused();
+            // F-089: "feature GPS" refused as "unavailable": this board's Betaflight is built without a GPS - said so, short
+            if (GpsSetup.notBuilt(r.refused())) gpsNotBuiltOn = r.boardId();
+            if (r.applied() || r.refused() != null) lastRefused = GpsSetup.notBuilt(r.refused()) ? NO_GPS_BUILT : r.refused();
             if (r.refused() != null) { // the write stopped and nothing was saved: the page says why, CONFIRM again
                 confirm.clear();
                 main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
@@ -1964,6 +1966,14 @@ final class DroneSetup {
             measuredCells.setVisible(measured > 0 && measured != cells);
         }
 
+        /**
+         * F-089: the board whose Betaflight answered "feature GPS" with "unavailable" - built without a GPS (null: none
+         * seen). Its GPS row says so while GPS is Yes, and the stopped write is said in short words, not as the CLI's.
+         */
+        private String gpsNotBuiltOn;
+        static final String NO_GPS_BUILT = "this Betaflight has no GPS (built without it): answer <b>No</b> under GPS.";
+        static final String GPS_NOT_IN_BUILD = "Not in this Betaflight (built without GPS). Answer <b>No</b>.";
+
         /** The GPS row after a round that changed nothing. @return true if the GPS or the compass is not as chosen */
         private boolean showGps(Read r, boolean pendingWrite) {
             Gps g = r.gps();
@@ -1971,6 +1981,11 @@ final class DroneSetup {
                 gps.set(okState(), "");
                 compassPart.set(okState(), "");
                 return false;
+            }
+            if (r.boardId() != null && r.boardId().equals(gpsNotBuiltOn)) { // F-089: no GPS can be set on this board
+                gps.set(State.BAD, GPS_NOT_IN_BUILD);
+                showCompass(g, pendingWrite);
+                return true;
             }
             List<String> lines = new java.util.ArrayList<>();
             State worst = okState();

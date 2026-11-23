@@ -130,9 +130,9 @@ class FakeFlightBoardTest {
             fc.command("defaults nosave");
             assertTrue(fc.command("get min_throttle").contains("min_throttle = 1000"), "this start's default");
             assertTrue(fc.command("get use_unsynced_pwm").contains("use_unsynced_pwm = ON"));
-            // a feature this build was made without: named in the dump, "Unavailable" to switch on or off
+            // a feature this build was made without: named in the dump, "unavailable" to switch on or off (4.4's word, F-089)
             flown.featuresNotBuilt.add("RANGEFINDER");
-            assertEquals("Unavailable", fc.command("feature -RANGEFINDER"));
+            assertEquals("unavailable", fc.command("feature -RANGEFINDER"));
             assertTrue(BetaflightPlan.refused(fc.command("feature RANGEFINDER")));
             assertTrue(flown.inMemory().contains("\nfeature -RANGEFINDER\n") && !flown.inMemory().contains("\nfeature RANGEFINDER\n"));
         }

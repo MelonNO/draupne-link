@@ -258,6 +258,14 @@ public final class GpsSetup {
         return magHardware.equals("NONE") ? null : new BetaflightPlan.Change("Compass off (mag_hardware NONE)", List.of("set mag_hardware = NONE"));
     }
 
+    /**
+     * F-089: a write that stopped because this Betaflight is built without a GPS - its "feature GPS" answered
+     * "unavailable" (4.4, 4.5) or "Unavailable GPS" (2025.12), CliWrite's "Betaflight refused \"feature GPS\": ...".
+     */
+    public static boolean notBuilt(String refused) {
+        return refused != null && refused.contains("\"feature GPS\"") && refused.toLowerCase(Locale.ROOT).contains("unavailable");
+    }
+
     /** MSP_STATUS' sensor bits: the compass (SENSOR_MAG, bit 2) is found. */
     public static boolean magInStatus(byte[] status) {
         return status.length >= 6 && ((((status[4] & 0xff) | (status[5] & 0xff) << 8)) & (1 << 2)) != 0;

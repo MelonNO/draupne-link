@@ -2,6 +2,7 @@ package de.droiddrone.pc.setup;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -95,9 +96,19 @@ public final class BetaflightPlan {
 
     // ------------------------------------------------------------------ the CLI
 
-    /** Betaflight's CLI didn't take the command: "###ERROR IN set: INVALID NAME ..." or a feature the build lacks. */
+    /**
+     * Betaflight's CLI didn't take the command: "###ERROR IN set: INVALID NAME ..." or a feature the build lacks. F-089:
+     * 4.4 and 4.5 answer the last with a line "unavailable" (cli.c, feature GPS or RANGEFINDER in a build without it),
+     * 2025.12 with "Unavailable GPS" - taken on any line of the answer (an echo, a blank line before it), in any case.
+     * Only the start was looked at, in 2025.12's case: on 4.4 a GPS this build lacks was taken as switched on.
+     */
     public static boolean refused(String cliReply) {
-        return cliReply.contains("###ERROR") || cliReply.startsWith("Unavailable");
+        if (cliReply == null) return false;
+        if (cliReply.contains("###ERROR")) return true;
+        for (String line : cliReply.split("\\R")) {
+            if (line.replaceFirst("^#\\s*", "").strip().toLowerCase(Locale.ROOT).startsWith("unavailable")) return true;
+        }
+        return false;
     }
 
     /** The value from `get serial_update_rate_hz`, or -1 (not understood, or a Betaflight without the setting). */
