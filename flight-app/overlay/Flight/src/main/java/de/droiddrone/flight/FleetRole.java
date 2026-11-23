@@ -100,7 +100,7 @@ final class FleetRole {
                 break;
             }
             case MissionBlock.PACKET:
-                m.missionBlock(MissionBlock.read(c.data, c.at + 1, c.length - 1));
+                m.missionPart(c.data, c.at + 1, c.length - 1); // one part of a block (MissionBlock.Assembler)
                 break;
             case FleetCmd.GROUP: {
                 GroupOrder o = GroupOrder.decode(c.data, c.at + 1);

@@ -709,8 +709,25 @@ public class Mavlink {
     private int saidBlock = -1, saidState = -1;
     private long saidAt;
 
-    /** A route, fence or rally block from the PC (the buffer thread): started, queued, or answered with its status. */
-    public void missionBlock(de.droiddrone.common.MissionBlock b) {
+    /** The parts of the PC's blocks: a block goes to the uploads only whole and matching its CRC-32 (MissionBlock.Assembler). */
+    private final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();
+
+    /**
+     * A part of a route, fence or rally block from the PC (the pilot's buffer thread, or a FleetCmd on the receive thread),
+     * the payload after its packet byte: gathered; a whole block is started, queued, or answered with its status - and
+     * every part is answered (RECEIVING with the percent of its parts, until the block is whole).
+     */
+    public void missionPart(byte[] d, int off, int len) {
+        if (!isArduPilot()) return;
+        de.droiddrone.common.MissionBlock.Part p = de.droiddrone.common.MissionBlock.readPart(d, off, len);
+        if (p == null) return;
+        de.droiddrone.common.MissionBlock b = parts.offer(p);
+        if (b != null) missionBlock(b);
+        else say(p.blockId);
+    }
+
+    /** A whole block: started, queued, or answered with its status. */
+    private void missionBlock(de.droiddrone.common.MissionBlock b) {
         if (b == null || !isArduPilot()) return;
         if (uploads.offer(b, android.os.SystemClock.elapsedRealtime())) say(b.blockId);
         // AC-10: the PC's rally point for a drone it sends out - its RTL goes there, not home
@@ -804,7 +821,11 @@ public class Mavlink {
     /** A PC block's status to the PC (MissionBlock.STATUS_RECORD); its end in the log. */
     private void say(int block) {
         int[] s = uploads.status(block);
-        if (s == null) return;
+        if (s == null) { // not whole yet: the percent of its parts here
+            int got = parts.percent(block);
+            if (got < 0) return;
+            s = new int[]{de.droiddrone.common.MissionBlock.RECEIVING, got};
+        }
         String reason = uploads.reason(block);
         if ((block != saidBlock || s[0] != saidState) && (s[0] == de.droiddrone.common.MissionUpload.DONE || s[0] == de.droiddrone.common.MissionUpload.FAILED)) {
             log("Upload " + block + ": " + (s[0] == de.droiddrone.common.MissionUpload.DONE ? "done, read back" : "FAILED - " + reason));

@@ -29,6 +29,7 @@ class RouteSenderEdgeTest {
         final FcTelemetry pcSide = new FcTelemetry();
         final List<List<MissionItem>> onFc = new ArrayList<>(List.of(new ArrayList<>(), new ArrayList<>(), new ArrayList<>()));
         final MissionBlockQueue queue = new MissionBlockQueue(this::make);
+        final MissionBlock.Assembler parts = new MissionBlock.Assembler();
         /** DONE statuses to lose on the way, by count. */
         volatile int loseDone;
         /** The FC answers only after this many ticks of each upload (so two uploads overlap). */
@@ -122,8 +123,13 @@ class RouteSenderEdgeTest {
         }
 
         synchronized boolean take(byte[] packet) {
-            MissionBlock b = MissionBlock.read(packet, 1, packet.length - 1);
-            assertNotNull(b);
+            MissionBlock.Part part = MissionBlock.readPart(packet, 1, packet.length - 1);
+            assertNotNull(part);
+            MissionBlock b = parts.offer(part);
+            if (b == null) { // as the phone's missionPart: every part is answered (a block it has: its status)
+                say(part.blockId);
+                return true;
+            }
             if (queue.offer(b, 0)) say(b.blockId);
             return true;
         }
@@ -176,7 +182,7 @@ class RouteSenderEdgeTest {
         try (Phone phone = new Phone(0)) {
             phone.loseDone = 1;
             long t0 = System.nanoTime();
-            RouteSender.Result r = RouteSender.run(4242, MissionBlock.packet(4242, RouteToDroneTest.route(5)), phone::take,
+            RouteSender.Result r = RouteSender.run(4242, java.util.List.of(MissionBlock.packet(4242, RouteToDroneTest.route(5))), phone::take,
                     phone.pcSide::getRouteUpload, null);
             assertTrue(r.done(), r.text());
             assertTrue(System.nanoTime() - t0 < 10_000_000_000L, "within seconds, not the 30 s limit");
