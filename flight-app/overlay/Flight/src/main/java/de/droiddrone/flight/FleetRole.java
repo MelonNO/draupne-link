@@ -130,13 +130,16 @@ final class FleetRole {
                     if (!lead) leadOrderedAt = 0;
                     else if (!inSession && follower && (leadOrderedAt == 0 || now - leadOrderedAt > FleetCommandGate.LEAD_CONNECT_MS)) leadOrderedAt = now;
                     Udp.setLead(lead);
-                    if (lead) m.setRtlAltM(((c.data[c.at + 2] & 0xff) << 8 | (c.data[c.at + 3] & 0xff)) / 10.0);
+                    // 0: RTL_ALT left as it is - the hand-over names the lead before its return height is known, and RTL_ALT 0
+                    // is ArduPilot's "home at the height it has", under the followers' return layers (AC-41)
+                    double rtl = FleetCmd.readLeadHeight(c);
+                    if (lead && rtl > 0) m.setRtlAltM(rtl);
                 }
                 break;
             case FleetCmd.CLEAR:
-                if (c.length >= 13 && !inSession) {
-                    java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(c.data, c.at + 1, 12);
-                    clearTo = new double[]{bb.getInt() / 1e7, bb.getInt() / 1e7, bb.getInt() / 10.0};
+                if (!inSession) {
+                    double[] to = FleetCmd.readClear(c); // null: cut short, 0 / 0 or off the globe - never a GUIDED target there
+                    if (to != null) clearTo = to;
                 }
                 break;
             case FleetCmd.DISBAND:
