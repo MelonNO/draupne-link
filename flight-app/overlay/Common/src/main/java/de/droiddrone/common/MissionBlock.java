@@ -60,7 +60,9 @@ public final class MissionBlock {
 
     /** The block in a payload after the packet byte, or null: cut short, empty, or too long. */
     public static MissionBlock read(byte[] d, int off, int len) {
-        if (d == null || len < 5) return null;
+        if (d == null || off < 0 || off >= d.length) return null;
+        len = Math.min(len, d.length - off); // a length that claims more than the array holds
+        if (len < 5) return null;
         int id = (d[off] & 0xff) << 8 | (d[off + 1] & 0xff);
         int type = d[off + 2] & 0xff;
         if (type > MissionUpload.TYPE_RALLY) return null;

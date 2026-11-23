@@ -57,8 +57,13 @@ public final class FcCommand {
         this.lon = lon;
     }
 
+    /**
+     * A place off the globe (or NaN) is sent as 0 / 0, which every phone refuses: the int cast of a larger number would
+     * wrap round to another real place (lon 400 became -29.5).
+     */
     public static byte[] goLook(double lat, double lon) {
-        int a = (int) Math.round(lat * 1e7), o = (int) Math.round(lon * 1e7);
+        boolean ok = Math.abs(lat) <= 90 && Math.abs(lon) <= 180; // false for NaN too
+        int a = ok ? (int) Math.round(lat * 1e7) : 0, o = ok ? (int) Math.round(lon * 1e7) : 0;
         return new byte[]{PACKET, GO_LOOK, (byte) (a >>> 24), (byte) (a >>> 16), (byte) (a >>> 8), (byte) a,
                 (byte) (o >>> 24), (byte) (o >>> 16), (byte) (o >>> 8), (byte) o};
     }
@@ -73,7 +78,9 @@ public final class FcCommand {
 
     /** The command in a datagram, or null: too short, or a kind this phone doesn't know. */
     public static FcCommand read(byte[] d, int len) {
-        if (d == null || len < 2 || d[0] != PACKET) return null;
+        if (d == null) return null;
+        len = Math.min(len, d.length); // a length that claims more than the array holds
+        if (len < 2 || d[0] != PACKET) return null;
         int kind = d[1] & 0xff;
         switch (kind) {
             case MODE:
@@ -96,6 +103,15 @@ public final class FcCommand {
             default:
                 return null;
         }
+    }
+
+    /**
+     * GO_LOOK's DO_REPOSITION height: the height above home the drone has now (frame GLOBAL_RELATIVE_ALT_INT), NaN when
+     * it isn't known - then nothing is sent and the PC is told FAILED. ArduPilot Copter 4.7.3 DENIES a reposition whose
+     * height is NaN (SITL, 2026-11-23): "the height it has" must be given as a number - GO LOOK never moved a drone.
+     */
+    public static float goLookHeight(double relAltM) {
+        return Double.isNaN(relAltM) || Double.isInfinite(relAltM) || Math.abs(relAltM) > 10_000 ? Float.NaN : (float) relAltM;
     }
 
     /** The answer record's payload (after the code). */

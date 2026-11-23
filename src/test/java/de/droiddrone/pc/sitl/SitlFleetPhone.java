@@ -135,7 +135,7 @@ final class SitlFleetPhone implements AutoCloseable {
                         de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
                         if (b != null && b.blockId != routeBlock) {
                             routeBlock = b.blockId;
-                            upload = new de.droiddrone.common.MissionUpload(b.items, SitlMission.link(fc, b.missionType), b.missionType);
+                            upload = new de.droiddrone.common.MissionUpload(b.items, SitlMission.link(fc, b.missionType), b.missionType); // its own list (a fence went up as a route)
                             upload.start(now);
                             if (b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY) rallyInclHomeOff(); // as the phone: RTL to the rally point
                         }

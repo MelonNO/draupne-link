@@ -66,7 +66,7 @@ public final class FleetCmd {
 
     public static byte[] wrap(String key, byte[] inner) {
         byte[] k = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        if (k.length > 64 || inner == null || inner.length == 0) throw new IllegalArgumentException("key or packet");
+        if (k.length == 0 || k.length > 64 || inner == null || inner.length == 0) throw new IllegalArgumentException("key or packet");
         byte[] out = new byte[2 + k.length + inner.length];
         out[0] = PACKET;
         out[1] = (byte) k.length;
@@ -77,7 +77,9 @@ public final class FleetCmd {
 
     /** The command in a datagram, or null: not one, cut short, or no inner packet. */
     public static FleetCmd read(byte[] d, int len) {
-        if (d == null || len < 3 || d[0] != PACKET) return null;
+        if (d == null) return null;
+        len = Math.min(len, d.length); // a length that claims more than the array holds
+        if (len < 3 || d[0] != PACKET) return null;
         int k = d[1] & 0xff;
         if (k == 0 || k > 64 || len < 2 + k + 1) return null;
         String key = new String(d, 2, k, java.nio.charset.StandardCharsets.UTF_8);
@@ -100,19 +102,50 @@ public final class FleetCmd {
         return new byte[]{TRACK, (byte) Math.max(0, Math.min(255, seconds))};
     }
 
+    /**
+     * @param rtlAltRelM the lead's RTL_ALT above home; 0 (or NaN, or less): the phone leaves RTL_ALT as it is - a hand-over
+     *                   names the lead before its return height is worked out, and RTL_ALT 0 is ArduPilot's "come home at
+     *                   the height it has", under the followers' return layers
+     */
     public static byte[] lead(boolean lead, double rtlAltRelM) {
         int dm = (int) Math.max(0, Math.min(65535, Math.round(rtlAltRelM * 10)));
         return new byte[]{LEAD, (byte) (lead ? 1 : 0), (byte) (dm >>> 8), (byte) dm};
     }
 
+    /** LEAD's RTL height (m above home) as read: 0 leaves RTL_ALT as it is; -1 when the command is cut short. */
+    public static double readLeadHeight(FleetCmd c) {
+        if (c == null || c.inner() != LEAD || c.length < 4) return -1;
+        return ((c.data[c.at + 2] & 0xff) << 8 | (c.data[c.at + 3] & 0xff)) / 10.0;
+    }
+
+    /**
+     * A place off the globe, NaN or a height that is not a number is sent as no place (0 / 0), which {@link #readClear}
+     * refuses: the int casts wrapped a larger number round to another real place.
+     */
     public static byte[] clear(double lat, double lon, double altAmslM) {
+        boolean ok = Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && Math.abs(altAmslM) < 100_000; // false for NaN too
         java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(13);
-        b.put(CLEAR).putInt((int) Math.round(lat * 1e7)).putInt((int) Math.round(lon * 1e7)).putInt((int) Math.round(altAmslM * 10));
+        b.put(CLEAR).putInt(ok ? (int) Math.round(lat * 1e7) : 0).putInt(ok ? (int) Math.round(lon * 1e7) : 0)
+                .putInt(ok ? (int) Math.round(altAmslM * 10) : 0);
         return b.array();
     }
 
     public static byte[] traffic(byte[] traffic) {
         return prefixed(TRAFFIC, traffic);
+    }
+
+    /**
+     * CLEAR's place, {lat, lon, height above sea level m}, or null: cut short, off the globe, or 0 / 0 (no place - a
+     * GUIDED target there would send the drone to the Gulf of Guinea).
+     */
+    public static double[] readClear(FleetCmd c) {
+        if (c == null || c.inner() != CLEAR || c.length < 13) return null;
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(c.data, c.at + 1, 12);
+        int a = bb.getInt(), o = bb.getInt(), h = bb.getInt();
+        if (a == 0 && o == 0) return null;
+        double lat = a / 1e7, lon = o / 1e7;
+        if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+        return new double[]{lat, lon, h / 10.0};
     }
 
     public static byte[] disband() {

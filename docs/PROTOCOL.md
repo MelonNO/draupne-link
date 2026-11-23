@@ -146,19 +146,64 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   no answer (`MavlinkSniff`, CRC-checked; the parser switches, the port is not restarted). The phone addresses the FC
   by the system id of its heartbeat (upstream sent to 1).
 - **`FcCommand` 0x30** (PC to phone, unnumbered, the pilot's session only, sent twice): `[0x30][kind u8][args]` - MODE
-  `[1][custom mode i32]`, MISSION_START `[2]`, PAUSE `[3]` (LOITER), CONTINUE `[4]` (AUTO). The answer is telemetry
-  record **0x40E0** `[MAV_CMD u16][MAV_RESULT u8]` (255: no MAVLink FC).
-- **`MavTunnel` 0x32** (both ways, unnumbered, the pilot's session only): `[0x32][whole MAVLink frames]`. PC to FC only
-  parameters, missions, SET_POSITION_TARGET_GLOBAL_INT, ADSB_VEHICLE and COMMAND_LONG / COMMAND_INT with DO_SET_MODE,
-  MISSION_START, DO_PAUSE_CONTINUE, DO_REPOSITION, DO_SET_ROI_LOCATION / NONE, DO_CHANGE_SPEED, CONDITION_YAW,
-  SET_MESSAGE_INTERVAL, REQUEST_MESSAGE. Never RC_CHANNELS_OVERRIDE, arming, calibration, motor test or reboot. FC to PC
-  the answers (PARAM_VALUE, MISSION_*, COMMAND_ACK, POSITION_TARGET_GLOBAL_INT, HOME_POSITION) and its HEARTBEAT, only
-  while the PC sent a tunnel frame in the last 30 s.
-- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only): `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][count u16]` then per
-  item `[frame u8][command u16][autocontinue u8][p1..p4 f32][x i32][y i32][z f32]` (`MissionItem.pack`). The PC sends it
-  every second until telemetry record **0x40E1** `[block id u16][state u8][percent u8][reason length u8][ASCII]` names
-  it (state: 1 uploading, 2 reading back, 3 done, 4 failed). The phone runs the mission protocol with the FC over USB
-  and reads every item back.
+  `[1][custom mode i32, 0..255]`, MISSION_START `[2]`, PAUSE `[3]` (LOITER), CONTINUE `[4]` (AUTO), GO_LOOK
+  `[5][lat i32 1e-7 deg][lon i32]` (DO_REPOSITION in GUIDED at the height it has, then DO_SET_ROI_LOCATION on the
+  ground; 0 / 0 or off the globe is no place: refused, and the PC's writer sends a NaN or off-globe place so). Shorter
+  than its kind needs, another kind, or a mode outside 0..255: ignored. The answer is telemetry record **0x40E0**
+  `[MAV_CMD u16][MAV_RESULT u8]` (255: no MAVLink FC).
+- **`MavTunnel` 0x32** (both ways, unnumbered, the pilot's session only): `[0x32][whole MAVLink 1 / 2 frames]`, split by
+  their headers (a signed MAVLink 2 frame with its 13 signature bytes; a broken tail dropped). PC to FC only
+  parameters, missions, SET_POSITION_TARGET_GLOBAL_INT, ADSB_VEHICLE, LOG_REQUEST_LIST / DATA / END (AP-10, only while
+  the FC is known DISARMED: its heartbeat within 3 s says so - not known counts as armed) and COMMAND_LONG /
+  COMMAND_INT with DO_SET_MODE, MISSION_START, DO_PAUSE_CONTINUE, DO_REPOSITION, DO_SET_ROI_LOCATION / NONE,
+  DO_CHANGE_SPEED, CONDITION_YAW, SET_MESSAGE_INTERVAL, REQUEST_MESSAGE (the command read from payload bytes 28-29; a
+  MAVLink 2 payload trimmed of its trailing zeros reads the missing bytes as 0). Never RC_CHANNELS_OVERRIDE, arming,
+  calibration, motor test or reboot. FC to PC the answers (PARAM_VALUE, MISSION_REQUEST / _INT, MISSION_COUNT,
+  MISSION_ITEM_INT, MISSION_ACK, MISSION_CURRENT, MISSION_ITEM_REACHED, COMMAND_ACK, POSITION_TARGET_GLOBAL_INT,
+  HOME_POSITION, LOG_ENTRY, LOG_DATA) and its HEARTBEAT, one frame a packet, only while the PC sent a tunnel frame in
+  the last 30 s.
+- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only; or inside a `FleetCmd`):
+  `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][count u16]` then per item `[frame u8]
+  [command u16][autocontinue u8][p1..p4 f32][x i32][y i32][z f32]` (`MissionItem.pack`, 28 bytes an item, at most
+  1500). The length must be exactly 6 + 28 x count (a count lower than the items sent would upload a cut route); an
+  empty route is no block, an empty fence or rally list clears it. The PC sends it every second until telemetry record
+  **0x40E1** `[block id u16][state u8][percent u8][reason length u8][ASCII, at most 120]` names it (state: 1 uploading,
+  2 reading back, 3 done, 4 failed), then again after 2 s without a new status (the phone says an upload's end once).
+  The phone runs the mission protocol with the FC over USB and reads every item back (a route's item 0 is the FC's
+  home: not compared; a parameter sent NaN ("its default") matches what is read back; a frame matches its plain twin - 6 reads back as 3, MISSION as GLOBAL). One upload at a time (`MissionBlockQueue`): a block of the
+  list under way replaces it (the replaced one: failed, "replaced by a newer one"); a block of another list waits its
+  turn, answered as 1 / 0 %; a block the phone has or had is answered with its status and never uploaded again. The
+  PC keeps the newest status per block (`FcTelemetry.getRouteUpload(block)`).
 - **The phone's own rules for an ArduPilot drone:** a ground station's HEARTBEAT to the FC once a second while the PC is
   heard (3 s) or its link-loss rule runs (`ArduLinkLossRule`: the PC silent 1 s - LOITER, or ALT_HOLD without GNSS; 20 s
-  - Smart RTL, RTL as a lead); the pilot's last frame with the sticks centred fed meanwhile.
+  - Smart RTL, RTL as a lead); the pilot's last frame with the sticks centred fed meanwhile. A step whose mode the FC's
+  heartbeat doesn't show 1.5 s later is asked again; refused three times, LOITER gives way to ALT_HOLD and Smart RTL
+  (no path) to RTL. A LAND or RTL ArduPilot chooses itself (its battery failsafe) ends the rule's steps. Only the
+  flight controller's heartbeat counts: a ground station's or another component's (MAV_AUTOPILOT_INVALID: a gimbal, an
+  ADS-B receiver, which ArduPilot routes to USB) is skipped (`MavlinkSniff.isFlightController`), on the PC too.
+
+## Fleet packets (the `fleet` branch: a PC and the drones it commands but does not pilot)
+
+- **`FleetCmd` 0x34** (PC to phone, unnumbered, the drone's commander only - `FleetCommandGate`):
+  `[0x34][key length u8, 1..64][key UTF-8][one inner packet]`. Inner packets: `FcCommand` 0x30, `MissionBlock` 0x33,
+  GROUP `[0x35][GroupOrder]`, EXIT `[0x36][ExitPlan]`, LAUNCH `[0x37][LaunchWire order]`, TRACK `[0x39][seconds u8]`,
+  LEAD `[0x3A][lead u8][RTL height above home dm u16]` (0: RTL_ALT left as it is - the hand-over names the lead before
+  its return height is known; RTL_ALT 0 would be ArduPilot's "home at the height it has"), CLEAR `[0x3B][lat i32][lon
+  i32][height above sea level dm i32]` (0 / 0 or off the globe refused; the PC's writer sends nonsense so), DISBAND
+  `[0x3C]`, MARK `[0x3D][mark id i32][floor dm u16]` (0 clears). The commander: a pilot session's PC, else the PC that
+  piloted or commanded it last; another only with the FC known DISARMED and the commander silent 10 s.
+- **`FleetStatus` 0x38** (phone to its commander, twice a second while commanded): `[0x38][version 1][lat i32 1e-7]
+  [lon i32][height above sea level dm i32][vel east, north, up cm/s i16][battery % u8, 255 not known][flags u8: 1 armed,
+  2 GNSS 3D, 4 landed (known DISARMED: a stale heartbeat is neither), 8 piloted, 16 PC heard][ArduPilot mode u8, 255 not
+  known][follower phase u8, 255 none][error radius dm u16][home height above sea level dm i32][the PC's newest route
+  block u16][its state u8][percent u8]`, 34 bytes. Numbers past a field's range are saturated, never wrapped.
+- **LAUNCH_STATUS `0x3E`** (phone to its commander): `[0x3E][LaunchWire status]`. `LaunchWire` order `[version 1][kind
+  u8: 1 launch, 2 cancel][mark id i32][call id u16][approach height dm u16][floor dm u16][column lat i32][lon i32,
+  i32 min = not known][lead sysid u8][join layer u8][join cell u8][min battery % u8][CRC-8]`, 25 bytes; status
+  `[version 1][call id u16][mark id i32][state u8][reason u8][height dm i16][climb cm/s i16][flags u8][0][0][CRC-8]`,
+  17 bytes. The PC repeats an order at 5 Hz: the same call (call and mark id) within 60 s is answered with the
+  status and changes nothing (a copy after the launch ended was refused as a new call and IN GROUP reported as NOT
+  LAUNCHED). Call and block ids start at a random point at every start of the PC (`RouteSender.randomId`), so a
+  repeat after a restart is not a copy. With the commander silent the phone keeps the FC's ground station heartbeat
+  from the call to the group and the climb goes on (AL-14); on its way to the group (ON THE WAY to IN TRANSIT) the
+  silence is a follower's link loss (AC-37): LOITER after 12 s (TRACK comes every 5 s), RTL after 2 min.

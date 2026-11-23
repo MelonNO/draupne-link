@@ -110,7 +110,7 @@ class LeadHandoverLoopbackTest {
             }
             Thread.sleep(200);
             // the pilot's DISCARD LEAD: the new lead's order is this PC's - the stranger connects first, and is refused
-            String next = group.discardLead(System.currentTimeMillis());
+            String next = group.discardLead(de.droiddrone.pc.MonoClock.ms());
             assertNotNull(next, "a new lead from the bottom row");
             VirtualFleetPhone target = phones.get(next);
             ControlLink s = new ControlLink(config, LOOP, target.address().getPort(), 0);
@@ -147,7 +147,7 @@ class LeadHandoverLoopbackTest {
     void afterDiscardLeadTheNewLeadLeavesAndTheNextDiscardWorks() throws Exception {
         formGroup(false);
         Thread.sleep(1500);
-        String next = group.discardLead(System.currentTimeMillis());
+        String next = group.discardLead(de.droiddrone.pc.MonoClock.ms());
         assertNotNull(next, "a new lead\n" + events);
         handOver(next, true);
         VirtualFleetPhone p = phones.get(next);
@@ -170,7 +170,7 @@ class LeadHandoverLoopbackTest {
         while (System.currentTimeMillis() < until && group.memberState(next) != null) Thread.sleep(100);
         assertNull(group.memberState(next), next + " has left the group: " + group.memberState(next) + "\n" + events);
         Thread.sleep(1000);
-        String again = group.discardLead(System.currentTimeMillis());
+        String again = group.discardLead(de.droiddrone.pc.MonoClock.ms());
         assertNotNull(again, "the next DISCARD LEAD finds a new lead\n" + events);
         assertNotEquals(next, again);
     }
@@ -279,7 +279,7 @@ class LeadHandoverLoopbackTest {
         links.add(l);
         l.start();
         RcSession s = new RcSession(l, mapper, events::add, arm);
-        if (fast && group.reportsFlying(drone, System.currentTimeMillis())) s.handedOver();
+        if (fast && group.reportsFlying(drone, de.droiddrone.pc.MonoClock.ms())) s.handedOver();
         flying = s;
     }
 
