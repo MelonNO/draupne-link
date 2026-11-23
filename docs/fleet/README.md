@@ -137,6 +137,11 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
      its way out (a dispatch slot, the group, the route's farthest point) to its rally point. The dispatch mission's own
      return leg (`returnSeq`) is never entered by the PC; it flies in the drone's layer, the same order as the RTL
      heights within one dispatch, not re-planned with later solo drones.
+   - **Found in SITL 4.7.3:** Copter 4.7 moved RTL_ALT (cm) to RTL_ALT_M (m); a PARAM_SET of RTL_ALT is not answered.
+     The phone now sets both (followers, leads and solo drones alike) and reads back the one there is.
+   - **Open (not this round):** the phone reads at most 1100 bytes a datagram (`UdpCommon.packetLength`), so a
+     dispatch route of more than about 33 items (a steep slope) in one FleetCmd MissionBlock never arrives; the PC
+     says nothing and the drone stays on the ground.
    - Tests: `ReturnHeightsTest`, `DispatchTest`, `RouteWindowTest`, `ReturnHeightsLoopbackTest`; real ArduPilot
      `SitlReturnTest` (instances 10, 11).
 
