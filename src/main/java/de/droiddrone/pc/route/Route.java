@@ -71,7 +71,7 @@ public final class Route {
 
     /** The route's height above ground, at least {@link #MIN_HEIGHT_M}. */
     public void setHeightM(double h) {
-        if (Double.isNaN(h)) return;
+        if (!Double.isFinite(h)) return;
         heightM = Math.max(MIN_HEIGHT_M, h);
     }
 
@@ -80,7 +80,7 @@ public final class Route {
     }
 
     public void setSmoothingM(double s) {
-        if (Double.isNaN(s)) return;
+        if (!Double.isFinite(s)) return;
         smoothingM = Math.max(0, s);
     }
 
@@ -123,6 +123,7 @@ public final class Route {
     /** The point's own height above ground; NaN gives it the route's again. At least {@link #MIN_HEIGHT_M}. */
     public void setOwnHeight(int index, double h) {
         Point p = points.get(index);
+        if (Double.isInfinite(h)) return;
         points.set(index, new Point(p.lat(), p.lon(), Double.isNaN(h) ? Double.NaN : Math.max(MIN_HEIGHT_M, h)));
     }
 
@@ -164,8 +165,12 @@ public final class Route {
                 } else if (line.startsWith("point ")) {
                     String[] f = line.substring(6).trim().split("\\s+");
                     double lat = Double.parseDouble(f[0]), lon = Double.parseDouble(f[1]);
-                    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new IllegalArgumentException("point off the globe: " + line);
-                    r.points.add(new Point(lat, lon, f.length > 2 && !f[2].equals("-") ? Double.parseDouble(f[2]) : Double.NaN));
+                    // NaN passes every comparison: "point NaN 10" was a point nowhere
+                    if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) throw new IllegalArgumentException("point off the globe: " + line);
+                    double own = f.length > 2 && !f[2].equals("-") ? Double.parseDouble(f[2]) : Double.NaN;
+                    if (Double.isInfinite(own)) throw new IllegalArgumentException("height off the scale: " + line);
+                    r.points.add(new Point(lat, lon, Double.NaN));
+                    r.setOwnHeight(r.points.size() - 1, own); // never under MIN_HEIGHT_M, as one set on the map (a file said 2 m)
                 }
             }
         } catch (NumberFormatException | ArrayIndexOutOfBoundsException e) {

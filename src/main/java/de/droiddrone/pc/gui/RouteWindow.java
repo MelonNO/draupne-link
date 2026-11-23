@@ -39,10 +39,10 @@ import java.util.function.Supplier;
  */
 final class RouteWindow extends JDialog {
     private final MapView map;
-    private final Elevation elevation;
+    private final TerrainFill.Lookup lookup;
     private final Supplier<ControlLink> link;
     private final Supplier<FlightTrack> track;
-    private final TerrainStore terrain = TerrainStore.onDisk();
+    private final TerrainStore terrain;
     private final RouteSettingsPanel settings = new RouteSettingsPanel();
     private final RouteProfileView profile = new RouteProfileView();
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 13f), Theme.MUTED);
@@ -63,9 +63,16 @@ final class RouteWindow extends JDialog {
     /** @param watchOnly GU-8: this PC only watches (a spectator, an observation PC) - routes are drawn and planned, never sent */
     RouteWindow(Window owner, MapView map, Elevation elevation, Supplier<ControlLink> link, Supplier<FlightTrack> track,
                 java.util.function.BooleanSupplier watchOnly) {
+        this(owner, map, TerrainStore.onDisk(), (lat, lon) -> elevation == null ? null : elevation.heightNow(lat, lon), link, track, watchOnly);
+    }
+
+    /** @param terrain the ground heights kept; @param lookup the height service, for what they lack (the tests' made-up ground) */
+    RouteWindow(Window owner, MapView map, TerrainStore terrain, TerrainFill.Lookup lookup, Supplier<ControlLink> link,
+                Supplier<FlightTrack> track, java.util.function.BooleanSupplier watchOnly) {
         super(owner, "Route", ModalityType.MODELESS);
         this.map = map;
-        this.elevation = elevation;
+        this.terrain = terrain;
+        this.lookup = lookup;
         this.link = link;
         this.track = track;
         this.watchOnly = watchOnly;
@@ -151,6 +158,7 @@ final class RouteWindow extends JDialog {
             }
         });
         refreshButtons();
+        buttonTimer.start();
         pack();
         setLocationRelativeTo(owner);
     }
@@ -165,6 +173,7 @@ final class RouteWindow extends JDialog {
         route = r;
         plan = null;
         mission = null;
+        planSerial++; // CLEAR while the old route was planned: its plan came in after and UPLOAD sent a cleared route
         settings.setRoute(r);
         profile.setProfile(null);
         profile.setObstacles(null);
@@ -178,6 +187,8 @@ final class RouteWindow extends JDialog {
     private void edited() {
         settings.setRoute(route);
         mission = null;
+        plan = null; // the plan was of the route before the edit: UPLOAD sent it (a deleted point flown all the same)
+        planSerial++; // a plan of the route before the edit, still on its way, is not taken
         profile.setObstacles(null); // RT-14: looked up again with MASTS
         map.setObstacles(null);
         map.setRoute(route, null);
@@ -252,7 +263,9 @@ final class RouteWindow extends JDialog {
                     if (serial == planSerial) fill(m.nodes(), serial);
                 });
             } catch (RuntimeException e) {
-                SwingUtilities.invokeLater(() -> say("Can't plan: " + e.getMessage(), Theme.BAD));
+                SwingUtilities.invokeLater(() -> {
+                    if (serial == planSerial) say("Can't plan: " + e.getMessage(), Theme.BAD);
+                });
             }
         }, "routePlan");
         t.setDaemon(true);
@@ -264,8 +277,10 @@ final class RouteWindow extends JDialog {
         Thread running = filling;
         if (running != null && running.isAlive()) return;
         say("Terrain: 0 of " + nodes.size() + " looked up ...", Theme.WARN);
-        filling = TerrainFill.start(terrain, nodes, TerrainFill.of(elevation),
-                (done, total, found) -> SwingUtilities.invokeLater(() -> say("Terrain: " + done + " of " + total + " looked up ...", Theme.WARN)),
+        filling = TerrainFill.start(terrain, nodes, lookup,
+                (done, total, found) -> SwingUtilities.invokeLater(() -> {
+                    if (serial == planSerial) say("Terrain: " + done + " of " + total + " looked up ...", Theme.WARN);
+                }),
                 () -> serial != planSerial || !isDisplayable(),
                 found -> SwingUtilities.invokeLater(() -> {
                     try {
@@ -273,7 +288,11 @@ final class RouteWindow extends JDialog {
                     } catch (java.io.IOException ignored) {
                         // kept in memory: planned all the same
                     }
-                    if (serial == planSerial) replan();
+                    if (serial != planSerial) return;
+                    // nothing found (offline, or no heights there): planned again it lacked the same and looked them up
+                    // again, for ever - the service asked over and over. Each round must bring some, else it stops here
+                    if (found > 0) replan();
+                    else say("No ground heights here (offline?): can't plan. Edit the route to try again.", Theme.BAD);
                 }));
     }
 
@@ -283,11 +302,30 @@ final class RouteWindow extends JDialog {
         return out;
     }
 
+    /** An upload or a fence is on its way: one at a time (the phone takes one block at a time), GO waits for it. */
+    private boolean sending;
+
+    /** The plan's start this far from the drone now, or planned on the ground and now in the air (or back): planned again first. */
+    static final double REPLAN_MOVED_M = 25;
+
     private void upload() {
+        if (watchOnly.getAsBoolean() || sending) return; // GU-8: a watching PC sends nothing; one upload at a time
         ControlLink l = link.get();
         RoutePlanner.Plan p = plan;
         if (l == null || p == null) {
             say("No ArduPilot drone of this PC's own connected.", Theme.WARN);
+            return;
+        }
+        // planned from where the drone was then: moved since (or taken off, or landed), the first leg and the take-off
+        // or landing were of another start - planned again from where it is now
+        double[] from = start();
+        boolean airborne = l.getTelemetry().isArmedNow(de.droiddrone.pc.MonoClock.ms(), 3000);
+        if (from == null || p.takeoff() == airborne
+                || de.droiddrone.pc.map.Mercator.distanceM(p.startLat(), p.startLon(), from[0], from[1]) > REPLAN_MOVED_M) {
+            plan = null;
+            refreshButtons();
+            say("The drone moved since the plan: planned again. UPLOAD then.", Theme.WARN);
+            replan();
             return;
         }
         FcTelemetry.Home home = l.getTelemetry().getHome();
@@ -302,14 +340,25 @@ final class RouteWindow extends JDialog {
             return;
         }
         MissionBuilder.Mission m = MissionBuilder.build(p, home.latDeg(), home.lonDeg(), homeAmsl);
-        upload.setEnabled(false);
+        if (m.size() > MissionItem.MAX_ITEMS) { // the phone drops a bigger block unread: "didn't answer" after 15 s
+            say("Too long: " + m.size() + " waypoints, " + MissionItem.MAX_ITEMS + " at most. Shorter, or more SMOOTHING.", Theme.BAD);
+            return;
+        }
+        sending = true;
+        mission = null; // the drone's mission is being replaced: no GO on the one before
+        refreshButtons();
         say("Sending the route ...", Theme.WARN);
         List<MissionItem> items = m.items();
         RouteSender.send(items, l::sendMissionBlock, l.getTelemetry()::getRouteUpload,
-                pct -> SwingUtilities.invokeLater(() -> say("On the drone: " + pct + " %", Theme.WARN)),
+                pct -> SwingUtilities.invokeLater(() -> {
+                    if (sending) say("On the drone: " + pct + " %", Theme.WARN);
+                }),
                 r -> SwingUtilities.invokeLater(() -> {
+                    sending = false;
                     say(r.text(), r.done() ? Theme.OK : Theme.BAD);
-                    if (r.done()) mission = m;
+                    // GO only for the plan that went up: edited meanwhile, the drone has the route before the edit
+                    if (r.done() && plan == p) mission = m;
+                    else if (r.done()) say("Route edited while it went up: UPLOAD again.", Theme.WARN);
                     refreshButtons();
                 }));
     }
@@ -319,6 +368,7 @@ final class RouteWindow extends JDialog {
      * to it, read back, then FENCE_TYPE polygon, FENCE_ACTION brake or land, FENCE_ENABLE on (through the tunnel).
      */
     private void fence() {
+        if (watchOnly.getAsBoolean() || sending) return; // GU-8; one block at a time
         ControlLink l = link.get();
         FcTelemetry.Gps g = l == null ? null : l.getTelemetry().getGps();
         if (l == null || g == null || !g.positionOk()) {
@@ -329,14 +379,17 @@ final class RouteWindow extends JDialog {
                 map.drawings(), g.latDeg(), g.lonDeg());
         java.util.List<MissionItem> items = de.droiddrone.pc.route.FenceBuilder.items(polys);
         say("FENCE: " + polys.size() + " areas, " + items.size() + " corners ...", Theme.WARN);
+        sending = true;
+        refreshButtons();
         RouteSender.send(de.droiddrone.common.MissionUpload.TYPE_FENCE, items, l::sendMissionBlock, l.getTelemetry()::getRouteUpload, null,
                 r -> {
-                    if (!r.done()) {
-                        SwingUtilities.invokeLater(() -> say(r.text(), Theme.BAD));
-                        return;
-                    }
-                    String on = fenceOn(l, !items.isEmpty());
-                    SwingUtilities.invokeLater(() -> say(on == null ? r.text() + (items.isEmpty() ? " Fence off." : " Fence on.") : on, on == null ? Theme.OK : Theme.BAD));
+                    String on = r.done() ? fenceOn(l, !items.isEmpty()) : null;
+                    SwingUtilities.invokeLater(() -> {
+                        sending = false;
+                        refreshButtons();
+                        if (!r.done()) say(r.text(), Theme.BAD);
+                        else say(on == null ? r.text() + (items.isEmpty() ? " Fence off." : " Fence on.") : on, on == null ? Theme.OK : Theme.BAD);
+                    });
                 });
     }
 
@@ -357,6 +410,7 @@ final class RouteWindow extends JDialog {
     }
 
     private void go() {
+        if (watchOnly.getAsBoolean() || sending) return; // GU-8; not while a new route goes up
         ControlLink l = link.get();
         if (l == null || mission == null) return;
         if (!l.sendFcCommand(FcCommand.simple(FcCommand.MISSION_START))) say("GO not sent: no ArduPilot drone of this PC's own.", Theme.WARN);
@@ -389,11 +443,31 @@ final class RouteWindow extends JDialog {
     private void refreshButtons() {
         ControlLink l = link.get();
         boolean ardu = l != null && l.getFcInfo() != null && l.getFcInfo().getFcVariant() == de.droiddrone.common.FcInfo.FC_VARIANT_ARDUPILOT;
-        upload.setEnabled(plan != null && ardu);
-        go.setEnabled(mission != null && ardu);
-        // GU-8: a watching PC draws and plans routes, and sends none
+        // GU-8: a watching PC draws and plans routes, and sends none (hidden AND grey: a hidden button still clicks)
         boolean watch = watchOnly.getAsBoolean();
+        upload.setEnabled(plan != null && ardu && !sending && !watch);
+        go.setEnabled(mission != null && ardu && !sending && !watch);
+        fence.setEnabled(!sending && !watch);
         for (JButton b : new JButton[]{upload, go, fence}) b.setVisible(!watch);
+    }
+
+    @Override
+    public void dispose() {
+        buttonTimer.stop();
+        super.dispose();
+    }
+
+    /** The drone connects, or the PC starts watching, while the window is open: the buttons follow within a second. */
+    private final javax.swing.Timer buttonTimer = new javax.swing.Timer(1000, e -> refreshButtons());
+
+    /** What the window says now (tests). */
+    String statusText() {
+        return status.getText();
+    }
+
+    /** A plan of the route as it is now is ready (tests). */
+    boolean planned() {
+        return plan != null;
     }
 
     /** The buttons that send to a drone, for tests: UPLOAD, GO, FENCE. */

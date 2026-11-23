@@ -143,9 +143,13 @@ public final class RoutePlanner {
             double[] a = path.get(v - 1);
             double leg = Mercator.distanceM(a[0], a[1], b[0], b[1]);
             int steps = Math.max(1, (int) Math.ceil(leg / LINE_STEP_M));
+            // the short way round: across the antimeridian (179.99 to -179.99) the samples went round the whole globe
+            double dLon = b[1] - a[1];
+            if (dLon > 180) dLon -= 360;
+            else if (dLon < -180) dLon += 360;
             for (int k = 1; k <= steps; k++) {
                 double f = (double) k / steps;
-                s.add(new double[]{a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, along + leg * f, a[2] + (b[2] - a[2]) * f});
+                s.add(new double[]{a[0] + (b[0] - a[0]) * f, wrapLon(a[1] + dLon * f), along + leg * f, a[2] + (b[2] - a[2]) * f});
             }
             along += leg;
             vertexAt[v] = s.size() - 1;
@@ -165,6 +169,13 @@ public final class RoutePlanner {
             }
         }
         return new Samples(al, la, lo, gr, he, vertexAt, vertexNumber);
+    }
+
+    /** A longitude back into -180..180. */
+    static double wrapLon(double lon) {
+        if (lon > 180) return lon - 360;
+        if (lon < -180) return lon + 360;
+        return lon;
     }
 
     private static Line line(Samples s, double smoothing, Limits limits) {
@@ -295,8 +306,11 @@ public final class RoutePlanner {
         double len = Mercator.distanceM(lat0, lon0, lat1, lon1);
         int steps = Math.max(1, (int) Math.ceil(len / 10));
         double top = Double.NEGATIVE_INFINITY;
+        double dLon = lon1 - lon0;
+        if (dLon > 180) dLon -= 360;
+        else if (dLon < -180) dLon += 360;
         for (int k = 0; k <= steps; k++) {
-            double f = (double) k / steps, la = lat0 + (lat1 - lat0) * f, lo = lon0 + (lon1 - lon0) * f;
+            double f = (double) k / steps, la = lat0 + (lat1 - lat0) * f, lo = wrapLon(lon0 + dLon * f);
             double h = t.heightM(la, lo);
             if (Double.isNaN(h)) {
                 missing.putIfAbsent(TerrainStore.key(TerrainStore.latIndex(la), TerrainStore.lonIndex(lo)), TerrainStore.node(la, lo));
