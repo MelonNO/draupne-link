@@ -105,6 +105,15 @@ public final class FcCommand {
         }
     }
 
+    /**
+     * GO_LOOK's DO_REPOSITION height: the height above home the drone has now (frame GLOBAL_RELATIVE_ALT_INT), NaN when
+     * it isn't known - then nothing is sent and the PC is told FAILED. ArduPilot Copter 4.7.3 DENIES a reposition whose
+     * height is NaN (SITL, 2026-11-23): "the height it has" must be given as a number - GO LOOK never moved a drone.
+     */
+    public static float goLookHeight(double relAltM) {
+        return Double.isNaN(relAltM) || Double.isInfinite(relAltM) || Math.abs(relAltM) > 10_000 ? Float.NaN : (float) relAltM;
+    }
+
     /** The answer record's payload (after the code). */
     public static byte[] ack(int mavCommand, int result) {
         return new byte[]{(byte) (mavCommand >>> 8), (byte) mavCommand, (byte) result};

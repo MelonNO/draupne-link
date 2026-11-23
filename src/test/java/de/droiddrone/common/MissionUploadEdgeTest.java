@@ -243,6 +243,27 @@ class MissionUploadEdgeTest {
         assertTrue(u.done(), u.reason());
     }
 
+    /** Seen in ArduPilot SITL 4.7.3: frames come back as their plain twins (6 as 3), a placeless item's MISSION as GLOBAL. */
+    @Test
+    void framesReadBackAsArduPilotStoresThem() {
+        List<MissionItem> rally = List.of(new MissionItem(0, 6, 5100, true, 0, 0, 0, 0, 599000000, 107000000, 40));
+        MissionUpload u = new MissionUpload(rally, new Sent(), MissionUpload.TYPE_RALLY);
+        u.start(0);
+        u.onRequest(0, 1);
+        u.onAck(0, 2);
+        u.onCount(1, 3);
+        u.onItem(new MissionItem(0, 3, 5100, true, 0, 0, 0, 0, 599000000, 107000000, 40), 4);
+        assertTrue(u.done(), u.reason());
+        MissionItem speed = new MissionItem(3, MissionItem.FRAME_MISSION, MissionItem.DO_CHANGE_SPEED, true, 1, 8, -1, 0, 0, 0, 0);
+        assertTrue(speed.sameAs(new MissionItem(3, 0, MissionItem.DO_CHANGE_SPEED, true, 1, 8, -1, 0, 0, 0, 0)));
+        assertTrue(new MissionItem(1, 5, 16, true, 0, 0, 0, 0, 1, 1, 1).sameAs(new MissionItem(1, 0, 16, true, 0, 0, 0, 0, 1, 1, 1)));
+        assertFalse(new MissionItem(1, 6, 16, true, 0, 0, 0, 0, 1, 1, 1).sameAs(new MissionItem(1, 0, 16, true, 0, 0, 0, 0, 1, 1, 1)),
+                "above home is not above the sea");
+        MissionItem land = new MissionItem(6, 0, MissionItem.NAV_LAND, true, 0, 0, 0, Float.NaN, 1, 1, 1);
+        assertTrue(land.sameAs(new MissionItem(6, 0, MissionItem.NAV_LAND, true, 0, 0, 0, 1f, 1, 1, 1)), "NAV_LAND's NaN reads back 1");
+        assertFalse(new MissionItem(1, 10, 16, true, 0, 0, 0, 0, 1, 1, 1).sameAs(new MissionItem(1, 3, 16, true, 0, 0, 0, 0, 1, 1, 1)));
+    }
+
     @Test
     void aReadBackCountOtherThanSentFails() {
         MissionUpload u = new MissionUpload(items(3), new Sent());

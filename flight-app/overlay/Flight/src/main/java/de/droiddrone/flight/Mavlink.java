@@ -454,10 +454,18 @@ public class Mavlink {
             case de.droiddrone.common.FcCommand.CONTINUE:
                 setMode(COPTER_AUTO);
                 break;
-            case de.droiddrone.common.FcCommand.GO_LOOK: // fleet AP-12: there at its height, the camera on the spot
-                commandInt(192, -1, 1, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), Float.NaN, (short) 6); // DO_REPOSITION, change mode
+            case de.droiddrone.common.FcCommand.GO_LOOK: { // fleet AP-12: there at its height, the camera on the spot
+                // the height it has, as a number: ArduPilot DENIES a reposition whose height is NaN (SITL 4.7.3)
+                float h = de.droiddrone.common.FcCommand.goLookHeight(relAltM);
+                if (Float.isNaN(h)) {
+                    telemetryOutputBuffer.offer(new TelemetryData(de.droiddrone.common.FcCommand.ACK_RECORD,
+                            de.droiddrone.common.FcCommand.ack(192, 4))); // MAV_RESULT_FAILED: its height not known
+                    return true;
+                }
+                commandInt(192, -1, 1, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), h, (short) 6); // DO_REPOSITION, change mode
                 commandInt(195, 0, 0, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), 0f, (short) 6); // DO_SET_ROI_LOCATION, on the ground
                 break;
+            }
             default:
                 return false;
         }
