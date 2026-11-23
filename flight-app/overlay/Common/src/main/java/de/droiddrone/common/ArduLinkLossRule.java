@@ -32,8 +32,14 @@ package de.droiddrone.common;
  * </ol>
  * Nothing while disarmed, nothing before a PC was ever heard (a drone flown with its own radio), and nothing when
  * the flight controller is already bringing it home or down (RTL, Smart RTL, Auto RTL, LAND: ArduPilot's own
- * failsafe may have chosen them). GNSS lost later in the plan turns a brake into holding height; a return already
- * started is left to ArduPilot.
+ * failsafe may have chosen them) - neither when the rule begins nor later: a LAND or RTL ArduPilot chose by itself
+ * after the brake (its battery failsafe) is never overridden by the rule's next step. GNSS lost later in the plan
+ * turns a brake into holding height; a return already started is left to ArduPilot.
+ * <p>
+ * A step whose mode the flight controller doesn't show {@link #RETRY_MS} after it was asked (the command lost on the
+ * USB, or refused) is asked again; refused {@link #MAX_TRIES} times, LOITER gives way to ALT_HOLD (no position
+ * estimate) and Smart RTL to RTL (no Smart RTL path: armed without a position, or its path full) - before, a refused
+ * step left the drone in the pilot's mode with centred sticks for good.
  * <p>
  * Not as the PRD says: "brakes within about 100 ms". On 4G, gaps of 100-500 ms with nothing from the PC are routine
  * (the link logs); a brake at each would leave the pilot in LOITER all the time. The brake starts after a full
@@ -43,6 +49,10 @@ package de.droiddrone.common;
 public final class ArduLinkLossRule {
     public static final long BRAKE_AFTER_MS = 1000;
     public static final long HOME_AFTER_MS = 20_000;
+    /** A step's mode not shown by the FC's heartbeat (once a second) this long after it was asked: asked again. */
+    public static final long RETRY_MS = 1500;
+    /** Asked this many times without the FC taking it: the step's fallback (LOITER to ALT_HOLD, Smart RTL to RTL). */
+    public static final int MAX_TRIES = 3;
 
     public static final int NONE = 0, BRAKE = 1, HOLD_HEIGHT = 2, SMART_RTL = 3, RTL = 4;
 
@@ -51,7 +61,13 @@ public final class ArduLinkLossRule {
             MODE_SMART_RTL = 21, MODE_AUTO_RTL = 27;
 
     private boolean running;
+    /** ArduPilot took over by itself (a LAND or RTL of its own after the rule began): nothing more from the rule. */
+    private boolean handedOver;
+    /** LOITER / Smart RTL refused MAX_TRIES times: ALT_HOLD / RTL in their place until the rule lets go. */
+    private boolean loiterRefused, smartRefused;
     private int last = NONE;
+    private int tries;
+    private long askedAt;
 
     /**
      * @param pcHeardAtMs when a packet of the pilot's session last came (the same clock as now), 0: never
@@ -59,17 +75,24 @@ public final class ArduLinkLossRule {
      * @param customMode  the FC's mode now (its heartbeat), -1 not known
      * @param gnssOk      a 3D fix or better
      * @param lead        this drone leads a follower group
-     * @return the action to take now, or NONE (also when the same step was taken already)
+     * @return the action to take now, or NONE (also when the same step was taken already and the FC shows it)
      */
     public int tick(long nowMs, long pcHeardAtMs, boolean armed, int customMode, boolean gnssOk, boolean lead) {
         long silent = pcHeardAtMs == 0 ? -1 : nowMs - pcHeardAtMs;
         if (silent < BRAKE_AFTER_MS || !armed) {
             running = false;
+            handedOver = loiterRefused = smartRefused = false;
             last = NONE;
+            tries = 0;
             return NONE;
         }
         if (!running && goingHomeOrDown(customMode)) return NONE; // ArduPilot already does it: never overridden
         running = true;
+        if (handedOver) return NONE;
+        if (goingHomeOrDown(customMode) && customMode != modeFor(last)) {
+            handedOver = true; // ArduPilot chose its own way home or down after the rule began: never overridden
+            return NONE;
+        }
         int want;
         if (!gnssOk) {
             want = HOLD_HEIGHT;
@@ -79,10 +102,32 @@ public final class ArduLinkLossRule {
             want = BRAKE;
         }
         // a return under way is left alone: lost GNSS during RTL is ArduPilot's own (it lands or holds by its failsafe)
-        if (last == SMART_RTL || last == RTL) return NONE;
-        if (want == last) return NONE;
-        last = want;
-        return want;
+        if (last == SMART_RTL || last == RTL) want = last;
+        if (want == BRAKE && loiterRefused) want = HOLD_HEIGHT;
+        if (want == SMART_RTL && smartRefused) want = RTL;
+        if (want != last) return ask(want, nowMs);
+        // the same step: asked again while the FC doesn't show its mode (not known: nothing to compare)
+        if (customMode < 0 || customMode == modeFor(last) || nowMs - askedAt < RETRY_MS) return NONE;
+        if (tries >= MAX_TRIES) {
+            if (last == BRAKE) {
+                loiterRefused = true;
+                return ask(HOLD_HEIGHT, nowMs);
+            }
+            if (last == SMART_RTL) {
+                smartRefused = true;
+                return ask(RTL, nowMs);
+            }
+        }
+        tries++;
+        askedAt = nowMs;
+        return last;
+    }
+
+    private int ask(int step, long nowMs) {
+        last = step;
+        tries = 1;
+        askedAt = nowMs;
+        return step;
     }
 
     /** The rule is in charge: the PC silent past the brake, the drone armed. */
