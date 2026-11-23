@@ -63,7 +63,7 @@ public final class LaunchSequence {
 
     /** Reasons: PreArmCheck's results as they are (2..8), the climb watchdog's + 20, and these. */
     public static final int CLIMB_REASON = 20, ARM_REFUSED = 40, DISARMED_IN_CLIMB = 41, FC_NOT_READY = 42,
-            WRONG_MARK = 43;
+            WRONG_MARK = 43, LANDED = 44;
 
     public static String stateWord(int s) {
         switch (s) {
@@ -93,6 +93,7 @@ public final class LaunchSequence {
             case DISARMED_IN_CLIMB: return "DISARMED";
             case FC_NOT_READY: return "FC NOT READY";
             case WRONG_MARK: return "MARK GONE";
+            case LANDED: return "LANDED";
             default: return PreArmCheck.word(reason);
         }
     }
@@ -332,6 +333,17 @@ public final class LaunchSequence {
                 }
                 break;
             }
+            case ON_THE_WAY:
+            case WAITING_FOR_TRANSIT:
+            case IN_TRANSIT:
+                // disarmed after its climb (landed - in the group's end, at 3 %, by the pilot): the launch is over.
+                // Before, nothing ended it (nothing on the phone knows the group's cells): the sequence stayed ON THE
+                // WAY for good, and the drone never took a new mark or call again until the app restarted.
+                if (fcArmedKnown && !fcArmed) {
+                    to(LAUNCH_FAILED, LANDED, nowMs, out);
+                    report(out);
+                }
+                break;
             default:
                 break;
         }

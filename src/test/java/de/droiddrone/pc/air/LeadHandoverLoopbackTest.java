@@ -110,7 +110,7 @@ class LeadHandoverLoopbackTest {
             }
             Thread.sleep(200);
             // the pilot's DISCARD LEAD: the new lead's order is this PC's - the stranger connects first, and is refused
-            String next = group.discardLead(System.currentTimeMillis());
+            String next = group.discardLead(de.droiddrone.pc.MonoClock.ms());
             assertNotNull(next, "a new lead from the bottom row");
             VirtualFleetPhone target = phones.get(next);
             ControlLink s = new ControlLink(config, LOOP, target.address().getPort(), 0);
@@ -135,6 +135,70 @@ class LeadHandoverLoopbackTest {
             assertTrue(waitSticks(target, 3000), "the group's PC has the new lead's sticks\n" + events);
             assertTrue(target.firstStickAt() - t0 < HANDOVER_MAX_MS, "within " + HANDOVER_MAX_MS + " ms: " + (target.firstStickAt() - t0));
         }
+    }
+
+    /**
+     * After DISCARD LEAD the pilot flies the new lead down and out: the group lets it go (it leaves the group), and a
+     * second DISCARD LEAD later finds the next one. Before, the new lead's reports went to the group as the lead's while
+     * the group still had it leaving: it never left, the group stood still for good and every later DISCARD LEAD (and the
+     * silent lead's take-over) found nobody.
+     */
+    @Test
+    void afterDiscardLeadTheNewLeadLeavesAndTheNextDiscardWorks() throws Exception {
+        formGroup(false);
+        Thread.sleep(1500);
+        String next = group.discardLead(de.droiddrone.pc.MonoClock.ms());
+        assertNotNull(next, "a new lead\n" + events);
+        handOver(next, true);
+        VirtualFleetPhone p = phones.get(next);
+        assertTrue(waitSticks(p, 5000), "sticks\n" + events);
+        GroupLink.Picture pic = group.picture();
+        double[] c = {de.droiddrone.common.group.GeoLocal.east(LAT, LON, pic.lat(), pic.lon()),
+                de.droiddrone.common.group.GeoLocal.north(LAT, LON, pic.lat(), pic.lon())};
+        double outE, outN;
+        synchronized (p.copter) {
+            outE = p.copter.e - c[0];
+            outN = p.copter.n - c[1];
+            p.copter.pilot(p.copter.e, p.copter.n, GROUND + 40); // down into the abort layer
+        }
+        Thread.sleep(6000);
+        double len = Math.hypot(outE, outN);
+        synchronized (p.copter) {
+            p.copter.pilot(c[0] + outE / len * 140, c[1] + outN / len * 140, GROUND + 40); // and out past the keep-out zone
+        }
+        long until = System.currentTimeMillis() + 30_000;
+        while (System.currentTimeMillis() < until && group.memberState(next) != null) Thread.sleep(100);
+        assertNull(group.memberState(next), next + " has left the group: " + group.memberState(next) + "\n" + events);
+        Thread.sleep(1000);
+        String again = group.discardLead(de.droiddrone.pc.MonoClock.ms());
+        assertNotNull(again, "the next DISCARD LEAD finds a new lead\n" + events);
+        assertNotEquals(next, again);
+    }
+
+    /** The window's hand-overs (listener.newLead): "drone@wall clock ms". */
+    private final List<String> handedTo = new CopyOnWriteArrayList<>();
+
+    /**
+     * FL-5: the lead silent 30 s - the follower DISCARD LEAD would pick becomes the lead at once and the pilot gets its
+     * sticks, as with DISCARD LEAD. Before, the pilot got them only once that follower had flown the whole abort exit
+     * by itself, a quarter of a minute later; and the window was told only once.
+     */
+    @Test
+    void aSilentLeadIsTakenOverAtOnce() throws Exception {
+        formGroup(false);
+        Thread.sleep(1000);
+        long cut = System.currentTimeMillis();
+        phones.get("Lead").setLink(false);
+        long until = cut + 45_000;
+        while (System.currentTimeMillis() < until && handedTo.isEmpty()) Thread.sleep(100);
+        assertEquals(1, handedTo.size(), "one hand-over\n" + events);
+        long at = Long.parseLong(handedTo.get(0).split("@")[1]);
+        long silent = AirParams.defaults().leadSilentMs();
+        assertTrue(at - cut < silent + 3000, "the pilot has the new lead " + (at - cut) + " ms after the cut\n" + events);
+        String next = handedTo.get(0).split("@")[0];
+        assertEquals(next, group.lead());
+        Thread.sleep(20_000); // it leaves; nobody is handed over twice
+        assertEquals(1, handedTo.size(), "still one hand-over: " + handedTo + "\n" + events);
     }
 
     // ------------------------------------------------------------------ the flight
@@ -169,6 +233,7 @@ class LeadHandoverLoopbackTest {
 
             public void newLead(String drone) {
                 events.add("NEW LEAD " + drone);
+                handedTo.add(drone + "@" + System.currentTimeMillis());
             }
         });
         VirtualFleetPhone lead = phone("Lead", 150, 0, 80);
@@ -214,7 +279,7 @@ class LeadHandoverLoopbackTest {
         links.add(l);
         l.start();
         RcSession s = new RcSession(l, mapper, events::add, arm);
-        if (fast && group.reportsFlying(drone, System.currentTimeMillis())) s.handedOver();
+        if (fast && group.reportsFlying(drone, de.droiddrone.pc.MonoClock.ms())) s.handedOver();
         flying = s;
     }
 

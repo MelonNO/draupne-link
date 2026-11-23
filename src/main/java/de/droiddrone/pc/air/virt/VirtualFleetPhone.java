@@ -245,7 +245,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             s.routeBlock = routeBlock;
             s.routeState = route == null && rally == null ? 0 : de.droiddrone.common.MissionUpload.DONE;
             s.routePercent = route == null ? 0 : 100;
-            s.mode = auto ? 3 : 5;
+            s.mode = auto || holding ? 3 : 5; // at its LOITER_UNLIM ArduPilot stays in AUTO
             if (armed && !copter.landed) s.flags |= FleetStatus.ARMED;
             if (copter.gnssOk) s.flags |= FleetStatus.GNSS;
             if (copter.landed) s.flags |= FleetStatus.LANDED;

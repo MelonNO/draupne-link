@@ -66,8 +66,8 @@ public final class GroupLink implements AutoCloseable {
     private volatile View view = View.NONE;
 
     /** The group as the window shows it, as of the last tick (at most {@link #TICK_MS} old). */
-    public record View(Picture picture, Map<String, GroupController.State> states, double nextApproachAlt) {
-        static final View NONE = new View(null, Map.of(), Double.NaN);
+    public record View(Picture picture, Map<String, GroupController.State> states, double nextApproachAlt, double groundAmsl) {
+        static final View NONE = new View(null, Map.of(), Double.NaN, Double.NaN);
     }
 
     public GroupLink(String key, Listener listener) throws IOException {
@@ -102,6 +102,20 @@ public final class GroupLink implements AutoCloseable {
         return lead;
     }
 
+    /** How long ago (ms, MonoClock) the drone's last report came; MAX_VALUE: never. */
+    public long heardAgoMs(String drone, long now) {
+        Long at = heardAt.get(drone);
+        return at == null ? Long.MAX_VALUE : Math.max(0, now - at);
+    }
+
+    /** The cut-off followers where their exit plans have them now ({lat, lon, altAmsl} by drone), as of the last tick. */
+    private volatile Map<String, double[]> unheardNow = Map.of();
+
+    /** AC-8 / AC-37: where the cut-off followers are now, as their plans say (the PC can't hear them). */
+    public Map<String, double[]> unheardNow() {
+        return unheardNow;
+    }
+
     /** A report this fresh counts as the drone's state now (FL-6's hand-over). */
     public static final long REPORT_FRESH_MS = 1500;
 
@@ -133,6 +147,11 @@ public final class GroupLink implements AutoCloseable {
     }
 
     /** AC-5: the approach height (AMSL) for the next reserve, as of the last tick; NaN without a group. */
+    /** AC-2 / AC-13: the ground the group's layers and its ceiling stand on (AMSL); NaN without a group. */
+    public double groundAmsl() {
+        return view.groundAmsl();
+    }
+
     public double nextApproachAlt() {
         return view.nextApproachAlt();
     }
@@ -154,7 +173,7 @@ public final class GroupLink implements AutoCloseable {
         }
         Map<String, GroupController.State> states = new LinkedHashMap<>();
         for (Map.Entry<String, GroupController.Member> m : g.members().entrySet()) states.put(m.getKey(), m.getValue().state());
-        view = new View(makePicture(), java.util.Collections.unmodifiableMap(states), g.nextApproachAlt());
+        view = new View(makePicture(), java.util.Collections.unmodifiableMap(states), g.nextApproachAlt(), g.groundAmsl());
     }
 
     /** Asks these drones for their reports (the start of FOLLOW GROUP: where are they?). */
@@ -215,6 +234,12 @@ public final class GroupLink implements AutoCloseable {
         return next;
     }
 
+    /** The last new lead is still on its way out of the group: DISCARD LEAD waits until it is out. */
+    public synchronized boolean handingOver() {
+        GroupController g = group;
+        return g != null && g.leaving();
+    }
+
     /** FL-9: the settings the next FOLLOW GROUP is formed with (the group designer's; the PRD's by default). */
     private volatile AirParams params = AirParams.defaults();
 
@@ -253,6 +278,7 @@ public final class GroupLink implements AutoCloseable {
         GroupController g = group;
         group = null;
         followerRallies = Map.of();
+        unheardNow = Map.of();
         if (g == null) return;
         refreshView();
         for (String d : phones.keySet()) send(d, FleetCmd.disband());
@@ -314,6 +340,11 @@ public final class GroupLink implements AutoCloseable {
 
     synchronized void tick(long now) {
         GroupController g = group;
+        if (now - trackedAt > 5000) { // the reports keep coming (each command does that too) - with no group as well: a
+            // dispatched drone's reports stopped 20 s after its last command, FLEET showing it frozen where it was then (FD-1)
+            trackedAt = now;
+            track(new ArrayList<>(phones.keySet()));
+        }
         if (g == null) return;
         double floor = floorAsked;
         if (!Double.isNaN(floor)) {
@@ -330,20 +361,19 @@ public final class GroupLink implements AutoCloseable {
         Map<String, double[]> fr = new LinkedHashMap<>();
         for (Map.Entry<String, V2> e : g.rallies().entrySet()) fr.put(e.getKey(), GeoLocal.offset(lat0, lon0, e.getValue().e(), e.getValue().n()));
         followerRallies = fr;
-        if (now - trackedAt > 5000) { // the reports keep coming (each command does that too)
-            trackedAt = now;
-            track(new ArrayList<>(phones.keySet()));
-        }
         Map<String, GroupController.Report> reports = new HashMap<>();
         GroupController.Report leadReport = null;
         List<GroupController.Other> others = new ArrayList<>();
+        // the group's own lead: after DISCARD LEAD the old one until the new lead has left the group - the pilot flies the
+        // new one at once, but it is still a member on its way out and its reports are the member's (else it never left)
+        String groupLead = g.lead() != null ? g.lead() : lead;
         for (Map.Entry<String, FleetStatus> e : last.entrySet()) {
             FleetStatus s = e.getValue();
             long heard = heardAt.getOrDefault(e.getKey(), 0L);
             GroupController.Report r = new GroupController.Report(e.getKey(), local(s.lat, s.lon), s.altAmsl, new V2(s.velE, s.velN),
                     s.velU, s.battery == 255 ? Double.NaN : s.battery, s.has(FleetStatus.GNSS), s.errM, heard,
                     s.phase != 255, s.has(FleetStatus.LANDED), s.homeAmsl);
-            if (e.getKey().equals(lead)) leadReport = r;
+            if (e.getKey().equals(groupLead)) leadReport = r;
             else if (g.members().containsKey(e.getKey())) reports.put(e.getKey(), r);
             else others.add(new GroupController.Other(e.getKey(), r.pos(), r.altAmsl(), r.vel(), false));
         }
@@ -366,25 +396,41 @@ public final class GroupLink implements AutoCloseable {
             // AC-12: one without GNSS is never moved sideways (it couldn't fly GUIDED anyway: its FC holds its height)
             if (s != null && s.has(FleetStatus.GNSS)) send(c.getKey(), FleetCmd.clear(ll[0], ll[1], s.altAmsl));
         }
+        Map<String, double[]> unheard = g.unheard(now);
+        Map<String, double[]> unheardLl = new LinkedHashMap<>();
+        for (Map.Entry<String, double[]> u : unheard.entrySet()) {
+            double[] ll = GeoLocal.offset(lat0, lon0, u.getValue()[0], u.getValue()[1]);
+            unheardLl.put(u.getKey(), new double[]{ll[0], ll[1], u.getValue()[2]});
+        }
+        unheardNow = java.util.Collections.unmodifiableMap(unheardLl);
         if (now - trafficAt >= TRAFFIC_EVERY_MS) { // FD-8 / AC-11: each FC gets the others as ADS-B targets
             trafficAt = now;
             List<String> to = new ArrayList<>(g.members().keySet());
             if (lead != null && !to.contains(lead)) to.add(lead);
-            Map<String, double[]> unheard = g.unheard(now);
             for (String d : to) {
                 Traffic t = trafficFor(d, now, unheard);
                 if (t != null) send(d, FleetCmd.traffic(t.encode()));
             }
         }
         for (String ev : out.events()) listener.event(ev);
-        if (out.newLead() != null && !out.newLead().equals(lead)) { // the lead silent 30 s: taken over (FL-5)
-            String was = lead;
-            lead = out.newLead();
-            if (was != null) send(was, FleetCmd.lead(false, 0));
-            send(lead, FleetCmd.disband());
-            send(lead, FleetCmd.lead(true, out.leadRtlAltRelM()));
-            listener.newLead(lead);
-        }
+        // the lead silent 30 s: taken over (FL-5) - the pilot gets the new lead at once, as with DISCARD LEAD, while it
+        // leaves the group (before, only once it had flown the whole abort exit by itself)
+        for (String ev : out.events()) if (ev.startsWith(TAKEN_OVER)) handTo(ev.substring(TAKEN_OVER.length()), out.leadRtlAltRelM());
+        if (out.newLead() != null) handTo(out.newLead(), out.leadRtlAltRelM());
+    }
+
+    private static final String TAKEN_OVER = "LEAD TAKEN OVER ";
+
+    /** The pilot's lead is now this drone (unless it is already): the old one told, the new one's brain let go. */
+    private void handTo(String next, double rtlAltRelM) {
+        if (next.equals(lead)) return;
+        String was = lead;
+        lead = next;
+        if (was != null) send(was, FleetCmd.lead(false, 0));
+        send(next, FleetCmd.disband());
+        send(next, FleetCmd.lead(true, Double.isNaN(rtlAltRelM) || rtlAltRelM < 0 ? 0 : rtlAltRelM));
+        refreshView();
+        listener.newLead(next);
     }
 
     /**

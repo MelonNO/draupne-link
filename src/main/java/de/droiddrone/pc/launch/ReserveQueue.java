@@ -95,7 +95,7 @@ public final class ReserveQueue {
     /** name#markId of every drone that has answered a call: each answers one (a new mark makes it callable again). */
     private final Set<String> answered = new HashSet<>();
     private int nextCallId = de.droiddrone.pc.route.RouteSender.randomId(); // new at every start: the phone answers a call it knows with its status
-    private long noReserveAt = Long.MIN_VALUE;
+    private long noReserveAt = Long.MIN_VALUE / 2; // (MIN_VALUE itself: now - it overflowed, NO RESERVE for good)
     private int leadSysId = LaunchWire.NONE;
     private double floorM = 40;
     private int minBatteryPercent;
@@ -216,6 +216,7 @@ public final class ReserveQueue {
                 out.orders().add(o);
             }
             end(c);
+            answered.remove(key(c.name, c.markId)); // it never armed: still marked, it may answer a later call
             out.events().add("CANCELLED " + c.name);
             return out;
         }

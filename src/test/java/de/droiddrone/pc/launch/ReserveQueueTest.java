@@ -126,6 +126,26 @@ class ReserveQueueTest {
         assertEquals("", none.osdLine(1000 + ReserveQueue.NO_RESERVE_MS + 1));
     }
 
+    /** Every call over (in the group): the OSD's reserve line is empty. Before, it said NO RESERVE for good (an overflow). */
+    @Test
+    void noReserveLineOnceEveryCallIsOver() {
+        ReserveQueue q = new ReserveQueue(choice, new Air());
+        long now = 1_800_000_000_000L; // the PC's clock
+        int id = q.press(now, List.of(reserve("Sentry-3", 0, 0)), GLAT, GLON).orders().get(0).callId;
+        q.onStatus(now + 60_000, "Sentry-3", status(id, LaunchSequence.IN_GROUP), List.of(), GLAT, GLON);
+        assertEquals("", q.osdLine(now + 61_000));
+    }
+
+    /** AL-5: a call cancelled before its drone armed leaves the drone marked - the next press may call it again. */
+    @Test
+    void aCancelledReserveCanAnswerALaterCall() {
+        ReserveQueue q = new ReserveQueue(choice, new Air());
+        List<ReserveChoice.Reserve> rs = List.of(reserve("Sentry-1", 500, 0));
+        q.press(0, rs, GLAT, GLON);
+        assertEquals(List.of("CANCELLED Sentry-1"), q.cancelLast(10).events());
+        assertEquals(List.of("CALLED Sentry-1"), q.press(20, rs, GLAT, GLON).events());
+    }
+
     @Test
     void theLastCallCanBeCancelledUntilItArms() {
         Air air = new Air();

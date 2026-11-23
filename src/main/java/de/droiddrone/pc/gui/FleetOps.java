@@ -130,6 +130,8 @@ final class FleetOps {
     private final java.util.Map<String, Sent> dispatched = new java.util.LinkedHashMap<>();
     private int nextBlock = de.droiddrone.pc.route.RouteSender.randomId(); // new at every start: the phone keeps old block ids
     static final double DISPATCH_HEIGHT_M = 60;
+    /** A dispatched drone this close to its slot, standing still, is there (YOUR TURN). */
+    static final double SLOT_REACHED_M = 15;
 
     /** The map's right-click on a place: DISPATCH every drone marked SAFE TO AUTOLAUNCH there (FD-3). */
     List<JMenuItem> placeItems(double lat, double lon) {
@@ -138,7 +140,7 @@ final class FleetOps {
         int n = 0;
         for (String d : marked.keySet()) if (!dispatched.containsKey(d)) n++;
         if (n == 0) return out;
-        JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(DISPATCH_HEIGHT_M) + " m above ground)");
+        JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(dispatchHeightM()) + " m above ground)");
         go.addActionListener(e -> dispatch(lat, lon));
         out.add(go);
         return guarded(out);
@@ -168,27 +170,41 @@ final class FleetOps {
             rallyTo.put(d, new double[]{r.lat, r.lon});
         }
         if (drones.isEmpty()) return;
+        // AC-2: layers of its own - above those of drones still out from an earlier DISPATCH (and of one still being
+        // planned), and above the follower group's layers and its reserves' approach layers while a group flies
+        int firstLayer = layersPlannedTo;
+        for (java.util.Map.Entry<String, Sent> e : dispatched.entrySet()) {
+            FleetStatus st = l.status(e.getKey());
+            if (st != null && st.has(FleetStatus.LANDED) && e.getValue().started) continue; // back down
+            firstLayer = Math.max(firstLayer, (int) Math.round(e.getValue().leg.layerM() / de.droiddrone.pc.route.Dispatch.LAYER_M) + 1);
+        }
+        double height = dispatchHeightM();
+        int first = firstLayer;
+        layersPlannedTo = first + drones.size();
+        plansRunning++;
         de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
         Thread t = new Thread(() -> {
             for (int attempt = 0; attempt < 2; attempt++) {
                 try {
-                    List<de.droiddrone.pc.route.Dispatch.Leg> legs = de.droiddrone.pc.route.Dispatch.plan(drones, lat, lon, DISPATCH_HEIGHT_M,
-                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT, rallyTo);
+                    List<de.droiddrone.pc.route.Dispatch.Leg> legs = de.droiddrone.pc.route.Dispatch.plan(drones, lat, lon, height,
+                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT, rallyTo, first);
                     java.util.Map<String, double[]> starts = new java.util.HashMap<>();
                     for (de.droiddrone.pc.route.Dispatch.Drone d : drones) starts.put(d.name(), new double[]{d.lat(), d.lon()});
                     SwingUtilities.invokeLater(() -> {
                         // FD-9: the preview first - OK sends, CANCEL doesn't
-                        if (!host.confirmTitled("DISPATCH", previewText(preview(legs, starts::get)))) {
-                            host.log("DISPATCH called off.");
-                            return;
-                        }
-                        begin(legs, starts);
+                        boolean go = host.confirmTitled("DISPATCH", previewText(preview(legs, starts::get)));
+                        if (go) begin(legs, starts);
+                        else host.log("DISPATCH called off.");
+                        planDone();
                     });
                     return;
                 } catch (de.droiddrone.pc.route.RoutePlanner.MissingTerrain m) {
                     de.droiddrone.pc.map.Elevation el = host.elevation();
                     if (el == null || attempt > 0 || !(terrain instanceof de.droiddrone.pc.route.TerrainStore store)) {
-                        SwingUtilities.invokeLater(() -> host.alert("DISPATCH: the terrain there isn't known (" + m.nodes().size() + " heights)."));
+                        SwingUtilities.invokeLater(() -> {
+                            host.alert("DISPATCH: the terrain there isn't known (" + m.nodes().size() + " heights).");
+                            planDone();
+                        });
                         return;
                     }
                     SwingUtilities.invokeLater(() -> host.log("DISPATCH: looking up " + m.nodes().size() + " terrain heights ..."));
@@ -198,6 +214,27 @@ final class FleetOps {
         }, "dispatchPlan");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** DISPATCH plans being made (and the layers they hold until their legs are dispatched or called off). */
+    private int plansRunning, layersPlannedTo;
+
+    private void planDone() {
+        if (--plansRunning <= 0) {
+            plansRunning = 0;
+            layersPlannedTo = 0;
+        }
+    }
+
+    /**
+     * FD-3 / AC-2: the route height of a DISPATCH - 60 m above the ground, or while a follower group flies, two layers
+     * above its top layer and a reserve's approach layer (before, dispatched drones flew in the group's own layers).
+     */
+    double dispatchHeightM() {
+        GroupLink l = link;
+        if (l == null || !l.active()) return DISPATCH_HEIGHT_M;
+        de.droiddrone.pc.air.AirParams d = design();
+        return Math.max(DISPATCH_HEIGHT_M, de.droiddrone.pc.air.GroupDesign.topM(d, l.members().size(), 1) + 2 * d.layerM());
     }
 
     private void begin(List<de.droiddrone.pc.route.Dispatch.Leg> legs, java.util.Map<String, double[]> starts) {
@@ -313,16 +350,29 @@ final class FleetOps {
 
     private void noteSettled() {
         GroupLink l = link;
-        de.droiddrone.pc.air.GroupController g = l == null ? null : l.controller();
-        if (g == null) return;
+        // the view of the last tick (GU-9): the controller's own maps are the tick thread's - this ran on Swing's thread
+        if (l == null || !l.active()) return;
         for (String d : joined) {
-            de.droiddrone.pc.air.GroupController.Member m = g.members().get(d);
-            if (m != null && m.state() == de.droiddrone.pc.air.GroupController.State.IN_CELL) settled.add(d);
+            de.droiddrone.pc.air.GroupController.State st = l.memberState(d);
+            if (st != de.droiddrone.pc.air.GroupController.State.IN_CELL || !settled.add(d)) continue;
+            // AL-9: in its cell - its call is over. The phone's own launch status stays ON THE WAY (nothing on it
+            // knows the group's cells): before, FLEET said ON THE WAY for good and the OSD kept it in its reserve list.
+            de.droiddrone.common.launch.LaunchWire.Status was = launches.get(d);
+            if (reserves != null && was != null) {
+                de.droiddrone.common.launch.LaunchWire.Status in = new de.droiddrone.common.launch.LaunchWire.Status();
+                in.callId = was.callId;
+                in.markId = was.markId;
+                in.state = de.droiddrone.common.launch.LaunchSequence.IN_GROUP;
+                in.passedFloor = in.armed = in.connected = true;
+                GroupLink.Picture p = l.picture();
+                handle(reserves.onStatus(de.droiddrone.pc.MonoClock.ms(), d, in, reserveList(), p == null ? 0 : p.lat(), p == null ? 0 : p.lon()));
+            }
         }
     }
     private final java.util.Map<String, Long> orderSentAt = new java.util.HashMap<>();
     private final java.util.Map<String, de.droiddrone.common.launch.LaunchWire.Order> pending = new java.util.HashMap<>();
     private de.droiddrone.pc.launch.ReserveQueue reserves;
+    private final ColumnsFree columnsFree = new ColumnsFree();
     private int nextMark = (int) (System.nanoTime() & 0x3fffffff) + 1;
 
     private GroupLink ensureLink() throws java.io.IOException {
@@ -356,7 +406,13 @@ final class FleetOps {
 
     /** AL-1 / AL-2: marked on the pilot's word that it can climb straight up to the floor with nothing above it. */
     private void mark(String phone) {
-        String why = de.droiddrone.pc.launch.MarkRules.refusal(true, true, host.outOfAction(phone));
+        GroupLink known = link;
+        FleetStatus now = known == null ? null : known.status(phone);
+        // FA1: a landed drone only - one whose fleet report says armed (a follower, a dispatched drone) is not marked
+        // here (its phone would refuse; the PC took it as a reserve all the same and could call it)
+        boolean disarmed = now == null || known.heardAgoMs(phone, de.droiddrone.pc.MonoClock.ms()) > 3000 // an old report: not known
+                || !now.has(FleetStatus.ARMED) || now.has(FleetStatus.LANDED);
+        String why = de.droiddrone.pc.launch.MarkRules.refusal(disarmed, true, host.outOfAction(phone));
         if (why == null) why = de.droiddrone.pc.launch.ReserveRules.markRefusal(fixOf(phone)); // AL-11
         if (why != null) {
             host.alert("SAFE TO AUTOLAUNCH: " + why);
@@ -375,6 +431,7 @@ final class FleetOps {
             l.command(phone, de.droiddrone.common.FleetCmd.mark(id, floorM));
             l.track(List.of(phone));
             FleetStatus s = l.status(phone);
+            forget(phone); // on the ground again: what it did before (a dispatch, a launch, a group it joined) is over
             marked.put(phone, new Marked(id, s == null ? Double.NaN : s.lat, s == null ? Double.NaN : s.lon, de.droiddrone.pc.MonoClock.ms()));
             host.log("SAFE TO AUTOLAUNCH: " + phone + " marked (its phone checks it is level, landed, with a fix).");
         } catch (java.io.IOException e) {
@@ -382,11 +439,46 @@ final class FleetOps {
         }
     }
 
+    /**
+     * A drone marked again (landed, disarmed) starts afresh: before, a drone once dispatched was never offered to
+     * DISPATCH or CALL RESERVE again (it stayed "dispatched"), and a reserve that had once settled in a group never
+     * joined one again when called a second time (it stayed "settled").
+     */
+    private void forget(String phone) {
+        dispatched.remove(phone);
+        launches.remove(phone);
+        joined.remove(phone);
+        joinedTo.remove(phone);
+        settled.remove(phone);
+        holdSaid.remove(phone);
+        pending.remove(phone);
+        orderSentAt.remove(phone);
+        drains.remove(phone);
+    }
+
     private void unmark(String phone) {
         marked.remove(phone);
         GroupLink l = link;
         if (l != null) l.command(phone, de.droiddrone.common.FleetCmd.mark(0, floorM));
         host.log("SAFE TO AUTOLAUNCH cleared: " + phone);
+    }
+
+    /** GROUP DESIGN's settings as the pilot would leave them (tests). */
+    void setDesignForTests(de.droiddrone.pc.air.AirParams p) {
+        design = p;
+        floorM = Math.max(FLOOR_MIN_M, p.floorM());
+    }
+
+    /** A drone's last fleet report (tests). */
+    FleetStatus statusForTests(String drone) {
+        GroupLink l = link;
+        return l == null ? null : l.status(drone);
+    }
+
+    /** A drone's state in the group as of the last tick, or null (tests). */
+    de.droiddrone.pc.air.GroupController.State memberStateForTests(String drone) {
+        GroupLink l = link;
+        return l == null ? null : l.memberState(drone);
     }
 
     boolean isMarked(String phone) {
@@ -446,10 +538,18 @@ final class FleetOps {
         }
         if (reserves == null) {
             reserves = new de.droiddrone.pc.launch.ReserveQueue(new de.droiddrone.pc.launch.ReserveChoice(
-                    de.droiddrone.pc.launch.ReserveChoice.Pace.DEFAULT), new ColumnsFree());
+                    de.droiddrone.pc.launch.ReserveChoice.Pace.DEFAULT), columnsFree);
         }
         reserves.setFloor(floorM);
         handle(reserves.press(de.droiddrone.pc.MonoClock.ms(), reserveList(), p.lat(), p.lon()));
+    }
+
+    /** AL-5: the last call cancelled while its drone hasn't armed (its phone gets the cancel; a waiting call just goes). */
+    void cancelLastCall() {
+        if (host.watchOnly() || reserves == null) return;
+        de.droiddrone.pc.launch.ReserveQueue.Out out = reserves.cancelLast(de.droiddrone.pc.MonoClock.ms());
+        if (out.events().isEmpty()) host.log("CALL RESERVE: nothing to cancel (the last one is up).");
+        handle(out);
     }
 
     /** The orders to their phones (woken at their check-in first, AL-7), the events to the log. */
@@ -668,7 +768,8 @@ final class FleetOps {
         keepLaunch(drone, s);
         if (dispatchClimbed(drone, s)) { // a dispatched drone: its route, not the group
             if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) soloBack(drone);
-            if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
+            boolean down = s.reason == de.droiddrone.common.launch.LaunchSequence.LANDED; // its launch over by landing: no alarm
+            if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED && !down) host.alert("LAUNCH FAILED: " + drone + " - "
                     + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason));
             return;
         }
@@ -678,7 +779,8 @@ final class FleetOps {
         if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED || s.state == de.droiddrone.common.launch.LaunchSequence.NOT_LAUNCHED) {
             soloBack(drone);
             marked.remove(drone);
-            if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
+            if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED && s.reason != de.droiddrone.common.launch.LaunchSequence.LANDED)
+                host.alert("LAUNCH FAILED: " + drone + " - "
                     + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason) + ". The next reserve is called.");
         }
         joinReserve(drone, s);
@@ -709,7 +811,8 @@ final class FleetOps {
                 holdSaid.remove(drone);
                 marked.remove(drone);
                 soloBack(drone); // a follower now: its exit plan sets its return height (AC-41)
-                l.addReserve(drone, st.battery == 255 ? 50 : st.battery, l.nextApproachAlt(), de.droiddrone.pc.MonoClock.ms()); // GU-9: under the group's lock
+                double layer = columnsFree.layerOf(drone); // the approach layer it was called to (AC-5)
+                l.addReserve(drone, st.battery == 255 ? 50 : st.battery, Double.isNaN(layer) ? l.nextApproachAlt() : layer, de.droiddrone.pc.MonoClock.ms()); // GU-9: under the group's lock
                 host.log(again ? drone + " joins " + d.lead() + "'s group." : drone + " joins the group.");
             }
             case NEW_GROUP -> {
@@ -736,9 +839,39 @@ final class FleetOps {
     /** AC-4 / AC-5: a reserve's column and its approach layer - one each, never two columns closer than 2 x 10 m. */
     private final class ColumnsFree implements de.droiddrone.pc.launch.LaunchAirspace {
         private final java.util.Map<String, double[]> columns = new java.util.HashMap<>();
+        /** Each called reserve's approach layer (AMSL) until it is in the group or gone. */
+        private final java.util.Map<String, Double> layers = new java.util.HashMap<>();
 
+        /**
+         * AC-5 / FA20: an approach layer of its own - the group's next, one spacing higher for each reserve already on
+         * its way and not yet joined (before, every call got the same one: the second press was NO LAYER FREE while the
+         * first climbed). AC-13: none over the ceiling (NaN: NO LAYER FREE). Metres above its own take-off point.
+         */
         public double approachLayerFor(String drone, double lat, double lon) {
-            return approachFor(drone);
+            GroupLink l = link;
+            if (l == null || !l.active() || Double.isNaN(l.nextApproachAlt())) return approachFor(drone);
+            double amsl = l.nextApproachAlt(), step = design().layerM();
+            boolean moved = true;
+            while (moved) {
+                moved = false;
+                for (java.util.Map.Entry<String, Double> e : layers.entrySet()) {
+                    if (!e.getKey().equals(drone) && Math.abs(e.getValue() - amsl) < step - 0.5) {
+                        amsl = e.getValue() + step;
+                        moved = true;
+                    }
+                }
+            }
+            double ground = l.groundAmsl();
+            if (!Double.isNaN(ground) && amsl - ground > de.droiddrone.pc.air.GroupDesign.ceiling(design()) + 1e-6) return Double.NaN;
+            layers.put(drone, amsl);
+            FleetStatus s = l.status(drone);
+            return Math.max(floorM, amsl - (s == null ? 0 : s.homeAmsl));
+        }
+
+        /** The approach layer (AMSL) this reserve was called to, NaN: none. */
+        double layerOf(String drone) {
+            Double a = layers.get(drone);
+            return a == null ? Double.NaN : a;
         }
 
         public boolean reserveColumn(String drone, double lat, double lon, double radiusM, double topM) {
@@ -755,6 +888,7 @@ final class FleetOps {
         }
 
         public void releaseLayer(String drone) {
+            layers.remove(drone);
         }
     }
 
@@ -808,7 +942,8 @@ final class FleetOps {
                 return;
             }
             String next = l.discardLead(de.droiddrone.pc.MonoClock.ms());
-            if (next == null) host.alert("DISCARD LEAD: no follower in the bottom row to take over.");
+            if (next == null) host.alert(l.handingOver() ? "DISCARD LEAD: wait - the new lead is still leaving the group."
+                    : "DISCARD LEAD: no follower in the bottom row to take over.");
         });
     }
 
@@ -837,6 +972,11 @@ final class FleetOps {
             c.setEnabled(why == null);
             c.addActionListener(e -> callReserve());
             out.add(c);
+            if (reserves != null && reserves.canCancel()) { // AL-5: the last call, until its drone arms
+                JMenuItem x = new JMenuItem("CALL RESERVE: cancel the last");
+                x.addActionListener(e -> cancelLastCall());
+                out.add(x);
+            }
         }
         String lead = host.flownPhone();
         if (!active()) {
@@ -921,6 +1061,12 @@ final class FleetOps {
         l.setFloor(floorM);
         host.log("Group floor " + Math.round(floorM) + " m above the ground.");
         if (floorM > FLOOR_WARN_M) host.alert("Floor over 120 m: check the airspace's height limit.");
+        else if (l.active()) { // AC-13: the group's top layer over GROUP DESIGN's ceiling - said, not only found at the next call
+            de.droiddrone.pc.air.AirParams d = design();
+            double top = de.droiddrone.pc.air.GroupDesign.topM(d, l.members().size(), 0), ceiling = de.droiddrone.pc.air.GroupDesign.ceiling(d);
+            if (top > ceiling) host.alert("Floor " + Math.round(floorM) + " m: top layer " + Math.round(top) + " m, over the ceiling ("
+                    + Math.round(ceiling) + " m). No reserve can join.");
+        }
     }
 
     private void start(String lead) {
@@ -942,6 +1088,7 @@ final class FleetOps {
             ensureLink();
         } catch (java.io.IOException e) {
             host.alert("FOLLOW GROUP: " + e.getMessage());
+            done.accept(e.getMessage()); // else a reserve forming a group round the lead now (AL-10) waited for good
             return;
         }
         link.setParams(design());
@@ -951,6 +1098,7 @@ final class FleetOps {
             InetSocketAddress a = host.addressOf(d);
             if (a == null) {
                 host.alert("FOLLOW GROUP: " + d + " isn't reachable (no address).");
+                done.accept(d + " isn't reachable");
                 return;
             }
             link.phone(d, a);
@@ -958,6 +1106,8 @@ final class FleetOps {
         link.track(all);
         host.log("FOLLOW GROUP: asking " + all.size() + " drones where they are ...");
         GroupLink l = link;
+        de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
+        de.droiddrone.pc.air.AirParams shape = design();
         Thread t = new Thread(() -> {
             long until = de.droiddrone.pc.MonoClock.ms() + 4000;
             while (de.droiddrone.pc.MonoClock.ms() < until && all.stream().anyMatch(d -> l.status(d) == null)) {
@@ -968,7 +1118,7 @@ final class FleetOps {
                 }
             }
             FleetStatus ls = l.status(lead);
-            String why = ls == null ? "the lead hasn't reported (phone app pc.58 or newer)." : l.form(lead, followers, ls.homeAmsl);
+            String why = ls == null ? "the lead hasn't reported (phone app pc.58 or newer)." : l.form(lead, followers, groupGround(terrain, shape, l, followers, ls.homeAmsl));
             SwingUtilities.invokeLater(() -> {
                 if (why != null) host.alert("FOLLOW GROUP not started: " + why);
                 done.accept(why);
@@ -976,6 +1126,45 @@ final class FleetOps {
         }, "followGroupStart");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * AC-2 / E2: the ground the group's layers stand on - the highest known ground under its area (its edge and
+     * keep-out round where the followers are), sampled every 20 m; the lead's home ground only where none is known.
+     * Before, it was always the lead's home ground: a group formed over a hill higher than where the lead took off
+     * had its floor (and every layer) that much too low over the hill.
+     */
+    static double groupGround(de.droiddrone.pc.route.TerrainSource terrain, de.droiddrone.pc.air.AirParams p, GroupLink l,
+                              List<String> followers, double leadHomeAmsl) {
+        double lat = 0, lon = 0;
+        int n = 0;
+        for (String f : followers) {
+            FleetStatus s = l.status(f);
+            if (s == null) continue;
+            lat += s.lat;
+            lon += s.lon;
+            n++;
+        }
+        if (terrain == null || n == 0) return leadHomeAmsl;
+        return groupGround(terrain, p, lat / n, lon / n, leadHomeAmsl);
+    }
+
+    static double groupGround(de.droiddrone.pc.route.TerrainSource terrain, de.droiddrone.pc.air.AirParams p, double lat, double lon,
+                              double fallbackAmsl) {
+        double half = p.edgeM() + p.keepOutM(), best = Double.NaN;
+        for (double e = -half; e <= half + 1e-9; e += 20) {
+            for (double n = -half; n <= half + 1e-9; n += 20) {
+                double[] at = de.droiddrone.common.group.GeoLocal.offset(lat, lon, e, n);
+                double h;
+                try {
+                    h = terrain.heightM(at[0], at[1]);
+                } catch (RuntimeException ex) {
+                    h = Double.NaN;
+                }
+                if (!Double.isNaN(h) && (Double.isNaN(best) || h > best)) best = h;
+            }
+        }
+        return Double.isNaN(best) ? fallbackAmsl : best;
     }
 
     /** The group for the map (G4), or null: none. */
@@ -1070,7 +1259,8 @@ final class FleetOps {
         GroupLink l = link;
         FleetStatus st = l == null ? null : l.status(drone);
         if (ls != null && ls.state != de.droiddrone.common.launch.LaunchSequence.IDLE
-                && ls.state != de.droiddrone.common.launch.LaunchSequence.IN_GROUP && !dispatched.containsKey(drone)) {
+                && ls.state != de.droiddrone.common.launch.LaunchSequence.IN_GROUP && !dispatched.containsKey(drone)
+                && !settled.contains(drone) && ls.reason != de.droiddrone.common.launch.LaunchSequence.LANDED) { // in its cell: the group's word
             word = de.droiddrone.common.launch.LaunchSequence.stateWord(ls.state);
         } else if (l != null && l.memberState(drone) != null) {
             word = switch (l.memberState(drone)) {
@@ -1087,7 +1277,13 @@ final class FleetOps {
             Sent s = dispatched.get(drone);
             if (!s.started) word = s.launched ? "LAUNCHING" : s.uploaded ? "READY" : "ROUTE ...";
             else if (st == null) word = "TRANSIT";
-            else if (st.mode == de.droiddrone.pc.ArduModes.AUTO) word = "TRANSIT";
+            else if (st.mode == de.droiddrone.pc.ArduModes.AUTO) {
+                // B5: the route ends in a LOITER_UNLIM - ArduPilot holds there in AUTO, not LOITER. Before, FLEET said
+                // TRANSIT for good at the slot: YOUR TURN never came on real ArduPilot
+                boolean there = de.droiddrone.common.group.GeoLocal.distance(st.lat, st.lon, s.leg.slotLat(), s.leg.slotLon()) < SLOT_REACHED_M
+                        && Math.hypot(st.velE, st.velN) < 1;
+                word = there ? "YOUR TURN" : "TRANSIT";
+            }
             else if (de.droiddrone.pc.ArduModes.isReturnOrLand(st.mode)) word = "RETURNING";
             else if (st.mode == de.droiddrone.pc.ArduModes.LOITER) word = "YOUR TURN";
             else word = "HOLDING";
@@ -1181,7 +1377,7 @@ final class FleetOps {
         FleetStatus leadSt = l == null || flown == null ? null : l.status(flown);
         boolean leadDown = active() && leadSt != null && !leadSt.has(FleetStatus.ARMED);
         return new OsdFleet(reservesLine, p == null ? null : "GROUP " + p.followers(), edge, p == null ? Double.NaN : p.floorM(), gnss,
-                traffic(l, known(), flown, leadSt), homeText, alarm, leadDown, minis);
+                traffic(l, known(), flown, leadSt, now), homeText, alarm, leadDown, minis);
     }
 
     private void feedDrain(GroupLink l, String d, long now) {
@@ -1189,19 +1385,38 @@ final class FleetOps {
         if (st != null && st.battery != 255) drains.computeIfAbsent(d, k -> new Drain()).add(now, st.battery);
     }
 
-    /** AC-8: the nearest other drone within 20 m sideways and 20 m in height of the flown one: "TRAFFIC 14 M NE  -3 M". */
-    static String traffic(GroupLink l, java.util.Collection<String> drones, String flown, FleetStatus me) {
-        if (l == null || me == null || flown == null) return null;
+    /**
+     * AC-8: the nearest other drone within 20 m sideways and 20 m in height of the flown one: "TRAFFIC 14 M NE  -3 M".
+     * A cut-off follower counts where its exit plan has it now (GroupLink.unheardNow); any other drone only while its
+     * reports are fresh ({@link GroupLink#TRAFFIC_STALE_MS}) - before, a drone gone quiet stayed on the OSD as TRAFFIC
+     * where it was last heard, for good. Nothing while the flown drone's own report is that old.
+     */
+    static String traffic(GroupLink l, java.util.Collection<String> drones, String flown, FleetStatus me, long now) {
+        if (l == null || me == null || flown == null || l.heardAgoMs(flown, now) > GroupLink.TRAFFIC_STALE_MS) return null;
         String best = null;
         double bestH = Double.MAX_VALUE;
-        for (String d : drones) {
+        java.util.Map<String, double[]> unheard = l.unheardNow();
+        java.util.Set<String> all = new java.util.LinkedHashSet<>(drones);
+        all.addAll(unheard.keySet());
+        for (String d : all) {
             if (d.equals(flown)) continue;
-            FleetStatus o = l.status(d);
-            if (o == null || o.has(FleetStatus.LANDED)) continue;
-            double h = de.droiddrone.common.group.GeoLocal.distance(me.lat, me.lon, o.lat, o.lon), v = o.altAmsl - me.altAmsl;
+            double lat, lon, alt;
+            double[] u = unheard.get(d);
+            if (u != null) {
+                lat = u[0];
+                lon = u[1];
+                alt = u[2];
+            } else {
+                FleetStatus o = l.status(d);
+                if (o == null || o.has(FleetStatus.LANDED) || l.heardAgoMs(d, now) > GroupLink.TRAFFIC_STALE_MS) continue;
+                lat = o.lat;
+                lon = o.lon;
+                alt = o.altAmsl;
+            }
+            double h = de.droiddrone.common.group.GeoLocal.distance(me.lat, me.lon, lat, lon), v = alt - me.altAmsl;
             if (h > TRAFFIC_H_M || Math.abs(v) > TRAFFIC_V_M || h >= bestH) continue;
             bestH = h;
-            String dir = compass(de.droiddrone.common.group.GeoLocal.bearing(me.lat, me.lon, o.lat, o.lon));
+            String dir = compass(de.droiddrone.common.group.GeoLocal.bearing(me.lat, me.lon, lat, lon));
             best = "TRAFFIC " + Math.round(h) + " M " + dir + "  " + (v >= 0 ? "+" : "") + Math.round(v) + " M";
         }
         return best;
