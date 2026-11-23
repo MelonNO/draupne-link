@@ -359,6 +359,15 @@ public class RcSession {
         return fcDisarmedNow.getAsBoolean();
     }
 
+    private volatile FleetSwitches fleetSwitches;
+    private volatile java.util.function.IntConsumer fleetSwitch = e -> { };
+
+    /** Fleet E4 / FA4: the radio's DISCARD LEAD / CALL RESERVE switches, and who hears them (must not block). */
+    public void setFleetSwitches(FleetSwitches switches, java.util.function.IntConsumer listener) {
+        fleetSwitch = listener == null ? e -> { } : listener;
+        fleetSwitches = switches;
+    }
+
     /** Called on every input tick (the RC rate); sends immediately. state is null when the joystick is gone. */
     public void onInput(Joystick.State state) {
         // judged as the flight controller will see it: channels the radio doesn't carry are padded or unknown (ArmSwitch.on)
@@ -368,6 +377,12 @@ public class RcSession {
         beeping = beep;
         if (channels != null) channels = withBeeper(channels, beeperChannel, beep);
         lastChannels = channels;
+        // fleet E4 / FA4: DISCARD LEAD and CALL RESERVE flipped on the radio (a few compares; the listener hands off)
+        FleetSwitches fs = fleetSwitches;
+        if (fs != null && channels != null) {
+            int ev = fs.onFrame(channels, channels.length, now);
+            if (ev != FleetSwitches.NONE) fleetSwitch.accept(ev);
+        }
         radioPresent = state != null;
         noteInput(state, now);
         if (!linkUp.getAsBoolean()) {

@@ -65,6 +65,11 @@ final class FleetManagementPanel extends JPanel {
         /** Right-click on an OUT OF ACTION drone: the mark off again. */
         default void clearOutOfAction(String phone) {
         }
+
+        /** Fleet G1: the right-click's FOLLOW GROUP items for this drone (none by default). */
+        default java.util.List<javax.swing.JMenuItem> fleetItems(String phone) {
+            return java.util.List.of();
+        }
     }
 
     /**
@@ -593,15 +598,20 @@ final class FleetManagementPanel extends JPanel {
         private void outOfActionMenu(java.awt.event.MouseEvent e) {
             FleetCards.Card c = card;
             String choice = c == null ? null : outOfActionChoice(c.kind());
-            if (choice == null) return;
+            java.util.List<javax.swing.JMenuItem> fleet = actions.fleetItems(phone); // fleet G1: FOLLOW GROUP
+            if (choice == null && fleet.isEmpty()) return;
             javax.swing.JPopupMenu menu = TacticalCombo.menu();
             menu.setBackground(Theme.PANEL_2);
-            javax.swing.JMenuItem item = new javax.swing.JMenuItem(choice + ": " + phone);
-            item.addActionListener(a -> {
-                if (c.kind() == MapView.Kind.OUT_OF_ACTION) actions.clearOutOfAction(phone);
-                else actions.markOutOfAction(phone);
-            });
-            menu.add(item);
+            for (javax.swing.JMenuItem f : fleet) menu.add(f);
+            if (!fleet.isEmpty() && choice != null) menu.addSeparator();
+            if (choice != null) {
+                javax.swing.JMenuItem item = new javax.swing.JMenuItem(choice + ": " + phone);
+                item.addActionListener(a -> {
+                    if (c.kind() == MapView.Kind.OUT_OF_ACTION) actions.clearOutOfAction(phone);
+                    else actions.markOutOfAction(phone);
+                });
+                menu.add(item);
+            }
             menu.show(this, e.getX(), e.getY());
         }
 

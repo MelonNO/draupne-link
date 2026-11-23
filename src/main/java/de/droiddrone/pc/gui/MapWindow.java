@@ -381,7 +381,13 @@ final class MapWindow extends JFrame {
             public void clearOutOfAction(String phone) {
                 if (main != null) main.clearOutOfActionByPilot(phone);
             }
+
+            @Override
+            public java.util.List<javax.swing.JMenuItem> fleetItems(String phone) {
+                return main == null ? java.util.List.of() : main.fleetItems(phone);
+            }
         });
+        if (main != null) map.setFleetItems(main::fleetItems); // fleet G1: the map's drones too
         if (main != null) fleetPanel.setLastKnown(main::lastKnownLine); // 1.0.71: the selected phone's last grid, from disk
         tools.lastKnown.setToolTipText("Every phone's last grid, time and battery");
         tools.lastKnown.addActionListener(e -> {

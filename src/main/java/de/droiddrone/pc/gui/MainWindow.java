@@ -158,6 +158,46 @@ public class MainWindow extends JFrame {
     private Connection connection;
     private RcSession session;
     private final AlertSound alertSound = new AlertSound();
+    /** Fleet PRD G1 / FL-1 / FL-6: FOLLOW GROUP from the right-click menus, DISCARD LEAD from the radio. */
+    final FleetOps fleetOps = new FleetOps(new FleetOps.Host() {
+        @Override
+        public String flownPhone() {
+            de.droiddrone.pc.ControlLink l = flownLink();
+            return l == null || l.getFcInfo() == null || l.getFcInfo().getFcVariant() != FcInfo.FC_VARIANT_ARDUPILOT ? null : fcPhone;
+        }
+
+        @Override
+        public java.net.InetSocketAddress addressOf(String phone) {
+            String ip = names.ipOf(phone);
+            return ip == null ? null : new java.net.InetSocketAddress(ip, config.getPort());
+        }
+
+        @Override
+        public String key() {
+            return config.getKey();
+        }
+
+        @Override
+        public void log(String line) {
+            logLine(line);
+        }
+
+        @Override
+        public void alert(String text) {
+            logLine("! " + text);
+            alertSound.update(text, MonoClock.ms());
+        }
+
+        @Override
+        public void flyNow(String phone) {
+            if (!connectedTo(phone)) connectFromMap(phone, false);
+        }
+    });
+
+    /** Fleet: the FOLLOW GROUP items of the right-click menus (FLEET rows, the map's drones). */
+    List<javax.swing.JMenuItem> fleetItems(String phone) {
+        return fleetOps.items(phone);
+    }
     /** Settings keys the template names (PcConfig): the phone's address, the controller, OSD and video on/off. */
     static final String IP_KEY = "ip";
     static final String JOYSTICK_KEY = "joystick";
@@ -1963,6 +2003,7 @@ public class MainWindow extends JFrame {
                 ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
         RcSession s = session;
         s.setFrozenStopMs(config.getRadioFrozenStopS() * 1000L);
+        if (!watch) s.setFleetSwitches(de.droiddrone.pc.FleetSwitches.from(config), fleetOps::onSwitch); // fleet E4 / FA4
         // BEEPER only where Drone setup put it, and never on a channel ARM or the radio uses (1.0.49)
         s.setBeeperSetUp("true".equalsIgnoreCase(config.getString(RcSession.BEEPER_KEY)));
         beeperButton.setToolTipText(s.beeperOff() == null ? BEEPER_TIP : s.beeperOff());

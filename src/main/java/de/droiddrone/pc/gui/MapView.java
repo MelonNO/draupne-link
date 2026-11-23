@@ -315,6 +315,13 @@ class MapView extends JComponent {
     private List<double[]> routePlanned;
     private int routeSelected = -1, routeDrag = -1;
 
+    /** Fleet G1: the FOLLOW GROUP items for a drone's right-click (MainWindow.fleetItems); null: none. */
+    private volatile java.util.function.Function<String, List<JMenuItem>> fleetItems;
+
+    void setFleetItems(java.util.function.Function<String, List<JMenuItem>> items) {
+        fleetItems = items;
+    }
+
     void setRouteHost(RouteHost host) {
         routeHost = host;
     }
@@ -1176,6 +1183,11 @@ class MapView extends JComponent {
             fly.addActionListener(e -> onDroneConnect.accept(drone.name(), false));
             menu.add(fly);
             menu.addSeparator();
+        }
+        if (drone != null && fleetItems != null) { // fleet G1: FOLLOW GROUP, the floor
+            List<JMenuItem> items = fleetItems.apply(drone.name());
+            for (JMenuItem it : items) menu.add(it);
+            if (!items.isEmpty()) menu.addSeparator();
         }
         int flight = keptAt(x, y);
         if (flight >= 0 && onRemoveKept != null) {
