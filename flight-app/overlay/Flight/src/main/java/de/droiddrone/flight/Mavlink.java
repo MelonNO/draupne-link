@@ -589,6 +589,17 @@ public class Mavlink {
         return (sensorsPresent & need) == need && (sensorsHealth & need) == need;
     }
 
+    /** MAV_SYS_STATUS_PREARM_CHECK: ArduPilot's own pre-arm checks. */
+    static final long SENSOR_PREARM = 0x10000000L;
+
+    /**
+     * ArduPilot says its own pre-arm checks pass (SYS_STATUS' PREARM_CHECK bit healthy; a firmware that doesn't report the
+     * bit counts as passing). Fleet AL-3 / AL-13: a reserve that would be refused is not armed - skipped as FC UNHEALTHY.
+     */
+    boolean preArmOk() {
+        return (sensorsPresent & SENSOR_PREARM) == 0 || (sensorsHealth & SENSOR_PREARM) != 0;
+    }
+
     /** A compass: present and healthy, or none at all (counted healthy: the GPS puck's is the drone's, D3). */
     boolean compassHealthy() {
         return (sensorsPresent & SENSOR_MAG) == 0 || (sensorsHealth & SENSOR_MAG) != 0;

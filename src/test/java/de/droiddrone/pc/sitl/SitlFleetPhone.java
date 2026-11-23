@@ -53,6 +53,8 @@ final class SitlFleetPhone implements AutoCloseable {
         this.sitl = sitl;
         this.fc = sitl.fc;
         this.key = key;
+        SitlMission.feed(fc, () -> upload);
+        fc.onText(t -> { if (texts.size() < 200) texts.add(t); });
         socket = new DatagramSocket(0, InetAddress.getLoopbackAddress());
         Thread r = new Thread(this::receive, "sitlFleetPhone" + sitl.instance);
         r.setDaemon(true);
@@ -72,6 +74,13 @@ final class SitlFleetPhone implements AutoCloseable {
 
     int launchState() {
         return seq.state();
+    }
+
+    /** ArduPilot's texts of this drone (PreArm and the rest). */
+    final java.util.List<String> texts = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    String launchWhy() {
+        return LaunchSequence.stateWord(seq.state()) + " (" + LaunchSequence.reasonWord(seq.reason()) + ")";
     }
 
     private void receive() {
@@ -117,6 +126,18 @@ final class SitlFleetPhone implements AutoCloseable {
                     case FcCommand.PACKET -> {
                         FcCommand k = FcCommand.read(java.util.Arrays.copyOfRange(c.data, c.at, c.at + c.length), c.length);
                         if (k != null && k.kind == FcCommand.MODE) mode(k.mode);
+                        if (k != null && k.kind == FcCommand.MISSION_START) { // as the phone's Mavlink.command: AUTO, then MISSION_START
+                            mode(3);
+                            fc.command(300, 0, 0, 0, 0, 0, 0, 0, 0);
+                        }
+                    }
+                    case de.droiddrone.common.MissionBlock.PACKET -> { // the route, uploaded and read back as the phone does over USB
+                        de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
+                        if (b != null && b.blockId != routeBlock) {
+                            routeBlock = b.blockId;
+                            upload = new de.droiddrone.common.MissionUpload(b.items, SitlMission.link(fc));
+                            upload.start(now);
+                        }
                     }
                     default -> {
                     }
@@ -127,6 +148,9 @@ final class SitlFleetPhone implements AutoCloseable {
             }
         }
     }
+
+    private volatile de.droiddrone.common.MissionUpload upload;
+    private volatile int routeBlock = -1;
 
     private void mark(byte[] d, int at, int len) {
         if (len < 7 || fc.armedFlag()) return;
@@ -147,6 +171,8 @@ final class SitlFleetPhone implements AutoCloseable {
                 Thread.sleep(100);
                 long now = System.currentTimeMillis();
                 synchronized (this) {
+                    de.droiddrone.common.MissionUpload u = upload;
+                    if (u != null) u.tick(now);
                     launchTick(now);
                     FollowerBrain b = brain;
                     double[] p = fc.position();
@@ -227,7 +253,8 @@ final class SitlFleetPhone implements AutoCloseable {
         r.lon = p[1];
         r.gpsFix3d = fc.gpsFix() >= 3;
         r.batteryPercent = 80;
-        r.imuHealthy = r.compassHealthy = r.fcHealthy = true;
+        r.imuHealthy = r.compassHealthy = true;
+        r.fcHealthy = fc.preArmOk(); // as the phone: ArduPilot's own pre-arm checks
         ClimbWatchdog.Sample s = null;
         if (seq.state() == LaunchSequence.CLIMBING) {
             s = new ClimbWatchdog.Sample();
@@ -283,6 +310,12 @@ final class SitlFleetPhone implements AutoCloseable {
         s.velN = p[6];
         s.battery = 80;
         s.homeAmsl = sitl.homeAlt;
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u != null) {
+            s.routeBlock = routeBlock;
+            s.routeState = u.state();
+            s.routePercent = u.percent();
+        }
         s.mode = Math.max(0, Math.min(254, fc.customMode()));
         if (fc.armedFlag()) s.flags |= FleetStatus.ARMED;
         else s.flags |= FleetStatus.LANDED;

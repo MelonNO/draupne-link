@@ -132,6 +132,17 @@ public final class ArduSitl implements AutoCloseable {
         throw new IOException("SITL not ready (fix " + fc.gpsFix() + ")");
     }
 
+    /** Waits until ArduPilot's own pre-arm checks pass (it would arm now). */
+    public void awaitPreArm(long timeoutMs) throws IOException, InterruptedException {
+        fc.stream(1, 2); // SYS_STATUS
+        long end = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < end) {
+            if (fc.preArmOk()) return;
+            Thread.sleep(250);
+        }
+        throw new IOException("ArduPilot's pre-arm checks never passed");
+    }
+
     @Override
     public void close() {
         fc.close();

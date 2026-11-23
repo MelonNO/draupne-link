@@ -9,6 +9,12 @@ public final class FleetOpsAccess {
     private final FleetOps ops;
 
     public FleetOpsAccess(String flown, Function<String, InetSocketAddress> addresses, List<String> log) {
+        this(flown, addresses, log, (lat, lon) -> Double.NaN);
+    }
+
+    /** @param terrain the ground a dispatch plans over (flat ground in the SITL tests) */
+    public FleetOpsAccess(String flown, Function<String, InetSocketAddress> addresses, List<String> log,
+                          de.droiddrone.pc.route.TerrainSource terrain) {
         ops = new FleetOps(new FleetOps.Host() {
             public String flownPhone() {
                 return flown;
@@ -40,6 +46,10 @@ public final class FleetOpsAccess {
             public boolean confirm(String question) {
                 return true;
             }
+
+            public de.droiddrone.pc.route.TerrainSource terrain() {
+                return terrain;
+            }
         });
     }
 
@@ -55,6 +65,11 @@ public final class FleetOpsAccess {
 
     public void callReserve() throws Exception {
         javax.swing.SwingUtilities.invokeAndWait(ops::callReserve);
+    }
+
+    /** DISPATCH the marked drones to a place (the map's right-click). */
+    public void dispatch(double lat, double lon) throws Exception {
+        javax.swing.SwingUtilities.invokeAndWait(() -> ops.dispatch(lat, lon));
     }
 
     public void tick() throws Exception {
