@@ -4,31 +4,41 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-22: the test week under way on `beta`; latest release 1.0.71 + phone pc.55, not flown)
+## Where things stand (2026-11-23: the test week under way on `beta`; latest release 1.0.71 + phone pc.55, not flown)
 
-- **Now: the test week** (from 2026-11-21 evening, a week on `beta`): readers of the code, the test bench, and a
-  rig for real hardware. Its first night is on `beta` (pushed) as **1.0.72 (unreleased, on beta)** in
-  [CHANGELOG](CHANGELOG.md): fixes F-059 - F-075 ([BENCH-FINDINGS.md](BENCH-FINDINGS.md)), the maintainer's
-  answers Q-001 - Q-004 built, improvements I-002 - I-009, the hardware rig. `build.gradle` still says 1.0.71.
-  **Nothing of the week is released, and `main` is untouched** (1.0.71).
-- **Approved by the maintainer:** F-060, F-061, F-062, F-063, F-064, F-071 and I-002. **The rest waits for the
-  maintainer's verdict:** F-066 - F-070d, F-072 - F-075, Q-001 - Q-004 as built, I-003 - I-009 (F-059 is a test's
-  fix). The verdicts are kept on the week's own page, not in the repo. To `main` only when every item has its
-  answer and the maintainer says so.
-- **Phone app 2.3.0-pc.56-beta** (versionCode 2030056; F-066 - F-070d and Q-004): sideloaded only, never published.
-  `ApkShare` stays pinned to the released **pc.55**: the PC offers pc.55, and UPDATE PHONE APP installs pc.55.
-- **Nothing of the week has been tried on hardware.** Drone setup's fixes ran against made-up boards, the phone
-  app's in the PC's tests and the made-up phone; the bench build of pc.56-beta has passed one scenario on the real
-  phone. Tries planned on the bench's drone, props off: F-066's sequence (armed, the link cut, the failsafe's disarm,
-  ARM left on, the phone app ended and opened again, the link back: it must not arm), F-068 (STANDBY with the USB
-  permission taken back), F-069 (the beeper's read-back, with the keeper dropping its beeper requests), F-070b
-  (Android's prompt after the take-back), the motor test and Drone setup's tools with two boards. Q-001 needs a drone
-  with a compass. The window suite has not run on the week's changes yet.
-- **The hardware rig** ([TESTING.md](TESTING.md), "Real hardware"): the board tools have read the real board (reads
-  only; `diff all` changed between two starts there, so the restore works on `dump all`). The phone rig ran twice on
-  the real phone: the first stopped at its PIN lock, the rig now runs behind it, the second passed. The keeper has
-  met only a made-up board. No armed run yet: it waits for Betaflight as a program (SITL, needs Windows' Linux part)
-  and a board capped with `boardCap`.
+- **Now: the test week** (from 2026-11-21 evening, a week on `beta`): readers of the code, the test bench,
+  Betaflight as a program, and a rig for real hardware. On `beta` as **1.0.72 (unreleased, on beta)** in
+  [CHANGELOG](CHANGELOG.md): fixes F-059 - F-083 ([BENCH-FINDINGS.md](BENCH-FINDINGS.md)), the maintainer's answers
+  Q-001 - Q-004, Q-006 and Q-009 built, improvements I-002 - I-011, the hardware rig. `build.gradle` still says
+  1.0.71. **Nothing of the week is released, and `main` is untouched** (1.0.71).
+- **Approved by the maintainer:** F-059 - F-064, F-066 - F-079, F-082, F-083 (F-065 is notes; F-081 was measured,
+  nothing to change) and I-002 - I-012 (I-012's phone part became Q-009, the PC-only way). **F-080: "find a proper
+  fix"** - its cause is being looked for; the red ESC row built meanwhile stays. **Still waiting for the
+  maintainer's look:** Q-001 - Q-004, Q-006 and Q-009 as built. The verdicts are kept on the week's own page, not in
+  the repo. To `main` only when every item has its answer and the maintainer says so.
+- **Phone app 2.3.0-pc.59-beta** (versionCode 2030059; pc.56-beta: F-066 - F-070d and Q-004; pc.57-beta: F-076;
+  pc.58-beta: Tailscale only, Q-006; pc.59-beta: F-083): sideloaded only, never published. `ApkShare` stays pinned
+  to the released **pc.55**: the PC offers pc.55, and UPDATE PHONE APP installs pc.55. pc.55 on the drones' phones
+  comes back after a crash in flight only behind a screen lock (F-083); the maintainer says each has one.
+- **What has met hardware** ([BENCH-RUNS.md](BENCH-RUNS.md)): the real phone (Android 15, the bench build) - every
+  phone scenario, the crash scenario on pc.59-beta with no screen lock and with a PIN, 8 hours over mobile data
+  (63 rounds, all whole but one while the phone was in the maintainer's hands). The real flight controller -
+  F-080 found there (battery in, props off), the stick rate measured (F-081: 12 ms, no queue), and with the battery
+  out the keeper's first run (no arm window) and `boardCap` (motor_output_limit 15 in all four PID profiles, saved).
+  The emulator on pc.58-beta: Android 8, 11, 13, 14 and 15, each 7 of 7. The window suite ran on the first night's
+  fixes (28 of 28), not yet on the afternoon's (F-077 - F-080, F-082, Q-009). **Not flown.**
+- **Still to try on hardware:** the keeper's first arm window (battery in, cap 15 %); F-080's tries (each costs a
+  battery unplug); F-077 - F-079 against an armed Betaflight as a program; F-066's sequence (armed, the link cut, the
+  failsafe's disarm, ARM left on, the phone app ended and opened again, the link back: it must not arm), F-068
+  (STANDBY with the USB permission taken back), F-069 (the beeper's read-back, with the keeper dropping its beeper
+  requests), F-070b (Android's prompt after the take-back), the motor test and Drone setup's tools with two boards.
+  Q-001 needs a drone with a compass.
+- **The hardware rig** ([TESTING.md](TESTING.md), "Real hardware"): the board tools read the real board (`diff all`
+  changed between two starts there, so the restore works on `dump all`); snapshot and restore are proven on
+  Betaflight as a program. The phone rig runs behind a PIN lock. The keeper has run on the real board with arming
+  locked; nothing has been armed there yet. **Betaflight as a program** (SITL in WSL, `.\bench.ps1 sitl`, 4.4.1
+  3 of 3; TESTING.md, "Betaflight as a program"): the keeper's lock and windows, the drone's own failsafe timed; on
+  4.5 and later SITL has no MSP arming block, so the keeper's windows are tried on 4.4 only.
 - **The latest release:** DRAUPNE Link **1.0.71** with phone app **2.3.0-pc.55** (released 2026-11-21, on the
   maintainer's word "complete a release and merge to main"). Tested on the test bench only - the real Windows app
   with made-up drones, the real phone app in an Android emulator, nights of flying, sleeping and bad links: **not
@@ -208,6 +218,10 @@ Lessons from releasing:
   `docs/hardware.example.properties`). Props off always; nothing arms without `board.mayArm=true`. All in
   [TESTING.md](TESTING.md), "Real hardware"; none of it reaches a release (`flight-app/scan-apk.ps1`,
   `ReleaseHasNoBenchCodeTest`).
+- **Betaflight as a program (2026-11-22, test-only):** Betaflight's own source built for the PC and run in WSL
+  (`tools\sitl`, `.\bench.ps1 sitl`): the board tools, the keeper and the drone's failsafe against the real flight
+  code. The phone app runs in the emulator on Android 8 to 15 (`.\bench.ps1 emulator -Avd ...`). Both in
+  [TESTING.md](TESTING.md).
 - **Beside a long bench run everything else runs at low priority** (`start /low`): a night's long flight failed on
   two window freezes while fast tests ran beside it at normal priority, and a fast test run on a loaded PC has reds
   of its own (`OsdRecorderTest`; BENCH-FINDINGS, "The bench's own notes").
@@ -329,6 +343,25 @@ it, copied by `packageApp`). Code in `de.droiddrone.pc.fleet`, its window `gui.F
   are not compiled in. The rig's own `BenchFc` is in `flight-app/bench-overlay`; `scan-apk.ps1` stops any APK with it.
 - **LOST DRONE's question** (`MainWindow.LostDroneAsk`, Q-002, pure) and **CONFIRM's "Also sets" line**
   (`SetupPlanner.alsoSets`, Q-003: made from the plan's own commands, so it is always true).
+- **Drone setup and an armed board** (F-077 - F-079): every CLI write enters through `BetaflightUsb.enterCli`, which
+  reads the board's status first (armed: nothing sent, `BetaflightUsb.ARMED`'s words) and blocks arming before the
+  `#`; `exit` and `save` restart Betaflight, which lifts the block, and a CLI that never opened lifts it at close -
+  only a block it set itself. The motor test's props in / out, motor order and spin direction read the status right
+  before the write and put back a write whose save failed (`MotorTest`); CALIBRATE asks first too. A new write to the
+  board goes through these.
+- **ESCs that did not answer** (`setup/EscCheck`, F-080): a read with the battery in (or not known out) that misses
+  an ESC holds that board - by its id, in the settings (`drone.escsSilent`) - until a read in which all answer;
+  Drone setup's readiness and Beacon off ask it.
+- **The phone answers over Tailscale only** (`common/TailscaleOnly`, `common/LinkSocket`, `PhoneTailscale`, Q-006):
+  the link and overwatch sockets are bound to the phone's own Tailscale address, looked at twice a second and opened
+  anew (as for a jammed socket) when it comes, changes or goes; no Tailscale, parked on loopback. `BenchNet` is the
+  door the bench's builds use in the emulator: `BUILT_IN` is `false` in the release sources.
+- **The phone that does not answer** (`gui/PhoneSilence`, Q-009): one `tailscale ping` after 2 s without any answer,
+  again every 4 s until one is answered, on the phone check's thread; any answer at all (`ControlLink.wasEverHeard`)
+  keeps the PC's own words. The line under CONNECTING is chosen in `OsdDataBuilder.linkHint`.
+- **The phone's way to the front** (`WakeNotice`, `common/ScreenWake`, F-083): the full-screen notice goes out with
+  the screen as it is; the bright wake lock only if the main screen is not up 2 s later, then the notice once more
+  over a lock screen. `ScreenWakeTest` also reads the sources: no wake lock beside the notice.
 
 ## Betaflight facts this code relies on
 

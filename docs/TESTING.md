@@ -92,6 +92,16 @@ nothing the app does behind a locked screen - opening itself over it when the PC
 it - was ever run. `PhoneRig.launch` wakes and unlocks first. The permission stays on the emulator (Android lets
 only a test build give it back).
 
+**Other Androids** (2026-11-22): `.\bench.ps1 emulator -Avd draupne-a26` (Android 8), `draupne-a30` (11), `draupne-a33`
+(13), `draupne-a35` (15), each on emulator-5584; a run without `-Avd` gets `draupne-bench` (14) back. The rig knows
+each image's ways: storage granted (Android 8 and 9 ask), ALLOW in capitals, the forwarded port led through the older
+images' own router (root first), sockets read from /proc where `ss` lists none; on Android 15 the network card the
+forward ends at given its address (as root, once until the emulator restarts); on Android 11, where uiautomator
+cannot read the app's screen, the app's state taken from its process, Android's services and the bench build's STATS,
+said in the film. Before Android 12 the update test expects Android's own "update this app?" tap; on Android 11
+switching "Install unknown apps" on ends the app, so the test opens it again and waits for the link. On phone app
+pc.58-beta all five passed 7 of 7 (2026-11-22).
+
 What ended the phone app is in Android's own log, not in the app's: `adb -s emulator-5584 logcat -d -b all` while
 the emulator is still up (the night's is kept beside its film). "The phone app's service is running" now asks for a
 living process - Android also "knows" a service that crashed and waits to be restarted.
@@ -119,7 +129,8 @@ fetched, so the sticks and the picture have the link to themselves.
 
 `.\bench.ps1 hw` and `.\bench.ps1 phone` (`gradlew benchHw`, `benchHwPhone`; tags `hw`, `hwphone`) are the runs that
 reach real things: one phone on one drone, battery in, **propellers off**. Built 2026-11-21. `phone` has run on the
-real phone since 2026-11-22 ([BENCH-RUNS.md](BENCH-RUNS.md)); `hw` and the keeper have not met the real board yet.
+real phone since 2026-11-22, `hw` with the keeper on the real board since 2026-11-23 - battery out, no arm window
+yet ([BENCH-RUNS.md](BENCH-RUNS.md)).
 
 - **The hardware file.** `%LOCALAPPDATA%\DraupneBench\hardware.properties`, this PC's own, outside the repo and never
   committed: the phone's address and link port, its adb serial, the board's port, the pack's cells and the volts per
@@ -181,8 +192,9 @@ the replay's lines, not the diff. ESC settings are compared, never written.
 ### The keeper (`gradlew fcKeeper`)
 
 Built 2026-11-22 against a made-up board (`gradlew test --tests *FcKeeper* --tests *MspTap* --tests *HwGuard*
---tests *BoardCap*`, `benchSelf --tests *FcKeeperProcess*`); **not yet run on a real board.** The flight controller is on this PC's USB,
-not on the phone's: the phone app's bench build reaches it over TCP down the USB cable (`adb reverse`), and the
+--tests *BoardCap*`, `benchSelf --tests *FcKeeperProcess*`); **first run on the real board 2026-11-23 08:01**,
+battery out and no arm window (its figures at the end of this part). The flight controller is on this PC's USB, not
+on the phone's: the phone app's bench build reaches it over TCP down the USB cable (`adb reverse`), and the
 program at this PC's end of that is the keeper (`bench/hw/FcKeeper`). It is a process of its own, the only one that
 has the board's port while it runs, and the place where the rig's safety is kept - so it holds when the test's JVM
 dies. `bench.ps1 hw` starts it before the suite (when the hardware file has `keeper.port`) and ends it after.
@@ -287,6 +299,14 @@ that board is restarted: name the port when another one is plugged in (`bench.ps
 - **On the phone:** `adb shell setprop debug.draupne.fc tcp:<keeper.port + 1>` is set by the scenario (the one
   property the bench sets; `PhoneGuard`) and left there - gone with the phone's next restart, `... usb` puts USB
   back. The reverse port is the keeper's and is not removed.
+- **The first run on the real board** (2026-11-23 08:01, `.\bench.ps1 hw -Tests *BoardChain*`, battery out,
+  `board.mayArm` not set): `BoardChainScenario` 1 of 1. The keeper read the board's failsafe - GPS-RESCUE after
+  failsafe_delay 200, rxfail holding the throttle and the ARM switch, MSP_FAILSAFE_CONFIG agreeing - and
+  motor_output_limit 100 in all four PID profiles. The lock showed in the board's status (flag 16, blocker MSP);
+  "cannot arm: NOPREARM+RPMFILTER" (battery out). 20 s of sticks at rest: 188.6 frames a second at the board, the
+  largest gap 52.5 ms, the 99th percentile 18.7 ms, the keeper's own share 0.76 ms at most. Ended locked, disarmed, at
+  rest. Then `gradlew boardCap -Plimit=15`: 15 in all four profiles, saved, read back. The first arm window waits for
+  a session with the battery in.
 
 ### The phone run (`.\bench.ps1 phone`)
 
@@ -294,7 +314,9 @@ The emulator's phone scenarios against the one real phone - USB debugging on, no
 the same `PhoneRig`, which is told which phone by a `PhoneRig.Target`: the emulator's in every run but a hardware
 run, this bench's phone in `benchHwPhone`. Built 2026-11-21 against a recorder that stands where adb is (`gradlew test
 --tests *PhoneRig*`). First run on the real phone 2026-11-22: it stopped at the phone's PIN lock, and the rig was made
-to run behind it (below); the second run passed. The emulator runs (`emulator`, the night) send what they always sent.
+to run behind it (below); the second run passed. Since then: every phone scenario, the crash scenario with no
+screen lock and with a PIN, and 8 hours over mobile data ([BENCH-RUNS.md](BENCH-RUNS.md)). The emulator runs
+(`emulator`, the night) send what they always sent.
 
 ```
 .\bench.ps1 phone                                    every phone scenario once, then gradlew phoneReset
@@ -327,12 +349,14 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
 - **The phone's lock screen** (since the first run on the phone, 2026-11-22: it has a PIN, as the phones on the
   drones have, and the app flies, sleeps and wakes behind it). The rig never enters a PIN and never changes the lock;
   nothing it may send could (no text, no key but WAKEUP, BACK and HOME, a finger only on the app's own controls). At
-  each launch the film says which state the phone is in: unlocked; a lock screen with nothing to enter, which adb
-  swipes away; or a secure one - and then the run goes on behind it. What a scenario would read off the screen is
-  taken the other way there is, and the film says so: the app's own log (`PhoneWords` has every line the bench relies
-  on, and `PhoneRigWordsTest` holds them to the app's sources), Android's word that the service lives, the bench
-  build's STATS (`pc=connected`). What only the screen could show is skipped by name and listed at the scenario's end
-  (ON THE REAL PHONE n CHECK(S) WERE SKIPPED) - never counted as passed. When the app puts itself in front of the lock
+  the start the film says the phone's kind of screen lock, also when it is found unlocked - a phone with nothing to
+  enter does not act as a drone's phone (F-083). At each launch the film says which state the phone is in: unlocked;
+  a lock screen with nothing to enter, which adb swipes away; or a secure one - and then the run goes on behind it.
+  What a scenario would read off the screen is taken the other way there is, and the film says so: the app's own
+  log (`PhoneWords` has every line the bench relies on, and `PhoneRigWordsTest` holds them to the app's sources),
+  Android's word that the service lives, the bench build's STATS (`pc=connected`). What only the screen could show
+  is skipped by name and listed at the scenario's end (ON THE REAL PHONE n CHECK(S) WERE SKIPPED) - never counted as
+  passed. When the app puts itself in front of the lock
   screen (woken by a PC, opened again after an error) its screen is read as ever, and what adb sees of that is filed
   under TO LOOK AT. A phone found unlocked is kept awake on its cable for the run (`svc power stayon usb`; its own
   setting is noted on the phone and put back exactly at the end, or by `gradlew phoneReset`) - until the app locks the
@@ -407,7 +431,8 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   (`bench/sitl/Sitl.likeTheDrone`) it also wants its accelerometer calibrated once (the scenarios do it). The sticks
   come over MSP (MSP_SET_RAW_RC on UART1, as the phone app sends them): **Betaflight takes one MSP request per run of
   its serial task, 100 a second** (serial_update_rate_hz) - at 100 stick frames a second nothing else was answered,
-  so the scenarios send 25.
+  so the scenarios send 25. That is SITL's TCP stand-in for USB alone: the real board answered 250 stick frames a
+  second with the phone's requests between them in 12 ms (median), none lost (`mspRateProbe`, F-081).
 - **What was seen of the drone's failsafe** (4.4.1, `SitlFailsafeScenario`; GPS-RESCUE after failsafe_delay 200,
   rxfail 3 h and 4 h, no GPS fix, arming without a fix allowed): the sticks stop at throttle 1080; RXLOSS 0.15 - 0.17 s
   later; armed and every motor held where it was (1098 - 1100) for 20 s; at 20.05 - 20.08 s GPS rescue, which with no
@@ -460,7 +485,10 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   no motor turns; `-Pesc=row` is the same visit made by the code behind Drone setup's button, with the line the row then
   shows; `-Pesc=silence` also switches the beacons off in the same visit; `-Pesc=beeper` is silent (the phone app's
   beeper silence written to the board's memory, read back, put back; nothing saved); `-Pesc=spin` turns each motor
-  for 0.8 s and is only for when the pilot asks for it.
+  for 0.8 s and is only for when the pilot asks for it. For F-080's tries: `-Pesc=spinonly` turns each motor with no
+  visit to the ESCs before it; `-Pesc=recover` is spin with 4 s of silence on the ESC lines first; `-Porder=4,3,2,1`
+  (which ESCs, in that order), `-PfirstWaitMs=3000` (nothing sent to an ESC until then), `-Ptries`, `-PpauseMs`,
+  `-Ppasses`. Every connect prints its time since the passthrough began. Drone setup's own read is unchanged.
 - How fast a real Betaflight board takes MSP from its USB, the PC sending what the phone sends: `gradlew mspRateProbe
   [-Pport=COM9] [-Prates=250,100,50] [-Pseconds=10] [-Prequests=42] [-Pmix=phone|attitude]` - stick frames at each
   rate (0: none, a baseline) with the phone's requests between them, every answer timed (sent, answered, lost, delay

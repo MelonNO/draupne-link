@@ -12,8 +12,11 @@ fleet) and the phone app 2.3.0-pc.54-beta in the Android emulator. From F-059 on
 
 ## Open
 
-None in the code. The test week's findings so far (F-059 - F-075) are fixed on `beta` (below; F-065 is notes, left
-as they are), none of them tried on hardware yet.
+**F-080** (Read ESCs can leave motor 1 dead on the real drone): its red warning is built, the pilot asked for a
+proper fix, and its cause is being looked for. The test week's other findings (F-059 - F-083) are fixed on `beta`
+(below; F-065 is notes, left as they are; F-081 was measured and is no problem). Tried on hardware: F-080 and F-081
+on the real drone, F-083 on the real phone; the rest on made-up boards and drones, Betaflight as a program and the
+emulator.
 
 ## To judge (meant that way, as far as the code says)
 
@@ -138,15 +141,19 @@ before the release; DISCONNECT on a one-way link kept by the pilot's answer (the
 - Without Tailscale, a PC whose own address changes during a session can end up a spectator of its own old
   session, for good until a reconnect by hand.
 
-## Found and fixed in the test week (2026-11-21 / 22, on `beta`)
+## Found and fixed in the test week (2026-11-21 - 23, on `beta`)
 
-The test week's first night. Found by a reader of the PC's code (Drone setup, the motor test, the armed guards), a
-reader of the phone app's code (its stick, flight controller and update paths), a reader of the bench's pictures of
-the 1.0.71 runs, and test runs. Each is fixed on `beta` (CHANGELOG, 1.0.72) with a test that failed before the fix.
-**None of it has been tried on hardware:** Drone setup's fixes ran against made-up boards, the phone app's in its
-shared Common code on the PC and in the made-up phone. Still to run: the window suite (`.\bench.ps1 ui`) on these
-changes - the scenarios that met new words or a new question were changed with them (MapTools, Fly, Guides,
-Flights, Kill), the night ran the released 1.0.71.
+F-059 - F-075: the test week's first night. Found by a reader of the PC's code (Drone setup, the motor test, the
+armed guards), a reader of the phone app's code (its stick, flight controller and update paths), a reader of the
+bench's pictures of the 1.0.71 runs, and test runs. Each is fixed on `beta` (CHANGELOG, 1.0.72) with a test that
+failed before the fix. **None of these has been tried on hardware:** Drone setup's fixes ran against made-up
+boards, the phone app's in its shared Common code on the PC and in the made-up phone. The window suite ran on them
+on 2026-11-22 morning: 28 of 28 ([BENCH-RUNS.md](BENCH-RUNS.md)).
+
+F-076 - F-083: the second day (2026-11-22). Found by the phone app's first runs on Android 8 to 15, a reader of
+Drone setup's writes held against Betaflight 4.4.1's source, the bench's real drone (battery in, props off) and the
+real phone. **The pilot approved F-059 - F-064, F-066 - F-079, F-082 and F-083** (on the week's page, 2026-11-22 and
+23); F-080's answer is in its paragraph; F-065 and F-081 needed none.
 
 **F-059 - `SessionIdEndToEndTest.aReconnectIsOneSessionOnBothSides` was red now and then: the test, not the app.**
 Red once on GitHub's runner (three sessions on the phone where it asks for two) and in 11 of 40 runs here, found by
@@ -399,6 +406,112 @@ running) `CrashGuard` ends the process itself at once, after writing Android's o
 "FATAL EXCEPTION: <thread>", the trace) - what Android's handler does after the question; the alarm then finds no
 process and opens a new one. An app that is only open, nothing running, gets Android's handling as before. Test: the
 crash scenario on Android 8 (red before) and on the bench's Android 14 (green before and after).
+
+**F-077 - The motor test's PROPS IN / OUT switch worked on an armed drone and reversed yaw at once.** The motor test
+looked for an armed drone only when it opened. A drone armed after that (by a radio on its receiver), PROPS pressed
+and answered yes: Betaflight takes the new side at once - its yaw control reads it on every loop - and refuses the
+save while armed, so it does not restart either, and the wrong side stays until the flight controller loses power.
+The pilot would have read "The flight controller refused MSP command 250", the switch on the new side, and "ARMED -
+motor test stopped. Disarm." Motor order and spin direction had the same missing check, harmless in flight (the
+order is used only at start, a direction is ignored while armed). Found by a reader of the PC's code against
+Betaflight 4.4.1's source (mixer.c, msp.c); not tried. **Mended:** props in / out, motor order and spin direction
+read the board's status right before they write, and an armed board gets nothing ("The drone is armed. Disarm it
+first."). While the board says armed the PROPS switch, REORDER and the direction lists are grey, and the switch
+turns only once Betaflight has saved. A write whose save fails is put back and said so ("Not saved. Props in / out
+put back as it was.", the same for the motor order). Tests: `MotorTestArmedTest`, `MotorTestArmedWindowTest` - 7
+new, red before. Next: Betaflight as a program, armed - PROPS OUT refused, yaw unchanged. **The pilot: approved.**
+
+**F-078 - Drone setup's CLI writes never checked for an armed drone: Betaflight blocked them, with the wrong words
+and one short gap.** CONFIRM, FIND GPS, the orientation check's SAVE and Apply and the compass calibration write
+through Betaflight's CLI, and none read "armed?" first. Betaflight 4.4.1 ignores the CLI's `#` while armed, so
+nothing was written - but the page said "No answer from the flight controller - is it running Betaflight?" and later
+"Replug the drone's USB", which sends the pilot after the wrong thing. And Betaflight opens its CLI 0.1 s after the
+`#` without looking again: a drone armed in that 0.1 s would have been restarted at the session's end. Found by the
+same reader; not tried. **Mended:** every CLI write enters through one place (`BetaflightUsb.enterCli`) that reads
+the board's status first: armed, nothing is sent and the page says "The drone is armed. Disarm it first.", with no
+Replug hint; not armed, arming is blocked (MSP_SET_ARMING_DISABLED) before the `#`. `exit` and `save` restart
+Betaflight, which takes the block off; a CLI that never opened has it taken off at close - a block someone else set
+(Configurator, the rig) is left alone. CONFIRM switches the receiver only after the check; the orientation check
+keeps its question and the board open when refused. Tests: `BetaflightUsbCliArmedTest`, `DroneSetupArmedTest`, with
+`OrientationCheckCompassTest` and `BetaflightTest` - 11 new, red before. Next: Betaflight as a program - armed,
+refused with these words; disarmed, the block shows while the CLI is open and is gone after the restart. **The
+pilot: approved.**
+
+**F-079 - CALIBRATE could say "done" when Betaflight had done nothing (armed drone).** Betaflight answers OK to the
+level calibration while armed and calibrates nothing (msp.c), so the row said "Calibrated: reads flat." for a level
+never taken; a spin direction is the same (DShot commands dropped while armed). Found by the same reader; not tried.
+**Mended:** CALIBRATE reads the board's status first and asks nothing of an armed board: "The drone is armed. Disarm
+it first." A spin direction on an armed board is refused since F-077. Left for later: the compass calibration's
+START is ignored by an armed Betaflight too - with F-078 it can no longer end in a false "calibrated", but the pilot
+turns the drone for 30 s before being told. Test: `DroneSetupLevelTest` - one new, red before. Next: Betaflight as a
+program, armed. **The pilot: approved.**
+
+**F-080 - Read ESCs could leave motor 1 dead while its ESC looked healthy - a flip at take-off (the real drone).**
+Seen on the bench's drone (Betaflight 4.4.1, four AM32 2.17 ESCs, props off, battery in), 2026-11-22 15:22 - 15:24:
+fresh after a battery unplug motor 1 turned at 1,471 rpm; after a restart of the flight controller alone, 1,485 rpm;
+after an ESC settings read (what Drone setup's ESC row runs) that did not reach ESC 1, 0 rpm - with ESC 1's
+telemetry complete, so the drone would have armed and flipped. Another restart does not bring it back (ESC 1 then
+falls silent, and a droning starts); only a battery unplug does. Seen 7 times that day and once on 19 Nov; only ESC
+1, never 2 - 4. The row then said "[WARN] 1: no answer (battery on?)" - with the battery on. In the field CONFIRM
+restarts the flight controller, and Read ESCs after it with the battery in is exactly this. **Built meanwhile, a
+warning and not the cure:** an ESC that does not answer with the battery in makes the ESC row red with "ESC 1 did
+not answer - it may not turn now. Unplug the battery, plug it in, Read ESCs again." (several: "ESC 1, 3 did not
+answer - they may not turn now."), and Drone setup is not done for that board until a read in which all answer: the
+step's status line says the same in red, and the USB row never says Done. The hold is kept by board id
+(`drone.escsSilent`), so closing Drone setup does not end it and another drone is not held by it. "battery on?" is
+said only when Betaflight reads no battery after the read; Beacon off is not offered while an ESC did not answer and
+writes only those that answered; the app's log gets the same line. Tests: `EscLinkTest`, `DroneSetupUsbToolsTest` -
+7 new, 6 red before; on the drone: a restart, Read ESCs missing ESC 1 - red with the words; the battery unplugged,
+Read ESCs - all four, done. **The pilot: "change - find a proper fix"** (2026-11-22). The cause is being looked
+for, so that the read no longer leaves ESC 1 that way at all: Betaflight's ESC passthrough and AM32's own code read
+side by side, then short tries on the drone that tell the causes apart (`gradlew escProbe` with `-Porder`,
+`-PfirstWaitMs`, `-Ptries`, `-PpauseMs`, `-Ppasses`, `-Pesc=recover`, `-Pesc=spinonly`; each failed try costs a
+battery unplug). The first lead, from the sources and not proven: the read asks ESC 1 at once, six times 250 ms
+apart, while an AM32 that has just lost its signal may still be deciding whether to restart into its bootloader.
+The red row stays as a second line of defence. **Until it is fixed: no Read ESCs after CONFIRM or another restart
+with the battery in - or unplug and replug the battery after it, before flying.**
+
+**F-081 - Stick frames queuing at the flight controller: measured, no problem.** On Betaflight as a program, sticks
+at 100 a second left no room for anything else. Read in the code: Betaflight takes one MSP request per run of its
+serial task, 100 runs a second, and the phone passes on every stick frame the PC sends (about 250 a second) and
+about 42 requests of its own. Had that held on an F4 board, about 2 KB would have queued there, and sticks, ARM and
+disarm would have come 0.5 - 0.8 s late while the sticks flow - unseen by the PC's STICKS LATE, which is measured at
+the phone. **Measured on the bench's drone** (2026-11-22 16:25, `gradlew mspRateProbe`, arming blocked, idle sticks;
+the phone's mix of sticks and requests over USB, 10 s at each rate): at 250 stick frames a second 2,500 of 2,500
+answered, median 12 ms (90 % 16 ms, max 28 ms), the requests 9 ms, none lost; 10 ms at 100 a second, 8 ms at 50; no
+queue left after the last frame. The one-request-a-run limit is SITL's own stand-in for USB (TCP), not the real
+board. Nothing changed. The bench's lesson: measure before believing a code read.
+
+**F-082 - UPDATE PHONE APP on Android 11: switching on "Install unknown apps" ended the phone app, and the PC then
+gave a wrong reason.** When the PC asks for "Install unknown apps" for DRAUPNE Flight and it is switched on with the
+link up, Android 11 ends the app (Android 12 and newer only when it is switched off; the drones' phones are Android
+15). The link is down until the app is opened again - about 100 s when nobody touches it - and an update asked
+meanwhile is lost. The PC then said "No answer to the update: phone app older than 2.3.0-pc.32." though it knew the
+phone ran pc.57-beta. Seen twice in the bench's update test on the Android 11 emulator (2026-11-22). **Mended
+(PC):** for a phone app known to take the update (pc.32 on) the log says "No answer from the phone (link lost) -
+press UPDATE PHONE APP again."; the old words stay for a version not known or older. Not built: a hint that Android
+11 ends the app at that switch (those words would be the phone app's own; the drones' Android 15 phones do not end
+it). The
+bench's update test now opens the app again after the switch and waits for the link. Test: `RemoteUpdateAnswerTest`
+- red before; the Android 11 emulator run after it: 7 of 7. **The pilot: approved.**
+
+**F-083 - On a phone with no screen lock the phone app did not come back by itself after an error (phone app).**
+The real phone (Android 15) had no screen lock that evening (a PIN that morning). After an error, and after being
+killed while asleep, the app's own way back fired on time - but Android showed only a small banner, and the app
+stayed closed until someone opened it. The app lit the screen together with its full-screen "open me" notice, and
+Android opens an app from such a notice only while the screen is off or a lock screen shows (SystemUI's rule on
+Android 14 and 15): on a phone with no lock the lit screen was an unlocked one. With the PIN it had opened each
+time. On a drone: a phone with no screen lock whose app crashed in flight would stay closed - no link to the PC until
+someone opened it. Found by the bench's crash scenario on the real phone (`runs\1122-2012-phone`). **Mended
+(pc.59-beta):** `WakeNotice` posts the notice with the screen as it is, and only if the main screen has not come up
+2 s later takes the same wake lock; over a lock screen it then posts the notice once more. The log says at each
+notice what the screen was and what Android will do with it, and at the start whether Android 14+ lets the app use
+full-screen notices. The count of reopens and the refusal after too many are unchanged. Test: `ScreenWakeTest` (the
+rule, in Common; it also reads the sources: no wake lock beside the notice). On the real phone the crash scenario
+**passed with no screen lock** (2026-11-22 21:19: open again 0.3 s after each notice) **and with a PIN** (2026-11-23
+07:59: back 5.5 s after an error, the PC's link 6.5 s; killed asleep, back in 54 s; the fourth error in ten minutes
+stays down). Until pc.59 is on the drones a screen lock does it; the pilot says every drone phone has one (Q-010).
+**The pilot: approved.**
 
 ## Fixed (2026-11-19, on `beta`)
 
@@ -1122,7 +1235,8 @@ jammed socket), "anything else".
   `BenchSelfTest.aButtonFoldedAwayIsNotSeen`).
 - 2026-11-21: switching "Install unknown apps" off for an app makes Android end that app. The update scenario did it
   while connected: the link was lost and the PC's question went nowhere. It now switches it off before the app opens.
-  For the pilot: switching it off on a drone's phone ends DRAUPNE Flight; switching it on does not.
+  For the pilot: switching it off on a drone's phone ends DRAUPNE Flight; switching it on does not (on Android 11 it
+  does: 2026-11-22, below).
 - 2026-11-21: **`diff all` is not stable across restarts on a real board.** Two reads of the bench's flight
   controller (Betaflight 4.4.1) 41 s apart, nothing written between: `dump all` and the MSP facts the same, `diff all`
   two lines apart (`min_throttle`, `use_unsynced_pwm`) - Betaflight took the ESCs for brushed ones at one start and
@@ -1141,3 +1255,20 @@ jammed socket), "anything else".
   runs at low priority and starves. `FleetModeEndToEndTest.aSleepingPhoneGetsTheNextModeAheadOfTheAnswerToItsHello`
   and `StanagFeedTest.theVideoWithItsOsdThenThePageAgainInOneStream` were red under the same load and green alone.
   A fast test run made beside heavy work is judged so: its reds run again alone.
+- 2026-11-22: **on Android 11 the phone's screen cannot be read while the app shows it.** uiautomator waits for a
+  second in which nothing on the screen changes (10 s at most, fixed on that image), and the app's lines change every
+  second: every read failed after about 36 s with "could not get idle state", and the rig took it for an empty
+  screen - three scenarios red, the phone's screen right in the film. The rig now says uiautomator's own words, and
+  on the emulator takes the app's state another way (its process and window, Android's living services, the bench
+  build's STATS), saying so in the film. A real phone does as before.
+- 2026-11-22: **the Android 15 emulator image never brings up the network card the emulator's port forward ends at**
+  (no SIM chosen for data), so every packet from the PC was lost: 0 of 7 the first time. The rig gives that card its
+  address as root, once, until the emulator restarts, and says so in the film; then 7 of 7.
+- 2026-11-22: **switching "Install unknown apps" on ends the app on Android 11** (Android 12 on: only off; Android 8:
+  never). The update test now notes whether Android ended the app, opens it again and waits for the link before
+  UPDATE PHONE APP. What the PC said meanwhile was F-082.
+- 2026-11-22: **`bench.ps1` did not come back after a run whose suite had ended**, twice (a sitl run, the Android 11
+  emulator run): `Start-Process -Wait` also waits for every process gradlew started, and a Gradle daemon started by
+  the run lives on for hours. It now waits for gradlew itself.
+- 2026-11-22 / 23: the real phone's 8-hour night counted one round of 63 failed (round 7, 00:41): the minutes the
+  phone was in the pilot's hands while its PIN was set. Not a fault.
