@@ -221,6 +221,12 @@ public class MainWindow extends JFrame {
         }
 
         @Override
+        public int gpsFix(String phone) { // fleet AL-11
+            if (fleets != null) for (FleetCards.Card c : fleets.cards()) if (c.name().equalsIgnoreCase(phone)) return c.gpsFix();
+            return -1;
+        }
+
+        @Override
         public de.droiddrone.pc.map.Elevation elevation() {
             return elevation;
         }
