@@ -1311,6 +1311,11 @@ final class DroneSetup {
         }
 
         @Override
+        void closed() {
+            de.droiddrone.pc.setup.RestingSticks.stop(); // the port is let go: Betaflight's own beeping is back
+        }
+
+        @Override
         void refresh() {
             if (searchWanted && !busy && !searching && !paused) {
                 startSearch();
@@ -1609,6 +1614,9 @@ final class DroneSetup {
                 escRow.set(State.INFO, ESC_HINT);
             }
             lastBoardId = r.boardId();
+            // 1.0.72: while this window is open the board read is kept quiet - resting sticks over USB, so Betaflight
+            // doesn't take its receiver (the phone, not plugged in here) as lost and beep (RestingSticks)
+            de.droiddrone.pc.setup.RestingSticks.hold(lastFcPort, lastBoardId, main::logLine);
             // CONFIRM, and the green rows, belong to the board they were given for: another one plugged in needs its own
             if (r.boardId() != null && confirm.seen(r.boardId())) main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
             if (r.applied() || r.refused() != null) lastRefused = r.refused();

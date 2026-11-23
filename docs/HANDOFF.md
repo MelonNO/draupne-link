@@ -4,8 +4,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-21: 1.0.71 + phone pc.55 released from beta and merged to main; not flown yet)
+## Where things stand (2026-11-23: 1.0.72 released from main, PC only; 1.0.71 + phone pc.55 before it; not flown yet)
 
+- **1.0.72** (2026-11-23, PC only, phone app stays pc.55): Drone setup keeps a drone on USB quiet - resting sticks
+  over USB while it is open (`setup/RestingSticks`), so CONFIRM's lost-link beacon no longer sets the motors beeping
+  on the bench. Released from `main` with this fix alone on the maintainer's word; the same fix is on `beta`, whose
+  own unreleased work is now 1.0.73. Tried on made-up boards only: the pilot's try on the drone that beeped is next.
 - **Now:** DRAUPNE Link **1.0.71** with phone app **2.3.0-pc.55** (released 2026-11-21, on the maintainer's word
   "complete a release and merge to main"). Tested on the test bench only - the real Windows app with made-up drones,
   the real phone app in an Android emulator, nights of flying, sleeping and bad links: **not flown, not on a real

@@ -69,6 +69,13 @@ public final class BetaflightUsb implements AutoCloseable {
     private boolean inCli;
     /** The port is with the ESCs (the passthrough): closing it ends that first, so the board is not left there. */
     private EscLink escs;
+    /** One writer at a time: a request and the resting sticks never mix their bytes on the wire. */
+    private final Object writeLock = new Object();
+    /** Feeds the resting sticks ({@link RestingSticks}), null: none. */
+    private volatile Thread feeder;
+    /** Opened by Drone setup's rounds or tools: the resting sticks' holder is told when it closes. */
+    private boolean other;
+    private boolean closed;
 
     private BetaflightUsb(Wire wire) {
         this.wire = wire;
@@ -117,6 +124,23 @@ public final class BetaflightUsb implements AutoCloseable {
     }
 
     public static BetaflightUsb open(Port p) throws IOException {
+        RestingSticks.opening(); // the resting sticks' holder lets go of the port first
+        try {
+            BetaflightUsb fc = openPort(p);
+            fc.other = true;
+            return fc;
+        } catch (IOException | RuntimeException e) {
+            RestingSticks.closed();
+            throw e;
+        }
+    }
+
+    /** For {@link RestingSticks}' own connection: no word to itself. */
+    static BetaflightUsb openForRestingSticks(Port p) throws IOException {
+        return openPort(p);
+    }
+
+    private static BetaflightUsb openPort(Port p) throws IOException {
         Usb standIn = usb;
         if (standIn != null) return new BetaflightUsb(standIn.open(p));
         SerialPort port = SerialPort.getCommPort(p.systemName());
@@ -226,6 +250,7 @@ public final class BetaflightUsb implements AutoCloseable {
 
     /** Enters the CLI (Betaflight answers '#' with a banner and the "# " prompt). */
     public String enterCli() throws IOException {
+        stopFeeding(); // Betaflight takes no MSP in the CLI: the sticks' answers would be in the banner
         inCli = true; // from the first byte: a cut-off banner still leaves the board in the CLI
         write("#");
         return readUntilPrompt(3000);
@@ -378,7 +403,63 @@ public final class BetaflightUsb implements AutoCloseable {
     }
 
     private void write(byte[] data) throws IOException {
-        wire.write(data);
+        synchronized (writeLock) {
+            wire.write(data);
+        }
+    }
+
+    /**
+     * Feeds Betaflight these sticks (MSP_SET_RAW_RC's payload, {@link RestingSticks#payload}) every
+     * {@link RestingSticks#EVERY_MS} until the CLI opens, the ESCs take the port or this closes. Only written: the
+     * answers are skipped by the next request's read ({@link #answer}).
+     */
+    void feedRestingSticks(byte[] payload) {
+        if (inCli || escs != null || closed || feeder != null) return;
+        byte[] frame = mspFrame(de.droiddrone.common.FcCommon.MSP_SET_RAW_RC, payload);
+        Thread t = new Thread(() -> {
+            try {
+                while (feeder == Thread.currentThread() && !inCli && escs == null && !closed) {
+                    synchronized (writeLock) {
+                        if (feeder != Thread.currentThread()) break;
+                        wire.write(frame);
+                    }
+                    Thread.sleep(RestingSticks.EVERY_MS);
+                }
+            } catch (IOException | InterruptedException e) {
+                // the port is gone, or this closes
+            }
+        }, "fc-resting-sticks");
+        t.setDaemon(true);
+        feeder = t;
+        t.start();
+    }
+
+    /** The resting sticks go out on this connection. */
+    boolean feeding() {
+        Thread t = feeder;
+        return t != null && t.isAlive();
+    }
+
+    /** No more resting sticks, and what they had answered is read away (a frame on its way may still be answered). */
+    private void stopFeeding() {
+        Thread t = feeder;
+        if (t == null) return;
+        synchronized (writeLock) {
+            feeder = null; // no frame after this one: the thread checks under the lock
+        }
+        t.interrupt();
+        try {
+            t.join(500);
+            Thread.sleep(30); // Betaflight answers within a few ms
+            byte[] buf = new byte[256];
+            while (wire.isOpen() && wire.available() > 0 && wire.read(buf) > 0) {
+                // the answers to the sticks: nothing else was asked
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (IOException e) {
+            // gone: nothing to read away
+        }
     }
 
     /**
@@ -389,6 +470,7 @@ public final class BetaflightUsb implements AutoCloseable {
     public EscLink escs(java.util.function.Consumer<String> log) throws IOException {
         if (inCli) throw new IOException("The CLI is open");
         if (escs != null && !escs.closed()) throw new IOException("The ESC passthrough is open already");
+        stopFeeding(); // the 4-way interface takes every byte for the ESCs
         if (MotorTest.armed(msp(de.droiddrone.common.FcCommon.MSP_STATUS, null))) throw new IOException("The drone is armed. Disarm it first.");
         byte[] answer = msp(EscLink.MSP_SET_PASSTHROUGH, null);
         int count = answer.length > 0 ? answer[0] & 0xff : 0;
@@ -400,6 +482,26 @@ public final class BetaflightUsb implements AutoCloseable {
     /** Lets go of the port; with the CLI open, "exit" goes first so the board isn't left in CLI mode (it restarts). */
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
+        Thread t = feeder;
+        feeder = null;
+        if (t != null) {
+            t.interrupt();
+            try {
+                t.join(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        try {
+            closeWire();
+        } finally {
+            if (other) RestingSticks.closed();
+        }
+    }
+
+    private void closeWire() {
         if (escs != null && !escs.closed() && wire.isOpen()) escs.close();
         if (inCli && wire.isOpen()) {
             inCli = false;

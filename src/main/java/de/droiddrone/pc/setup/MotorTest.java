@@ -88,6 +88,8 @@ public final class MotorTest implements AutoCloseable {
             byte[] mixer = fc.msp(FcCommon.MSP_MIXER_CONFIG, null);
             int count = motorCount(fc.msp(MSP_MOTOR, null));
             if (armed(fc.msp(FcCommon.MSP_STATUS, null))) throw new IOException("The drone is armed. Disarm it first.");
+            // 1.0.72: the board Drone setup keeps quiet gets its resting sticks on this connection too
+            RestingSticks.verify(fc);
             boolean dshot = false;
             try {
                 dshot = isDshot(fc.msp(MSP_ADVANCED_CONFIG, null));

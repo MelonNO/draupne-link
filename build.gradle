@@ -8,7 +8,7 @@ plugins {
 if (project.hasProperty('altBuild')) layout.buildDirectory = file(project.property('altBuild'))
 
 group = 'de.droiddrone.pc'
-version = '1.0.71'
+version = '1.0.72'
 
 repositories {
     mavenCentral()

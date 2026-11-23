@@ -2,6 +2,23 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.72 (2026-11-23, PC only)
+
+Phone app stays 2.3.0-pc.55. Released from `main` with this fix alone; the work waiting on `beta` goes on there.
+
+- **A drone in Drone setup no longer beeps without end from CONFIRM on** (the pilot, 2026-11-23). Since 1.0.71
+  CONFIRM switches on Betaflight's motor beacon for a lost link (to find a drone that is down). A DRAUPNE drone's
+  receiver is its phone, and on the bench the phone is not plugged in: Betaflight took its receiver as lost and the
+  motors beeped from its next start. While Drone setup is open, DRAUPNE Link now sends the board resting sticks over
+  USB - centred, throttle and every AUX low, in the board's channel order - as the phone does on the drone, so the
+  receiver is never lost. Nothing is written to the board's settings, so nothing of it can be saved: a lost link in
+  the field beeps as before. Only to a board whose receiver is MSP, that reads disarmed (checked every second) and
+  whose own ARM range can't take the frame; between Drone setup's steps a connection of its own keeps the port and
+  lets go of it for every step (`setup/RestingSticks`), and the motor test feeds it on its own connection. Never in
+  the CLI or while the ESCs have the port, so a CONFIRM or a GPS search may still beep for the seconds it takes.
+  Closing Drone setup lets go of the port: Betaflight beeps again until the phone is plugged in. While Drone setup is
+  open, Betaflight Configurator can't open the board's port. Tests: RestingSticksTest (11).
+
 ## 1.0.71 + phone pc.55 (2026-11-21)
 
 The link round and the field round, with the phone app **DRAUPNE Flight 2.3.0-pc.55**, and 1.0.70 below (never released on its own). Tested on the test bench - the real Windows app with made-up drones, the real phone app in an Android emulator, nights of flying, sleeping and bad links - but **not yet flown on a drone, nor tried on a real phone**. Old phones and old PCs work with it as before (each side uses what's new only when the other side shows it knows it). The rest of what was built on beta went to main on 2026-11-15 as 1.0.69.
