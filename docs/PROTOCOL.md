@@ -203,4 +203,7 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   `[version 1][call id u16][mark id i32][state u8][reason u8][height dm i16][climb cm/s i16][flags u8][0][0][CRC-8]`,
   17 bytes. The PC repeats an order at 5 Hz: the same call (call and mark id) within 60 s is answered with the
   status and changes nothing (a copy after the launch ended was refused as a new call and IN GROUP reported as NOT
-  LAUNCHED).
+  LAUNCHED). Call and block ids start at a random point at every start of the PC (`RouteSender.randomId`), so a
+  repeat after a restart is not a copy. With the commander silent the phone keeps the FC's ground station heartbeat
+  from the call to the group and the climb goes on (AL-14); on its way to the group (ON THE WAY to IN TRANSIT) the
+  silence is a follower's link loss (AC-37): LOITER after 12 s (TRACK comes every 5 s), RTL after 2 min.

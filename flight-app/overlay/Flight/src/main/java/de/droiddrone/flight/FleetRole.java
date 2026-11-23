@@ -68,7 +68,9 @@ final class FleetRole {
 
     /** The commander was heard within 3 s, or a follower's own rules run: the FC hears a ground station. */
     boolean keepsGcsAlive(long now) {
-        return brain != null || now - commanderHeardAt <= 3000 && commander != null;
+        // a launch: from the call to the group, also with the commander silent (LaunchSequence.keepsGcsAlive, AL-14)
+        return brain != null || now - commanderHeardAt <= 3000 && commander != null
+                || de.droiddrone.common.launch.LaunchSequence.keepsGcsAlive(launch.state());
     }
 
     /**
@@ -180,6 +182,11 @@ final class FleetRole {
     /** Commanded now by its commander (see commandedBy). */
     boolean commanded(long now) {
         return commander != null && (now < reportUntil || brain != null || launch.underWay());
+    }
+
+    /** When the commander was last heard (elapsedRealtime). */
+    long commanderHeardAt() {
+        return commanderHeardAt;
     }
 
     InetSocketAddress commander() {

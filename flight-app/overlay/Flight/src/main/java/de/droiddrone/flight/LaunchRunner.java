@@ -166,6 +166,13 @@ final class LaunchRunner {
      * A launch is under way - from the call until the drone is in the group (or the launch has ended): the lead / solo
      * link-loss rule stands aside meanwhile (a reserve has no pilot session; an old session's silence must not brake it).
      */
+    /** The launch's state now (LaunchSequence's). */
+    int state() {
+        synchronized (seqLock) {
+            return seq.state();
+        }
+    }
+
     boolean underWay() {
         synchronized (seqLock) {
             int s = seq.state();

@@ -60,6 +60,23 @@ public final class ArduLinkLossRule {
     public static final int MODE_ALT_HOLD = 2, MODE_LOITER = 5, MODE_RTL = 6, MODE_LAND = 9, MODE_BRAKE = 17,
             MODE_SMART_RTL = 21, MODE_AUTO_RTL = 27;
 
+    /** Silent this long: home. HOME_AFTER_MS for a drone the pilot flies; a reserve on its way waits 2 min (AC-37). */
+    private final long brakeAfterMs, homeAfterMs;
+
+    public ArduLinkLossRule() {
+        this(BRAKE_AFTER_MS, HOME_AFTER_MS);
+    }
+
+    /**
+     * @param brakeAfterMs how long the PC is silent before the brake (1 s for a pilot's 20 pings a second; longer for
+     *                     a commander that is heard only every few seconds)
+     * @param homeAfterMs  how long before the return
+     */
+    public ArduLinkLossRule(long brakeAfterMs, long homeAfterMs) {
+        this.brakeAfterMs = brakeAfterMs;
+        this.homeAfterMs = homeAfterMs;
+    }
+
     private boolean running;
     /** ArduPilot took over by itself (a LAND or RTL of its own after the rule began): nothing more from the rule. */
     private boolean handedOver;
@@ -79,7 +96,7 @@ public final class ArduLinkLossRule {
      */
     public int tick(long nowMs, long pcHeardAtMs, boolean armed, int customMode, boolean gnssOk, boolean lead) {
         long silent = pcHeardAtMs == 0 ? -1 : nowMs - pcHeardAtMs;
-        if (silent < BRAKE_AFTER_MS || !armed) {
+        if (silent < brakeAfterMs || !armed) {
             running = false;
             handedOver = loiterRefused = smartRefused = false;
             last = NONE;
@@ -96,7 +113,7 @@ public final class ArduLinkLossRule {
         int want;
         if (!gnssOk) {
             want = HOLD_HEIGHT;
-        } else if (silent >= HOME_AFTER_MS) {
+        } else if (silent >= homeAfterMs) {
             want = lead ? RTL : SMART_RTL;
         } else {
             want = BRAKE;

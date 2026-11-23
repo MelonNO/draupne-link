@@ -97,6 +97,27 @@ public final class LaunchSequence {
         }
     }
 
+    /**
+     * Link loss on a launch (PRD AL-14, AC-37, AC-38). From the call to the top of the climb the phone is in charge
+     * with no 4G round trip (AL-14: the climb watchdog decides, the climb goes on to its approach layer): the
+     * commander's silence changes nothing, and the phone keeps the FC's ground station heartbeat going - before, it
+     * stopped 3 s into the silence and ArduPilot's GCS failsafe broke off the climb. On the way to the group (ON THE
+     * WAY to IN TRANSIT) the commander's silence is a follower's link loss (AC-37): LOITER after {@link #LOST_BRAKE_AFTER_MS}
+     * (a reserve on its way hears its commander's TRACK only every 5 s), home by RTL after {@link #LOST_HOME_AFTER_MS};
+     * heard again, it rejoins like a reserve (AC-38). IN GROUP: the follower's own rules.
+     */
+    public static final long LOST_BRAKE_AFTER_MS = 12_000, LOST_HOME_AFTER_MS = 120_000;
+
+    /** The phone keeps the FC's ground station heartbeat going in this state, the commander heard or not. */
+    public static boolean keepsGcsAlive(int s) {
+        return s >= CALLED && s <= IN_TRANSIT;
+    }
+
+    /** The commander's silence is link loss in this state (the climb ended, not yet in the group). */
+    public static boolean linkLossApplies(int s) {
+        return s == ON_THE_WAY || s == WAITING_FOR_TRANSIT || s == IN_TRANSIT;
+    }
+
     /** The motors may be running: armed, or told to arm. */
     public static boolean motorsMayRun(int s) {
         return s == ARMING || s == CLIMBING || s == ON_THE_WAY || s == WAITING_FOR_TRANSIT || s == IN_TRANSIT || s == IN_GROUP;
