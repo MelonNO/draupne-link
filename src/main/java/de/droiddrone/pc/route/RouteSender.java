@@ -33,8 +33,14 @@ public final class RouteSender {
      */
     public static Thread send(List<MissionItem> items, Predicate<byte[]> send, Supplier<FcTelemetry.RouteUpload> status,
                               Consumer<Integer> progress, Consumer<Result> done) {
+        return send(de.droiddrone.common.MissionUpload.TYPE_MISSION, items, send, status, progress, done);
+    }
+
+    /** Fleet AP-9 / AC-10: a fence (type 1) or rally points (type 2) the same way. */
+    public static Thread send(int missionType, List<MissionItem> items, Predicate<byte[]> send, Supplier<FcTelemetry.RouteUpload> status,
+                              Consumer<Integer> progress, Consumer<Result> done) {
         int block = NEXT.incrementAndGet() & 0xffff;
-        byte[] packet = MissionBlock.packet(block, items);
+        byte[] packet = MissionBlock.packet(block, missionType, items);
         Thread t = new Thread(() -> done.accept(run(block, packet, send, status, progress)), "routeSender");
         t.setDaemon(true);
         t.start();
@@ -53,7 +59,7 @@ public final class RouteSender {
                 if (ours) {
                     heard = true;
                     if (progress != null && s.percent() != lastPercent) progress.accept(lastPercent = s.percent());
-                    if (s.done()) return new Result(true, "Route on the drone, read back: " + itemsOf(packet) + " points.");
+                    if (s.done()) return new Result(true, (packet[3] == 1 ? "Fence" : packet[3] == 2 ? "Rally points" : "Route") + " on the drone, read back: " + itemsOf(packet) + " points.");
                     if (s.failed()) return new Result(false, "Route upload failed: " + (s.reason().isEmpty() ? "no reason given" : s.reason()));
                 }
                 if (!heard) {
@@ -69,6 +75,6 @@ public final class RouteSender {
     }
 
     private static int itemsOf(byte[] packet) {
-        return packet.length >= 5 ? ((packet[3] & 0xff) << 8 | (packet[4] & 0xff)) : 0;
+        return packet.length >= 6 ? ((packet[4] & 0xff) << 8 | (packet[5] & 0xff)) : 0; // after [0x33][block u16][type u8]
     }
 }

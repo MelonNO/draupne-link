@@ -118,6 +118,7 @@ final class FleetRole {
                 if (p != null && b != null) {
                     b.plan(p);
                     m.setRtlAltM(p.returnAltRelM); // its own way home's height, set now (AC-41) - the FC's RTL goes up there
+                    m.rallyPoint(p.rallyLat, p.rallyLon, p.returnAltRelM); // AC-10: its RTL to its own rally point (only when it changed)
                 }
                 break;
             }

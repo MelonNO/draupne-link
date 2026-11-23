@@ -118,8 +118,15 @@ public final class ArduPlan {
      * ones it lacks, apart. The arm channel's other functions on the same channel are not touched.
      */
     public static List<Change> plan(Choices c, Map<String, Float> now) {
+        return plan(c, Map.of(), now);
+    }
+
+    /** With more wanted values (fleet AS-11: frame and board turn carried from Betaflight), after the choices'. */
+    public static List<Change> plan(Choices c, Map<String, Wanted> extra, Map<String, Float> now) {
         List<Change> out = new ArrayList<>();
-        for (Map.Entry<String, Wanted> e : wanted(c).entrySet()) {
+        Map<String, Wanted> all = new LinkedHashMap<>(wanted(c));
+        all.putAll(extra);
+        for (Map.Entry<String, Wanted> e : all.entrySet()) {
             Float have = now.get(e.getKey());
             float to = e.getValue().value();
             if (have != null && same(have, to)) continue;

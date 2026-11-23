@@ -318,6 +318,16 @@ class MapView extends JComponent {
     /** Fleet G1: the FOLLOW GROUP items for a drone's right-click (MainWindow.fleetItems); null: none. */
     private volatile java.util.function.Function<String, List<JMenuItem>> fleetItems;
 
+    /** Fleet AP-9: the airspace areas shown and the pilot's drawings, for the drone's geofence. */
+    java.util.List<de.droiddrone.pc.map.Airspace> airspaceShown() {
+        return airspace;
+    }
+
+    java.util.List<MapGraphics.Item> drawings() {
+        MapGraphics g = graphics;
+        return g == null ? java.util.List.of() : g.list();
+    }
+
     void setFleetItems(java.util.function.Function<String, List<JMenuItem>> items) {
         fleetItems = items;
     }
@@ -347,6 +357,14 @@ class MapView extends JComponent {
         route = r;
         routePlanned = planned;
         if (r == null || routeSelected >= r.size()) routeSelected = -1;
+        repaint();
+    }
+
+    /** Fleet RT-14: power lines and masts near the route (empty: none). */
+    private volatile List<de.droiddrone.pc.route.PowerLines.Near> obstacles = List.of();
+
+    void setObstacles(List<de.droiddrone.pc.route.PowerLines.Near> near) {
+        obstacles = near == null ? List.of() : List.copyOf(near);
         repaint();
     }
 
@@ -1826,6 +1844,7 @@ class MapView extends JComponent {
             MapTrackLayer.paintKept(g, kept, keptPaths, proj);
             if (group != null) MapGroupLayer.paint(g, group, proj); // fleet G4
             if (route != null) MapRouteLayer.paint(g, route, routePlanned, routeSelected, proj); // fleet RT-1
+            if (route != null && !obstacles.isEmpty()) MapRouteLayer.paintObstacles(g, obstacles, proj); // fleet RT-14
             MapTrackLayer.paintTrack(g, trackPath, proj);
             if (home != null) MapPlaceLayer.paintHome(g, home, proj);
             FlightTrack.Point last = track == null ? null : track.last();

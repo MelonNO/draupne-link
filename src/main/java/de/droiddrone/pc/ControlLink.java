@@ -1201,11 +1201,10 @@ public class ControlLink {
                 }
             }
             case de.droiddrone.common.MavTunnel.PACKET -> { // fleet: the FC's answers through the phone's tunnel
-                java.util.function.Consumer<byte[]> t = tunnelListener;
-                if (t != null && spectator == null) {
+                if (!tunnelListeners.isEmpty() && spectator == null) {
                     byte[] frames = new byte[buffer.getRemaining()];
                     buffer.read(frames, 0, frames.length);
-                    t.accept(frames);
+                    for (java.util.function.Consumer<byte[]> t : tunnelListeners) t.accept(frames);
                 }
             }
             case UdpCommon.ConfigReceived -> {
@@ -2067,10 +2066,15 @@ public class ControlLink {
     }
 
     /** Fleet: where the FC's answers through the phone's tunnel go (MavTunnel); null: nobody listens. */
-    private volatile java.util.function.Consumer<byte[]> tunnelListener;
+    private final java.util.List<java.util.function.Consumer<byte[]>> tunnelListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    public void setTunnelListener(java.util.function.Consumer<byte[]> listener) {
-        tunnelListener = listener;
+    /** Fleet: one more listener of the tunnel (a MavSession's TunnelWire, the Mission Planner bridge). */
+    public void addTunnelListener(java.util.function.Consumer<byte[]> listener) {
+        if (listener != null) tunnelListeners.add(listener);
+    }
+
+    public void removeTunnelListener(java.util.function.Consumer<byte[]> listener) {
+        tunnelListeners.remove(listener);
     }
 
     /**
@@ -2147,6 +2151,7 @@ public class ControlLink {
             case de.droiddrone.common.FcCommand.MISSION_START -> "START";
             case de.droiddrone.common.FcCommand.PAUSE -> "PAUSE";
             case de.droiddrone.common.FcCommand.CONTINUE -> "CONTINUE";
+            case de.droiddrone.common.FcCommand.GO_LOOK -> "GO LOOK";
             default -> "?";
         };
     }

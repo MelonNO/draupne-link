@@ -99,4 +99,20 @@ final class MapRouteLayer {
         }
         return -1;
     }
+
+    /** Fleet RT-14: power lines and masts near the route - a red ring where each comes closest, with its word. */
+    static void paintObstacles(Graphics2D g, List<de.droiddrone.pc.route.PowerLines.Near> near, MapProjection proj) {
+        g.setFont(Theme.headingFont(10f));
+        g.setStroke(new BasicStroke(2f));
+        for (de.droiddrone.pc.route.PowerLines.Near n : near) {
+            Point2D p = proj.toScreen(n.lat(), n.lon());
+            int x = (int) p.getX(), y = (int) p.getY();
+            g.setColor(Theme.BAD);
+            g.drawOval(x - 7, y - 7, 14, 14);
+            g.drawLine(x - 4, y + 4, x + 4, y - 4);
+            g.setColor(Theme.TEXT);
+            g.drawString(n.kind().word.toUpperCase(java.util.Locale.ROOT), x + 10, y + 4);
+        }
+        g.setStroke(new BasicStroke(1f));
+    }
 }

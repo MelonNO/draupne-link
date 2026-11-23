@@ -939,10 +939,12 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
         // fleet PRD area H: an ArduPilot flight controller on USB (a Betaflight board goes through Drone setup as before)
         addMenuItem(menu, "ArduPilot drone setup", "ArduPilot board on USB", () -> ArduSetupPages.open(this));
+        addMenuItem(menu, "ArduPilot flight logs", "After landing: the drone's own log", () -> ArduLogsDialog.open(this)); // fleet AP-10
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
             // fleet PRD TO-5: the tour's ArduPilot and fleet steps on their own
             addMenuItem(menu, "Fleet demo", "ArduPilot drones, routes, groups, reserves: virtual", () -> Tour.fleetDemo(this));
+            addMenuItem(menu, "Mission Planner bridge", mpBridge == null ? "Off: tune ArduPilot over the link" : "On: click to stop", this::toggleMpBridge); // fleet AP-11
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
@@ -5542,6 +5544,45 @@ public class MainWindow extends JFrame {
 
     void setTourGroup(java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> g) {
         tourGroup = g;
+    }
+
+    /** Fleet AP-11: Mission Planner / QGroundControl over the link, while on. */
+    private de.droiddrone.pc.setup.ardu.MavBridge mpBridge;
+
+    private void toggleMpBridge() {
+        if (mpBridge != null) {
+            mpBridge.close();
+            mpBridge = null;
+            logLine("Mission Planner bridge off.");
+            return;
+        }
+        de.droiddrone.pc.ControlLink l = flownLink();
+        if (l == null || l.getFcInfo() == null || l.getFcInfo().getFcVariant() != FcInfo.FC_VARIANT_ARDUPILOT) {
+            Dialogs.message(this, "Connect to an ArduPilot drone first.");
+            return;
+        }
+        try {
+            mpBridge = new de.droiddrone.pc.setup.ardu.MavBridge(l, de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_IN, de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_OUT);
+            Dialogs.message(this, "Mission Planner: connect UDP, port " + de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_OUT
+                    + ".\nParameters and missions only. Sticks, arming and calibration are not carried.");
+            logLine("Mission Planner bridge on: UDP " + de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_OUT + ".");
+        } catch (java.io.IOException e) {
+            Dialogs.message(this, "Bridge not started: " + e.getMessage());
+        }
+    }
+
+    /** Fleet: the name of the phone this PC flies (a real one), or null. */
+    String flownPhoneName() {
+        return fcPhone;
+    }
+
+    /** Fleet AP-12: GO LOOK - the ArduPilot drone this PC flies goes to the alert's ground point and looks at it. */
+    void goLook(String alertedBy, double[] at) {
+        de.droiddrone.pc.ControlLink l = flownLink();
+        boolean sent = l != null && l.getTelemetry().isArmedNow(MonoClock.ms(), 3000)
+                && l.sendFcCommand(de.droiddrone.common.FcCommand.goLook(at[0], at[1]));
+        if (sent) logLine("GO LOOK: to " + alertedBy + "'s alert, the camera on it.");
+        else logLine("GO LOOK: needs an ArduPilot drone this PC flies, in the air.");
     }
 
     /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */

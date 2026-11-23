@@ -295,6 +295,33 @@ final class OverwatchPanel extends JPanel {
         map.setOverwatchMarks(marks());
     }
 
+    /** Fleet AP-12: who sends the flown drone to look; null: nobody (no GO LOOK). */
+    private volatile java.util.function.BiConsumer<String, double[]> onGoLook;
+    /** The alert gives a bearing, not a distance: the drone goes this far along it. */
+    static final double LOOK_M = 100;
+
+    void setGoLook(java.util.function.BiConsumer<String, double[]> go) {
+        onGoLook = go;
+    }
+
+    /** The ground point LOOK_M along the alert's bearing from the drone that saw it, or null (no bearing yet). */
+    double[] lookPoint(String drone) {
+        for (OverwatchHub.View v : views) {
+            if (!v.drone().equalsIgnoreCase(drone) || v.alert() == null || v.pose() == null) continue;
+            double[] at = position(v);
+            if (at == null) continue;
+            double b = Math.toRadians(CameraTurn.bearing(v.pose().headingDeg(), v.alert().angleDeg, upsideDown(drone)));
+            return de.droiddrone.common.group.GeoLocal.offset(at[0], at[1], LOOK_M * Math.sin(b), LOOK_M * Math.cos(b));
+        }
+        return null;
+    }
+
+    private void goLook(String drone) {
+        java.util.function.BiConsumer<String, double[]> go = onGoLook;
+        double[] p = lookPoint(drone);
+        if (go != null && p != null) go.accept(drone, p);
+    }
+
     private List<MapView.OverwatchMark> marks() {
         List<MapView.OverwatchMark> out = new ArrayList<>();
         for (Watching wd : watching) { // under the alerts: the calm view of each drone that watches
@@ -427,7 +454,7 @@ final class OverwatchPanel extends JPanel {
             // 340 px card (1.0.52, the pilot's screenshot)
             JPanel buttons = new JPanel(new BorderLayout(0, 6));
             buttons.setOpaque(false);
-            JPanel twoButtons = new JPanel(new GridLayout(1, 2, 6, 0));
+            JPanel twoButtons = new JPanel(new GridLayout(1, 3, 6, 0));
             twoButtons.setOpaque(false);
             JButton connect = Theme.primaryButton("Connect");
             connect.setToolTipText("Wake the drone and connect as pilot");
@@ -441,6 +468,10 @@ final class OverwatchPanel extends JPanel {
             buttons.add(connect, BorderLayout.NORTH);
             twoButtons.add(dismiss);
             twoButtons.add(clips);
+            JButton look = Theme.secondaryButton("Go look"); // fleet AP-12
+            look.setToolTipText("The ArduPilot drone you fly goes there and looks (100 m along the alert's bearing)");
+            look.addActionListener(e -> goLook(drone));
+            twoButtons.add(look);
             buttons.add(twoButtons, BorderLayout.SOUTH);
             foot.add(buttons, BorderLayout.SOUTH);
             full.add(foot, BorderLayout.SOUTH);

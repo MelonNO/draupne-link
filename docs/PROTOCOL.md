@@ -153,7 +153,7 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   SET_MESSAGE_INTERVAL, REQUEST_MESSAGE. Never RC_CHANNELS_OVERRIDE, arming, calibration, motor test or reboot. FC to PC
   the answers (PARAM_VALUE, MISSION_*, COMMAND_ACK, POSITION_TARGET_GLOBAL_INT, HOME_POSITION) and its HEARTBEAT, only
   while the PC sent a tunnel frame in the last 30 s.
-- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only): `[0x33][block id u16][count u16]` then per
+- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only): `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][count u16]` then per
   item `[frame u8][command u16][autocontinue u8][p1..p4 f32][x i32][y i32][z f32]` (`MissionItem.pack`). The PC sends it
   every second until telemetry record **0x40E1** `[block id u16][state u8][percent u8][reason length u8][ASCII]` names
   it (state: 1 uploading, 2 reading back, 3 done, 4 failed). The phone runs the mission protocol with the FC over USB

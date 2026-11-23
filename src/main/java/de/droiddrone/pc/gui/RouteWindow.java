@@ -73,7 +73,13 @@ final class RouteWindow extends JDialog {
         buttons.setOpaque(false);
         JButton reverse = Theme.secondaryButton("REVERSE"), save = Theme.secondaryButton("SAVE"), load = Theme.secondaryButton("LOAD"),
                 clear = Theme.secondaryButton("CLEAR");
-        for (JButton b : new JButton[]{reverse, save, load, clear, upload, go}) buttons.add(b);
+        JButton fence = Theme.secondaryButton("FENCE");
+        fence.setToolTipText("Airspace areas near the drone, and rectangles named FENCE, as its own geofence: it stops at the edge (AP-9)");
+        fence.addActionListener(e -> fence());
+        JButton masts = Theme.secondaryButton("MASTS");
+        masts.setToolTipText("Power lines, pylons and masts near the route, from OpenStreetMap (not complete). Not while flying.");
+        masts.addActionListener(e -> masts());
+        for (JButton b : new JButton[]{reverse, save, load, clear, fence, masts, upload, go}) buttons.add(b);
         south.add(buttons, BorderLayout.SOUTH);
         root.add(south, BorderLayout.SOUTH);
         setContentPane(root);
@@ -152,6 +158,8 @@ final class RouteWindow extends JDialog {
         mission = null;
         settings.setRoute(r);
         profile.setProfile(null);
+        profile.setObstacles(null);
+        map.setObstacles(null);
         map.setRoute(r, null);
         if (r != null) replan();
         else say("Draw a route: ROUTE, then click points on the map.", Theme.MUTED);
@@ -161,9 +169,45 @@ final class RouteWindow extends JDialog {
     private void edited() {
         settings.setRoute(route);
         mission = null;
+        profile.setObstacles(null); // RT-14: looked up again with MASTS
+        map.setObstacles(null);
         map.setRoute(route, null);
         replan();
         refreshButtons();
+    }
+
+    /** RT-14: power lines and masts near the route (start included), on the click only, never while a drone may fly. */
+    private void masts() {
+        if (de.droiddrone.pc.PossiblyFlying.now()) {
+            say("Not while a drone may be flying.", Theme.WARN);
+            return;
+        }
+        double[] from = start();
+        if (route == null || route.size() == 0 || from == null) return;
+        List<double[]> pts = new java.util.ArrayList<>();
+        pts.add(from);
+        for (Route.Point p : route.points()) pts.add(new double[]{p.lat(), p.lon()});
+        say("Looking up power lines and masts ...", Theme.MUTED);
+        Thread t = new Thread(() -> {
+            try {
+                double[] box = de.droiddrone.pc.route.PowerLines.box(pts, de.droiddrone.pc.route.PowerLines.MARGIN_M);
+                java.nio.file.Path cache = de.droiddrone.pc.AppPaths.dataDir().resolve("powerlines");
+                java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(10)).build();
+                List<de.droiddrone.pc.route.PowerLines.Near> near = de.droiddrone.pc.route.PowerLines.near(pts,
+                        de.droiddrone.pc.route.PowerLines.fetch(box, cache, http), de.droiddrone.pc.route.PowerLines.NEAR_M);
+                SwingUtilities.invokeLater(() -> {
+                    profile.setObstacles(near);
+                    map.setObstacles(near);
+                    if (near.isEmpty()) say("None on the map near the route (the map isn't complete).", Theme.TEXT);
+                    else say(near.size() + " near: " + near.stream().limit(3).map(de.droiddrone.pc.route.PowerLines.Near::word)
+                            .collect(java.util.stream.Collectors.joining("; ")) + (near.size() > 3 ? " ..." : ""), Theme.WARN);
+                });
+            } catch (Exception e) {
+                SwingUtilities.invokeLater(() -> say("Masts: " + e.getMessage(), Theme.BAD));
+            }
+        }, "routeMasts");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** Where the route starts: the drone this PC flies (its GPS), else the route's first point (a plan to look at). */
@@ -259,6 +303,48 @@ final class RouteWindow extends JDialog {
                     if (r.done()) mission = m;
                     refreshButtons();
                 }));
+    }
+
+    /**
+     * AP-9: the geofence round the drone this PC flies - the AIRSPACE areas shown and the rectangles named FENCE - up
+     * to it, read back, then FENCE_TYPE polygon, FENCE_ACTION brake or land, FENCE_ENABLE on (through the tunnel).
+     */
+    private void fence() {
+        ControlLink l = link.get();
+        FcTelemetry.Gps g = l == null ? null : l.getTelemetry().getGps();
+        if (l == null || g == null || !g.positionOk()) {
+            say("FENCE: no ArduPilot drone of this PC's own with a GPS fix.", Theme.WARN);
+            return;
+        }
+        java.util.List<de.droiddrone.pc.route.FenceBuilder.Polygon> polys = de.droiddrone.pc.route.FenceBuilder.polygons(map.airspaceShown(),
+                map.drawings(), g.latDeg(), g.lonDeg());
+        java.util.List<MissionItem> items = de.droiddrone.pc.route.FenceBuilder.items(polys);
+        say("FENCE: " + polys.size() + " areas, " + items.size() + " corners ...", Theme.WARN);
+        RouteSender.send(de.droiddrone.common.MissionUpload.TYPE_FENCE, items, l::sendMissionBlock, l.getTelemetry()::getRouteUpload, null,
+                r -> {
+                    if (!r.done()) {
+                        SwingUtilities.invokeLater(() -> say(r.text(), Theme.BAD));
+                        return;
+                    }
+                    String on = fenceOn(l, !items.isEmpty());
+                    SwingUtilities.invokeLater(() -> say(on == null ? r.text() + (items.isEmpty() ? " Fence off." : " Fence on.") : on, on == null ? Theme.OK : Theme.BAD));
+                });
+    }
+
+    /** The fence's parameters through the tunnel; null when all read back, else why not. */
+    static String fenceOn(ControlLink l, boolean on) {
+        de.droiddrone.pc.setup.ardu.TunnelWire wire = new de.droiddrone.pc.setup.ardu.TunnelWire(l);
+        try (de.droiddrone.pc.setup.ardu.MavSession s = new de.droiddrone.pc.setup.ardu.MavSession(wire, false)) {
+            if (on) {
+                if (s.setParam("FENCE_TYPE", 4, 2000) != 4f) return "FENCE_TYPE not taken.";
+                if (s.setParam("FENCE_ACTION", 4, 2000) != 4f) return "FENCE_ACTION not taken.";
+            }
+            float want = on ? 1 : 0;
+            if (s.setParam("FENCE_ENABLE", want, 2000) != want) return "FENCE_ENABLE not taken.";
+            return null;
+        } catch (Exception e) {
+            return "FENCE: " + e.getMessage();
+        }
     }
 
     private void go() {
