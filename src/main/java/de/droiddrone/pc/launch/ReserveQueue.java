@@ -94,7 +94,7 @@ public final class ReserveQueue {
     private final List<Call> calls = new ArrayList<>();
     /** name#markId of every drone that has answered a call: each answers one (a new mark makes it callable again). */
     private final Set<String> answered = new HashSet<>();
-    private int nextCallId = 1;
+    private int nextCallId = de.droiddrone.pc.route.RouteSender.randomId(); // new at every start: the phone answers a call it knows with its status
     private long noReserveAt = Long.MIN_VALUE;
     private int leadSysId = LaunchWire.NONE;
     private double floorM = 40;

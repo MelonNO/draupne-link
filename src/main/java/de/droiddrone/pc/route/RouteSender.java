@@ -23,7 +23,16 @@ public final class RouteSender {
      * status). The phone says an upload's end once - that one record lost, the sender waited the whole 30 s.
      */
     static final long QUIET_MS = 2000;
-    private static final AtomicInteger NEXT = new AtomicInteger((int) (System.nanoTime() & 0x7fff));
+    private static final AtomicInteger NEXT = new AtomicInteger(randomId());
+
+    /**
+     * A block or call id to count on from, new at every start of this PC (1..65535, never 0): the phone answers a block
+     * id it already has with its old outcome and a call it carried out in the last minute with its status. Ids that
+     * started at 1 (calls) or near the uptime (System.nanoTime) after a restart could meet one the phone still knows.
+     */
+    public static int randomId() {
+        return new java.security.SecureRandom().nextInt(65535) + 1;
+    }
 
     public record Result(boolean done, String text) {
     }

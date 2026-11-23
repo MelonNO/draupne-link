@@ -131,7 +131,7 @@ class ReserveQueueTest {
         Air air = new Air();
         ReserveQueue q = new ReserveQueue(choice, air);
         List<ReserveChoice.Reserve> rs = List.of(reserve("Sentry-1", 500, 0), reserve("Sentry-2", 900, 0));
-        q.press(0, rs, GLAT, GLON);
+        int first = q.press(0, rs, GLAT, GLON).orders().get(0).callId; // call ids start at random
         LaunchWire.Order second = q.press(0, rs, GLAT, GLON).orders().get(0);
         assertTrue(q.canCancel());
         ReserveQueue.Out c = q.cancelLast(10);
@@ -140,7 +140,7 @@ class ReserveQueueTest {
         assertEquals(1, q.active().size());
         assertFalse(air.layers.containsKey("Sentry-2"), "its layer is free again");
         // the first one arms: no cancel now
-        LaunchWire.Status s = status(1, LaunchSequence.ARMING);
+        LaunchWire.Status s = status(first, LaunchSequence.ARMING);
         q.onStatus(20, "Sentry-1", s, rs, GLAT, GLON);
         assertFalse(q.canCancel());
         assertTrue(q.cancelLast(30).orders().isEmpty());
@@ -153,6 +153,23 @@ class ReserveQueueTest {
         s.state = state;
         s.connected = true;
         return s;
+    }
+
+    /** A PC started again counts its calls from a new random point: an exact repeat of a call the phone still knows (it
+     * answers one of the last minute with its status, never launching) was likely when every start began at 1. */
+    @Test
+    void callIdsStartAnewAtRandomOnEveryStart() {
+        java.util.Set<Integer> firsts = new java.util.HashSet<>();
+        for (int i = 0; i < 20; i++) {
+            ReserveQueue q = new ReserveQueue(choice, new Air());
+            int id = q.press(0, List.of(reserve("Sentry-1", 500, 0)), GLAT, GLON).orders().get(0).callId;
+            assertTrue(id >= 1 && id <= 65535);
+            firsts.add(id);
+        }
+        assertTrue(firsts.size() > 15, "20 starts, " + firsts.size() + " first ids");
+        java.util.Set<Integer> blocks = new java.util.HashSet<>();
+        for (int i = 0; i < 20; i++) blocks.add(de.droiddrone.pc.route.RouteSender.randomId());
+        assertTrue(blocks.size() > 15);
     }
 
     @Test
