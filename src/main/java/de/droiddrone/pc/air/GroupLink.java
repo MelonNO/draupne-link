@@ -88,6 +88,16 @@ public final class GroupLink implements AutoCloseable {
         return lead;
     }
 
+    /** A report this fresh counts as the drone's state now (FL-6's hand-over). */
+    public static final long REPORT_FRESH_MS = 1500;
+
+    /** FL-6: the drone's last report, under {@link #REPORT_FRESH_MS} old (wall clock), says armed and in the air. */
+    public boolean reportsFlying(String drone, long now) {
+        FleetStatus s = last.get(drone);
+        Long at = heardAt.get(drone);
+        return s != null && at != null && now - at <= REPORT_FRESH_MS && s.has(FleetStatus.ARMED) && !s.has(FleetStatus.LANDED);
+    }
+
     public GroupController controller() {
         return group;
     }

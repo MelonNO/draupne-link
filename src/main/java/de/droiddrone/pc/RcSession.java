@@ -359,6 +359,23 @@ public class RcSession {
         return fcDisarmedNow.getAsBoolean();
     }
 
+    /** What the OSD shows for a moment when the sticks went live on the group's new lead (see {@link #handedOver}). */
+    public static final String NEW_LEAD_BANNER = "NEW LEAD - STICKS LIVE";
+    /** The hand-over's word lasts this long at most: the link's own telemetry is there by then. */
+    public static final long HANDED_OVER_MS = 3000;
+    /** Until when (this session's clock) the group's report counts as the FC's armed state; 0: never. */
+    private volatile long handedOverUntil;
+
+    /**
+     * Fleet FL-6 / FL-5: this session is the group's new lead, which its fleet report (FleetStatus, fresh: see
+     * LeadHandover.flying) said armed and flying. Until the link's own telemetry says armed or disarmed - for
+     * {@link #HANDED_OVER_MS} at most - that counts as armed: the sticks go live at once, as they are, as after a link
+     * loss in the air. Telemetry that says DISARMED wins at once.
+     */
+    public void handedOver() {
+        handedOverUntil = clock.getAsLong() + HANDED_OVER_MS;
+    }
+
     private volatile FleetSwitches fleetSwitches;
     private volatile java.util.function.IntConsumer fleetSwitch = e -> { };
 
@@ -396,6 +413,8 @@ public class RcSession {
         // 1.0.64: what the link and the flight controller say this tick (a few volatile reads: nothing waits)
         boolean unheard = sticksUnheard.getAsBoolean();
         boolean fcArmed = fcArmedNow.getAsBoolean(), fcDisarmed = fcDisarmedNow.getAsBoolean();
+        // fleet FL-6: a new lead the group's report said armed and flying - until the link's own telemetry says
+        boolean leadArmed = !fcArmed && !fcDisarmed && now < handedOverUntil;
         if (!linkWasUp || fcArmed || fcDisarmed) fcUnknownHeardMs = 0;
         else if (!unheard) fcUnknownHeardMs += Math.min(MAX_TICK_MS, Math.max(0, now - lastTickAt));
         linkWasUp = true;
@@ -428,6 +447,13 @@ public class RcSession {
                 rcEnabled = true;
                 banner = new Banner(ARMED_RESUME_BANNER, now);
                 events.accept("Link back - FC armed - sticks live.");
+            } else if (leadArmed && (armSwitch == null || armSwitch.on(channels))) {
+                // the same for the group's new lead (FL-6): its fleet report said armed and flying a moment ago, and
+                // its own telemetry (ArduPilot's heartbeat, once a second, twice) would keep the sticks 1 - 2 s. Not
+                // with the radio's ARM off: that frame would disarm it in the air - its own telemetry decides then
+                rcEnabled = true;
+                banner = new Banner(NEW_LEAD_BANNER, now);
+                events.accept("New lead - sticks live.");
             } else if (fcReadWaitMs > 0 && !fcDisarmed && (unheard || fcUnknownHeardMs < fcReadWaitMs)) {
                 // 1.0.64: the flight controller hasn't said yet (the app just started, or the link is out). Armed in
                 // the air, "throttle down, arm off" obeyed would be an arm-off frame: a disarm in flight. Not taken
