@@ -36,6 +36,11 @@ public final class Sitl {
     static final int ACC_CALIBRATION = 205, DEBUG = 254;
     /** Betaflight 4.4's arming blocks that the drone's set-up has to clear: CALIB (12) and NO_ACC_CAL (23). */
     static final int CALIB_BIT = 12, NO_ACC_CAL_BIT = 23, BOOTGRACE_BIT = 9;
+    /**
+     * How long after it answers again Betaflight's status is taken as its word: in the first tens of milliseconds
+     * after a restart its arming checks have not run yet (seen 2026-11-23: BOOTGRACE alone, the full set 40 ms later).
+     */
+    static final long SETTLE_MS = 1500;
     /** Betaflight 4.4's failsafe phases (failsafe.h), by number. */
     static final List<String> PHASES = List.of("IDLE", "RX_LOSS_DETECTED", "LANDING", "LANDED", "RX_LOSS_MONITORING", "RX_LOSS_RECOVERED", "GPS_RESCUE");
 
@@ -147,10 +152,17 @@ public final class Sitl {
      * The real drone's settings as far as they matter to arming and failsafe (Drone setup's, and the hardware file's
      * board), on SITL: a receiver over MSP (SITL's own default), ARM on AUX1 1700-2100, the GPS on UART3 (nothing
      * answers there: no fix, as indoors), GPS rescue as the failsafe after failsafe_delay 200 (20 s), rxfail holding
-     * the throttle and AUX1, arming without a GPS fix allowed (Drone setup always sets it). Beside that what SITL
-     * needs: PWM motors (its only motor driver; the drone has DShot), debug_mode FAILSAFE (MSP_DEBUG then says the
-     * failsafe's phase), motor_output_limit in every PID profile as asked. Saved; Betaflight restarts. Then the
-     * accelerometer calibrated, level on the feeder (it saves by itself), as the drone's was.
+     * the throttle and AUX1, arming without a GPS fix allowed (Drone setup always sets it), serial_update_rate_hz 2000
+     * (Drone setup's own value). Beside that what SITL needs: PWM motors (its only motor driver; the drone has DShot),
+     * debug_mode FAILSAFE (MSP_DEBUG then says the failsafe's phase), motor_output_limit in every PID profile as asked.
+     * Saved; Betaflight restarts. Then the accelerometer calibrated, level on the feeder (it saves by itself), as the
+     * drone's was.
+     * <p>
+     * serial_update_rate_hz matters more on SITL than on a board: its gyro loop takes nearly all its time, and at
+     * Betaflight's own 100 its serial task - every MSP answer, every stick frame - ran 18 to 32 times a second
+     * (2026-11-23, 4.4.1: its "tasks"), stick frames queued, MSP answers came 0.1 to 1 s late and the receiver was
+     * lost for a tenth of a second about every two seconds (RXLOSS); at 2000 the serial task ran about 75 times a
+     * second and the receiver was lost a quarter as often.
      * @param outputLimit motor_output_limit, per cent: 100 is Betaflight's own (the drone's), 15 the rig's cap
      * @return what was done, a line each
      */
@@ -166,6 +178,11 @@ public final class Sitl {
                 "rxfail 3 h",
                 "rxfail 4 h",
                 "set gps_rescue_allow_arming_without_fix = ON",
+                "set serial_update_rate_hz = 2000",
+                // the accelerometer calibrated, level: the feeder's level reads level, so no trim (the fourth value is
+                // Betaflight's "calibration completed"). Asking MSP_ACC_CALIBRATION alone left NO_ACC_CAL now and then
+                // (2026-11-23): see below
+                "set acc_calibration = 0,0,0,1",
                 "set debug_mode = FAILSAFE"));
         List<String> said = new ArrayList<>();
         try (BetaflightUsb fc = open(log)) {
@@ -187,12 +204,18 @@ public final class Sitl {
             said.add("set motor_output_limit = " + outputLimit + " in each of the " + profiles + " PID profiles");
             fc.saveAndReboot();
         }
-        // the accelerometer: calibrated level on the feeder, as the drone's was (GPS rescue will not arm without)
+        // the accelerometer, checked: no NO_ACC_CAL (GPS rescue will not arm with it). It used to be calibrated only
+        // when the status after the save said NO_ACC_CAL - and on the suite of 2026-11-23 it did not say so then (not
+        // even 1.7 s on), but did after the next restart, so the calibration was skipped and the board stayed
+        // NO_ACC_CAL for the whole scenario (three times). Hence acc_calibration above; and the status is read only
+        // once Betaflight has answered for a moment (its first one after a restart can be BOOTGRACE alone). Should it
+        // still say NO_ACC_CAL, it is calibrated level on the feeder (MSP_ACC_CALIBRATION, saved by Betaflight).
         long end = System.currentTimeMillis() + 30_000;
         boolean asked = false;
         while (true) {
             int flags;
             try (BetaflightUsb fc = open(log)) {
+                pause(SETTLE_MS);
                 flags = Msp.armingDisableFlags(fc.msp(Msp.STATUS, null));
                 if ((flags >> NO_ACC_CAL_BIT & 1) == 0 && (flags >> CALIB_BIT & 1) == 0) break;
                 if (!asked && (flags >> NO_ACC_CAL_BIT & 1) != 0 && (flags >> CALIB_BIT & 1) == 0) {
@@ -205,6 +228,29 @@ public final class Sitl {
             pause(500);
         }
         return said;
+    }
+
+    /**
+     * The board back to Betaflight's own defaults - as a run's fresh SITL starts - for a scenario that leaves more
+     * changed than the next one sets up for itself (the suite's scenarios share one SITL and its eeprom.bin): the CLI's
+     * "defaults" resets everything (the accelerometer's calibration, the serial ports, what Drone setup wrote), saves
+     * and restarts. Waited for; returns its "serial" lines read afterwards (that visit ends with "exit").
+     */
+    public static String toDefaults(Consumer<String> log) throws IOException {
+        try (BetaflightUsb fc = open(log)) {
+            if (Msp.armed(fc.msp(Msp.STATUS, null))) throw new IOException("SITL is armed: not reset");
+            fc.enterCli();
+            try {
+                fc.command("defaults", 3000); // "Rebooting": no prompt follows
+            } catch (IOException restarting) {
+                // the board restarts with its defaults
+            }
+        }
+        pause(1000);
+        try (BetaflightUsb fc = open(log)) {
+            fc.enterCli();
+            return fc.command("serial");
+        } // "exit": Betaflight restarts
     }
 
     /** A CLI line Betaflight has to take: its "error", "invalid" or "unavailable" throws. */

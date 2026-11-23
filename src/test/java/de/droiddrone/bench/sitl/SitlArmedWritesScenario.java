@@ -64,6 +64,8 @@ class SitlArmedWritesScenario {
     /** Betaflight 4.4's arming block MSP among MSP_STATUS' arming-disable flags. */
     private static final int MSP_BLOCK = 1 << Msp.ARMING_DISABLED_MSP_BIT;
     private static final int MSP_ATTITUDE = 108;
+    /** UART2 or UART4 not back this long while SITL runs: it could not open it again (see Receiver.restartThroughAnother). */
+    private static final long NOT_BACK_MS = 10_000;
     /** The MSP requests that change a board: none may reach an armed one. */
     private static final Set<Integer> WRITES_V1 = Set.of(Msp.ARMING_DISABLE, Msp.SET_FEATURE_CONFIG, Msp.SET_MIXER_CONFIG,
             Sitl.ACC_CALIBRATION, Msp.EEPROM_WRITE, Msp.REBOOT, Msp.SET_PASSTHROUGH);
@@ -143,10 +145,42 @@ class SitlArmedWritesScenario {
                 rx.arm(false);
                 Ui.pause(600);
                 rx.close();
+                if (rx.restarts.get() > 0) film.remark("The rig restarted SITL " + rx.restarts.get() + " time(s) for UART2 or UART4 that did not come back (uart2-status.tsv).");
                 Files.write(film.dir().resolve("uart2-status.tsv"), rx.timeline(), StandardCharsets.UTF_8);
             }
             Files.write(film.dir().resolve("uart1-tap.tsv"), tap.lines(), StandardCharsets.UTF_8);
-            tap.unplug();
+            leaveAsFound(rig, tap);
+        }
+    }
+
+    /**
+     * The suite's scenarios share one SITL and its eeprom.bin: this one leaves Betaflight's own defaults behind, as a
+     * fresh run starts it - not MSP on UART2 and UART4, nor what CONFIRM wrote (PREARM on AUX3, which no other
+     * scenario's sticks raise), nor its accelerometer calibration (the next scenario's set-up does its own). The
+     * app first lets go of the board: its windows closed, the tap unplugged, its threads ended.
+     */
+    private void leaveAsFound(AppRig rig, Tap tap) {
+        tap.unplug();
+        for (String title : new String[]{"Motor test", "New drone"}) {
+            try {
+                Window w = rig.ui.window(title);
+                if (w != null) Ui.edt(() -> {
+                    w.dispose();
+                    return null;
+                });
+            } catch (RuntimeException ignored) {
+                // closed already
+            }
+        }
+        waitFor(20_000, () -> !threadAlive("motor-test") && !threadAlive("orientation-live") && tap.quietFor(2000));
+        try {
+            String serial = Sitl.toDefaults(rig.film::remark);
+            rig.check(serial.contains("serial 1 0 ") && serial.contains("serial 3 0 "), "the board is left with Betaflight's defaults for the next scenario "
+                    + "(UART2 and UART4 without MSP again): " + serial.replaceAll("\\s+", " "));
+        } catch (IOException e) {
+            rig.check(false, "the board is left with Betaflight's defaults for the next scenario: " + e.getMessage());
+        } finally {
+            BetaflightUsb.use(tap); // unplugged: whatever of the app still looks finds no board
         }
     }
 
@@ -683,8 +717,16 @@ class SitlArmedWritesScenario {
             thread.start();
         }
 
+        /** Both ports had Betaflight's word last at this time (or the start); the last restart this rig asked for. */
+        private long workingAt = System.currentTimeMillis(), restartedAt;
+
         private void run() {
             while (!closed) {
+                long at = System.currentTimeMillis();
+                if (at - workingAt > NOT_BACK_MS && at - restartedAt > 30_000) {
+                    restartedAt = at;
+                    restartThroughAnother();
+                }
                 SitlLink s2, l;
                 try {
                     s2 = new SitlLink(UART2);
@@ -710,6 +752,7 @@ class SitlArmedWritesScenario {
                     s2.sticks(throttle, armOn ? 2000 : 1000);
                     try {
                         byte[] s = l.ask(Msp.STATUS, null, 600);
+                        workingAt = System.currentTimeMillis();
                         silent = false;
                         Seen now = new Seen(System.currentTimeMillis(), n, Msp.armed(s), Msp.armingDisableFlags(s));
                         Seen before = last;
@@ -732,6 +775,39 @@ class SitlArmedWritesScenario {
                 timeline.add(stamp() + "\t" + n + "\tended\t(Betaflight restarted)");
             }
         }
+
+        /**
+         * UART2 or UART4 has not come back for NOT_BACK_MS: once after a restart SITL could not open UART2 again
+         * ("bind port 5762 for UART2 failed!!" in its log, 2026-11-23) and never would until it restarts. Asked over
+         * the port that answers - not of an armed board - with MSP's reboot: SITL starts again, that UART with it.
+         */
+        private void restartThroughAnother() {
+            for (int port : new int[]{UART4, UART2, Sitl.port()}) {
+                try (SitlLink r = new SitlLink(port)) {
+                    Ui.pause(200);
+                    if (r.gone()) continue;
+                    byte[] s = r.ask(Msp.STATUS, null, 1500);
+                    if (Msp.armed(s)) {
+                        timeline.add(stamp() + "\t\tUART2 or UART4 not back for " + NOT_BACK_MS / 1000 + " s, the board ARMED: not restarted\t");
+                        return;
+                    }
+                    try {
+                        r.ask(Msp.REBOOT, null, 1500);
+                    } catch (IOException restarting) {
+                        // gone before its answer: it restarts
+                    }
+                    restarts.incrementAndGet();
+                    timeline.add(stamp() + "\t\tUART2 or UART4 not back for " + NOT_BACK_MS / 1000 + " s (SITL could not open it again): MSP reboot over :" + port + "\t");
+                    return;
+                } catch (IOException e) {
+                    // not this port
+                }
+            }
+            timeline.add(stamp() + "\t\tUART2 or UART4 not back for " + NOT_BACK_MS / 1000 + " s, and no port took MSP's reboot\t");
+        }
+
+        /** How often the rig restarted SITL for a UART that did not come back. */
+        final AtomicInteger restarts = new AtomicInteger();
 
         private String stamp() {
             return String.format(Locale.ROOT, "%.3f", (System.currentTimeMillis() - t0) / 1000.0);

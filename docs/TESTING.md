@@ -428,10 +428,16 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   a visit and across restarts (no brushed-ESC detection in SITL).
 - **Arming.** It arms only with the feeder (`-Feed`, `tools\sitl\feeder.py`): forty packets a second of a drone
   level and still. Without them SITL's attitude is never set and ANGLE holds. Set up as the drone is
-  (`bench/sitl/Sitl.likeTheDrone`) it also wants its accelerometer calibrated once (the scenarios do it). The sticks
-  come over MSP (MSP_SET_RAW_RC on UART1, as the phone app sends them): **Betaflight takes one MSP request per run of
-  its serial task, 100 a second** (serial_update_rate_hz) - at 100 stick frames a second nothing else was answered,
-  so the scenarios send 25. That is SITL's TCP stand-in for USB alone: the real board answered 250 stick frames a
+  (`bench/sitl/Sitl.likeTheDrone`) it also wants its accelerometer calibrated once: `likeTheDrone` sets
+  `acc_calibration = 0,0,0,1` (no trim - the feeder's level reads level - and "calibration completed"). Asking for
+  the calibration only when the status said NO_ACC_CAL skipped it three times on 2026-11-23: after the set-up's save
+  the status did not say so, after the next restart it did. The sticks come over MSP (MSP_SET_RAW_RC on
+  UART1, as the phone app sends them): **Betaflight takes one MSP request per run of its serial task**
+  (serial_update_rate_hz) - at 100 stick frames a second nothing else was answered, so the scenarios send 25.
+  **SITL's gyro loop takes nearly all its time:** at Betaflight's own serial_update_rate_hz 100 its "tasks" showed
+  the serial task running 18 to 32 times a second (2026-11-23), stick frames queued, MSP answers 0.1 to 1 s late,
+  RXLOSS every two seconds or so - and the suite went 0 of 4. `likeTheDrone` sets 2000, as Drone setup does on the
+  drone: about 75 a second, a quarter of the RXLOSS. That is SITL's TCP stand-in for USB alone: the real board answered 250 stick frames a
   second with the phone's requests between them in 12 ms (median), none lost (`mspRateProbe`, F-081).
 - **What was seen of the drone's failsafe** (4.4.1, `SitlFailsafeScenario`; GPS-RESCUE after failsafe_delay 200,
   rxfail 3 h and 4 h, no GPS fix, arming without a fix allowed): the sticks stop at throttle 1080; RXLOSS 0.15 - 0.17 s
@@ -442,13 +448,17 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   ARM off: free again 2.1 s later. The film's `failsafe-timeline.tsv` has every change.
 - **A new connection is cleaned first** (`Sitl.usb`): SITL sends the next client what it still had to say to the one
   before (answers to requests left in its queue), cut where its buffer ran over - a "diff all" read with that in
-  front is not whole. One question is asked and all that comes is thrown away until 150 ms pass with nothing.
+  front is not whole. One question is asked and all that comes is thrown away until 150 ms pass with nothing. A long
+  answer can come garbled too: "dump all" twice in one CLI visit, 22342 characters, then 32976 (2026-11-23, by
+  hand) - `SitlSnapshotRestoreScenario` reads again, three times at most, when the snapshot's or the restore's two
+  reads differ.
 - **The keeper against it** (`SitlKeeperScenario`): as a real board's in every rule but the battery
   (`noBattery`, `battery=none` by hand - refused for a real board). **Only 4.4 and older can be locked as SITL:**
   Betaflight 4.5 on leaves MSP's arming block out of its SITL build (msp.c, `#ifndef SIMULATOR_BUILD`). On 4.5.5 the
   keeper saw that its lock does not show and opened no window - but sticks that asked for ARM armed the board all the
   same, outside any window, and the keeper could only trip and say NOT SAFE. The scenario checks there only that no
-  window opens, and sends no sticks.
+  window opens, and sends no sticks. A window that SITL's own receiver gap ends (the board's RXLOSS, the keeper's
+  RECEIVER LOST - as it must) is asked for again, three times at most, and the film says so (2026-11-23).
 - **Drone setup on an armed board** (`SitlArmedWritesScenario`, F-077 to F-079): the app itself (SETUP > Set up a
   new drone) on UART1 through a tap that writes down every request and CLI line; the sticks on UART2 and the rig's
   questions on UART4 (both given MSP by the scenario). Armed: PROPS IN / OUT, CALIBRATE and CONFIRM are refused with
@@ -459,6 +469,10 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   questions take about 10 ms. Even so SITL says RXLOSS for about a tenth of a second every few seconds - also with
   the sticks sent from inside WSL, on time, 25, 50 or 100 a second: its own gaps (2026-11-23). An armed board rides
   them out (failsafe stage 1); one that comes as the ARM switch goes up leaves BADRX, and the rig flips it again.
+  Once after a restart SITL could not open UART2 again ("bind port 5762 for UART2 failed!!" in `sitl.log`): a UART
+  not back for 10 s gets SITL restarted by MSP's reboot over a port that answers. The scenario ends with the CLI's
+  `defaults`: the next scenario finds the board as a fresh run starts it (CONFIRM puts PREARM on AUX3, which no other
+  scenario's sticks raise - NOPREARM).
 
 ## For whoever adds a scenario
 

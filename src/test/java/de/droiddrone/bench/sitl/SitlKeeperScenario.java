@@ -81,6 +81,59 @@ class SitlKeeperScenario {
         return within(4000, () -> Boolean.TRUE.equals(state(rig).armed()));
     }
 
+    private int count(String words) {
+        int n = 0;
+        for (String line : said) if (line.contains(words)) n++;
+        return n;
+    }
+
+    /** What a window is for: true when it went as asked. */
+    private interface InWindow {
+        boolean run() throws Exception;
+    }
+
+    /**
+     * OPEN 15, the ARM switch up, and what the window is for. SITL drops its own receiver for a tenth of a second now
+     * and then (RXLOSS with the stick frames sent on time: its gyro loop leaves its other tasks little time,
+     * docs/TESTING.md, 2026-11-23) - and the keeper ends a window on the board's RXLOSS (RECEIVER LOST), as it must.
+     * A window that went wrong that way, and only that way, is asked for again once the sticks reach the board, three
+     * times at most; the film says so. @return whether it went as asked in the end
+     */
+    private boolean window(KeeperClient rig, StandInPhone phone, String what, InWindow body) throws Exception {
+        for (int attempt = 1; ; attempt++) {
+            phone.sticks(1000, 1000);
+            calm(rig);
+            int lostBefore = count("RECEIVER LOST");
+            String open = rig.ask("OPEN 15");
+            boolean ok = open.startsWith("OK window=15000") && arm(rig, phone) && body.run();
+            KeeperClient.State s = state(rig);
+            // SITL's receiver gap, and nothing else: the keeper ended the window for the board's RXLOSS, would not open one
+            // while the board said RXLOSS or was slow to answer its status (the same gap, seen from the keeper's side), or
+            // the board would not arm for the BADRX such a gap leaves at the ARM switch
+            boolean slow = open.contains("does not answer");
+            boolean gap = count("RECEIVER LOST") > lostBefore || open.contains("RXLOSS") || slow || !ok && s.get("blocks").contains("BADRX");
+            if (ok || attempt == 5 || !gap) {
+                if (!ok) film.remark(what + ": OPEN 15 said " + open + "; " + s);
+                return ok;
+            }
+            film.remark(what + ": SITL's own receiver gap (" + (count("RECEIVER LOST") > lostBefore ? "the keeper ended the window: RECEIVER LOST" : open.contains("RXLOSS")
+                    ? "no window while the board says RXLOSS" : slow ? "no window: the board was slow to answer" : "BADRX at the ARM switch") + ") - asked again ("
+                    + attempt + " of 5)");
+        }
+    }
+
+    /** Until the board has said neither RXLOSS nor BADRX for two seconds running (SITL's receiver gaps come and go), 20 s at most. */
+    private static void calm(KeeperClient rig) throws InterruptedException {
+        long end = System.currentTimeMillis() + 20_000, since = System.currentTimeMillis();
+        while (System.currentTimeMillis() < end) {
+            KeeperClient.State s = state(rig);
+            String blocks = s.get("blocks");
+            if (blocks.contains("RXLOSS") || blocks.contains("BADRX") || Boolean.TRUE.equals(s.armed())) since = System.currentTimeMillis();
+            else if (System.currentTimeMillis() - since >= 2000) return;
+            Thread.sleep(100);
+        }
+    }
+
     @Test
     void theKeeperOnBetaflightItselfLocksOpensAWindowUnderTheCapAndLeavesTheBoardSafe() throws Exception {
         String missing = Sitl.missing();
@@ -159,14 +212,18 @@ class SitlKeeperScenario {
                 phone.sticks(1000, 1000);
 
                 // ---- a window, sticks under the cap
-                String open = rig.ask("OPEN 15");
-                film.add("OPEN 15: " + open, null, "sitl", "");
-                check(open.startsWith("OK window=15000"), "a window opens: " + open);
-                check(arm(rig, phone), "in the window the ARM switch arms the board");
-                phone.sticks(1080, 2000);
-                Thread.sleep(2500);
-                s = state(rig);
-                check(Boolean.TRUE.equals(s.armed()) && s.tripped() == null && s.number("throttle") == 1080, "armed at throttle 1080, under the cap of 1100, nothing tripped: " + s);
+                KeeperClient.State[] held = new KeeperClient.State[1];
+                StandInPhone ph = phone;
+                boolean first = window(rig, phone, "the first window", () -> {
+                    ph.sticks(1080, 2000);
+                    Thread.sleep(2500);
+                    held[0] = state(r);
+                    return Boolean.TRUE.equals(held[0].armed()) && held[0].tripped() == null && held[0].number("throttle") == 1080;
+                });
+                film.add("the first window: " + (first ? "armed at throttle 1080" : "not as asked"), null, "sitl", "");
+                check(held[0] != null, "a window opens and the ARM switch arms the board in it");
+                s = held[0] == null ? state(rig) : held[0];
+                check(first, "armed at throttle 1080, under the cap of 1100, nothing tripped: " + s);
                 String closed = rig.ask("CLOSE");
                 film.add("CLOSE: " + closed, null, "sitl", "");
                 check(closed.startsWith("OK safe=1 locked=1 armed=0 atRest=1"), "CLOSE leaves it locked, disarmed, every motor at rest: " + closed);
@@ -174,7 +231,7 @@ class SitlKeeperScenario {
                 Thread.sleep(500);
 
                 // ---- a stick frame over the cap
-                check(rig.ask("OPEN 15").startsWith("OK window=15000") && arm(rig, phone), "a second window, armed again");
+                check(window(rig, phone, "the second window", () -> true), "a second window, armed again");
                 phone.sticks(1150, 2000);
                 check(within(3000, () -> Boolean.FALSE.equals(state(r).armed()) && state(r).tripped() != null), "a stick frame with throttle 1150 is not passed on: the window ends, the board disarmed");
                 check(saidOf("THROTTLE CAP"), "the keeper says THROTTLE CAP");
@@ -186,15 +243,20 @@ class SitlKeeperScenario {
                         + state(rig).get("blocks"));
 
                 // ---- the sticks stop in a window: the keeper ends it before the board's own failsafe
-                check(rig.ask("OPEN 15").startsWith("OK window=15000") && arm(rig, phone), "a third window, armed again");
-                phone.sticks(1050, 2000);
-                Thread.sleep(800);
+                // (still armed after 0.8 s at 1050 - no receiver gap of SITL's first - so the end that follows is the stop's)
+                check(window(rig, phone, "the third window", () -> {
+                    ph.sticks(1050, 2000);
+                    Thread.sleep(800);
+                    return Boolean.TRUE.equals(state(r).armed()) && state(r).windowMs() > 0;
+                }), "a third window, armed again");
+                int lost = count("RECEIVER LOST"), stopped = count("STICKS STOPPED");
                 long stop = System.currentTimeMillis();
                 phone.stopSticks();
                 boolean ended = within(4000, () -> Boolean.FALSE.equals(state(r).armed()) && state(r).windowMs() == 0);
                 long took = System.currentTimeMillis() - stop;
                 check(ended, "sticks that stop in a window: the keeper ends it, the board disarmed, after " + took + " ms (its own failsafe would wait 20 s)");
-                check(saidOf("RECEIVER LOST") || saidOf("STICKS STOPPED"), "the keeper says why: " + (saidOf("RECEIVER LOST") ? "RECEIVER LOST (the board's RXLOSS)" : "STICKS STOPPED"));
+                boolean why = within(2000, () -> count("RECEIVER LOST") > lost || count("STICKS STOPPED") > stopped);
+                check(why, "the keeper says why: " + (count("RECEIVER LOST") > lost ? "RECEIVER LOST (the board's RXLOSS)" : count("STICKS STOPPED") > stopped ? "STICKS STOPPED" : "nothing"));
 
                 // ---- the end
                 String end = rig.ask("END");
