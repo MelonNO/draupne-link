@@ -140,7 +140,7 @@ class FleetWireFuzzTest {
         assertNotNull(MissionBlock.read(p, 1, p.length - 1));
         // one item's bytes more than the count says: a route cut to fewer points than were sent must never be flown
         byte[] longer = MissionBlock.packet(5, route(4));
-        longer[5] = 3; // count low byte: 3 items claimed, 4 sent
+        longer[14] = 3; // items in the part: 3 claimed, 4 sent
         assertNull(MissionBlock.read(longer, 1, longer.length - 1), "more bytes than the count");
         assertNull(MissionItem.unpack(Arrays.copyOf(MissionItem.pack(route(2)), 2 + 2 * MissionItem.PACKED_SIZE + 1), 0,
                 2 + 2 * MissionItem.PACKED_SIZE + 1), "a stray byte after the last item");
@@ -221,7 +221,7 @@ class FleetWireFuzzTest {
         s.routeState = 4;
         s.routePercent = 100;
         byte[] e = s.encode();
-        assertEquals(FleetStatus.BYTES, e.length);
+        assertEquals(FleetStatus.WITH_RTL_BYTES, e.length);
         FleetStatus b = FleetStatus.decode(e, e.length);
         assertEquals(-90, b.lat, 1e-9);
         assertEquals(180, b.lon, 1e-9);
@@ -241,7 +241,8 @@ class FleetWireFuzzTest {
         e[1] = 2;
         assertNull(FleetStatus.decode(e, e.length));
         e[1] = 1;
-        assertNull(FleetStatus.decode(e, e.length - 1));
+        assertNull(FleetStatus.decode(e, FleetStatus.BYTES - 1));
+        assertEquals(-1, FleetStatus.decode(e, e.length - 1).rtlAltDm, "RTL_ALT cut short: not known");
         e[0] = 0x39;
         assertNull(FleetStatus.decode(e, e.length));
     }

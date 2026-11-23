@@ -123,6 +123,39 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    fixed. FL-14 - the floor's - / + and a typed value on the group's map label. FL-9 - GROUP DESIGN, with the size
    (AC-35) and layer (AC-13) checks. Rally points of a group's followers come from the group's exit plans; those of
    drones sent out on their own from `RallyPlan`: the two are not yet checked against each other.
+6. **Return heights (RT-9, FD-6, A5), 2026-11-23:** every drone the PC sends out on its own (DISPATCH, CALL RESERVE,
+   the route window's GO) gets an RTL_ALT over the highest ground on its straight ways home and to its rally point,
+   clear by its own route height (dispatch: its layer; a reserve: its approach height). `ReturnHeights` runs
+   `SoloReturns` over all of them at each one that goes out or comes back: ways home within 20 m go a layer apart,
+   never under a drone's own terrain height. Dispatched drones and reserves get it by `FleetCmd` RETURN; the launch
+   order waits until the drone's report says ArduPilot has it (said after 10 s; an older phone never confirms and
+   stays on the ground). The pilot's own drone: through the tunnel after the route, read back before GO; a later
+   change goes by RETURN. A reserve that joins the group leaves the set (its exit plan sets RTL_ALT). Drone setup
+   writes FS_EKF_ACTION 2: GNSS lost, ArduPilot holds its height (ALT_HOLD) instead of landing (A5).
+   - **Not as asked:** RTL_ALT is above ArduPilot's home, the terrain heights above sea level: a home height off the
+     map (RT-5) shifts the clearance by as much. A drone's "way home" for FD-6 is the straight line from the far end of
+     its way out (a dispatch slot, the group, the route's farthest point) to its rally point. The dispatch mission's own
+     return leg (`returnSeq`) is never entered by the PC; it flies in the drone's layer, the same order as the RTL
+     heights within one dispatch, not re-planned with later solo drones.
+   - **Found in SITL 4.7.3:** Copter 4.7 moved RTL_ALT (cm) to RTL_ALT_M (m); a PARAM_SET of RTL_ALT is not answered.
+     The phone now sets both (followers, leads and solo drones alike) and reads back the one there is.
+   - **Parameter names audit (Copter 4.7.3 SITL, `SitlParamNamesTest`, instance 12):** renamed in 4.7 (4.6 name -> 4.7
+     name): SYSID_THISMAV -> MAV_SYSID, SYSID_MYGCS -> MAV_GCS_SYSID, RTL_ALT (cm) -> RTL_ALT_M (m), WPNAV_SPEED /
+     _UP / _DN (cm/s) -> WP_SPD / _UP / _DN (m/s), ATC_ACCEL_R / P / Y_MAX (cdeg/s/s) -> ATC_ACC_R / P / Y_MAX (deg/s/s).
+     Every other name DRAUPNE writes or reads (failsafes, battery, AVD_* / ADSB_TYPE, fence, rally, RC maps and options,
+     flight modes, serial ports, frame, filters, rates, motors, the phone's OSD reads) is there with the same units in
+     4.6.3 and 4.7.3 (checked in both sources). `ArduNames` plans each renamed one under both names: the board has one,
+     the other is listed "left out". ArduPilot hides AVD_* while AVD_ENABLE is 0 and BATT_* while BATT_MONITOR is 0:
+     planned against a fresh board, the avoidance's distances and action looked missing and were never written. Drone
+     setup now writes AVD_ENABLE first and looks for them again (it stops if they don't show); anything nothing on the
+     board stands for is listed first as NOT SET. The phone waited for OSD parameters a board without an OSD never has
+     (any version): with them it never asked for attitude, battery, GPS or position. It now gives up on the OSD after
+     10 s.
+   - **Open (not this round):** the phone reads at most 1100 bytes a datagram (`UdpCommon.packetLength`), so a
+     dispatch route of more than about 33 items (a steep slope) in one FleetCmd MissionBlock never arrives; the PC
+     says nothing and the drone stays on the ground.
+   - Tests: `ReturnHeightsTest`, `DispatchTest`, `RouteWindowTest`, `ReturnHeightsLoopbackTest`; real ArduPilot
+     `SitlReturnTest` (instances 10, 11).
 
 **The pilot GUI (area G), 2026-11-23:**
 - GU-1 - GU-7 built (the merges of `fleet-osd`, `fleet-ardx`, `fleet-tour`): words and FC type, right-click fleet items,

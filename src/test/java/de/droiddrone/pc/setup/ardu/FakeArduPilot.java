@@ -70,6 +70,7 @@ public final class FakeArduPilot implements MavSession.Wire {
         params.put("FS_GCS_TIMEOUT", 5f);
         params.put("FS_CRASH_CHECK", 1f);
         params.put("FS_VIBE_ENABLE", 1f);
+        params.put("FS_EKF_ACTION", 1f); // Copter's default: LAND
         params.put("BATT_CAPACITY", 3300f);
         params.put("BATT_LOW_VOLT", 10.5f);
         params.put("BATT_CRT_VOLT", 0f);

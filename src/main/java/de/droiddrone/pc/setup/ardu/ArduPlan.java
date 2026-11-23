@@ -26,6 +26,8 @@ import java.util.Map;
  *       ({@link CellVolts}); BATT_ARM_VOLT / BATT_ARM_MAH 0.</li>
  *   <li>No terrain data on the drone (RT-10): TERRAIN_ENABLE 0. Routes carry heights above sea level.</li>
  *   <li>Crash check disarms (AL-15): FS_CRASH_CHECK 1; vibration failsafe on (FS_VIBE_ENABLE 1).</li>
+ *   <li>GNSS lost (A5, AS-8): the EKF failsafe holds height and waits - FS_EKF_ACTION 2 (AltHold in a mode that needs a
+ *       position; Copter 4.6 and 4.7 alike), not 1 (its default: LAND).</li>
  *   <li>Avoidance of the other DRAUPNE drones, given as ADSB_VEHICLE by the PC (AC-11, FD-8): AVD_ENABLE 1, stop and
  *       hold (AVD_F_ACTION 6 = hover) inside 10 m sideways / 10 m height, warn inside 20 m; ADSB_TYPE 1 takes the
  *       messages. Not tried on a real drone.</li>
@@ -52,10 +54,28 @@ public final class ArduPlan {
         }
     }
 
-    /** One parameter that changes: its value now (NaN: the firmware has none), the new one, and why. */
-    public record Change(String name, float now, float to, String why) {
+    /**
+     * One parameter that changes: its value now (NaN: the firmware has none), the new one, and why. For one the firmware
+     * lacks: other - its other version's name, which the firmware has (this one is left out); shownBy - the enable that
+     * shows it, on now or written first by this plan (Drone setup looks for it again then).
+     */
+    public record Change(String name, float now, float to, String why, String other, String shownBy) {
+        public Change(String name, float now, float to, String why) {
+            this(name, now, to, why, null, null);
+        }
+
         public boolean missing() {
             return Float.isNaN(now);
+        }
+
+        /** Written: on the board now, or shown by an enable before it is written. */
+        public boolean writable() {
+            return !missing() || shownBy != null;
+        }
+
+        /** Missing with nothing to stand for it: not set on this board at all. */
+        public boolean notSet() {
+            return missing() && other == null && shownBy == null;
         }
 
         /** "RTL_ALT 1500 -> 3000  (come home 30 m up)" */
@@ -79,6 +99,7 @@ public final class ArduPlan {
         put(w, "FS_GCS_TIMEOUT", 5, "5 s without the phone's heartbeat");
         put(w, "FS_CRASH_CHECK", 1, "crash: disarm");
         put(w, "FS_VIBE_ENABLE", 1, "vibration failsafe on");
+        put(w, "FS_EKF_ACTION", 2, "GNSS lost: hold height, wait (A5)");
         // battery: warnings only, LAND at 3 %
         double low = CellVolts.LOW * c.cells(), crit = 3.0 * c.cells();
         put(w, "BATT_CAPACITY", c.capacityMah(), "pack size");
@@ -159,13 +180,24 @@ public final class ArduPlan {
     }
 
     /** Any set of wanted values (AS-6 ports, AS-7 tuning) against the FC's: what changes, the missing ones kept apart. */
-    public static List<Change> changes(Map<String, Wanted> all, Map<String, Float> now) {
+    public static List<Change> changes(Map<String, Wanted> wanted, Map<String, Float> now) {
+        Map<String, Wanted> all = ArduNames.withAliases(wanted); // Copter 4.7's names beside 4.6's: the board has one
         List<Change> out = new ArrayList<>();
         for (Map.Entry<String, Wanted> e : all.entrySet()) {
             Float have = now.get(e.getKey());
             float to = e.getValue().value();
             if (have != null && same(have, to)) continue;
-            out.add(new Change(e.getKey(), have == null ? Float.NaN : have, to, e.getValue().why()));
+            String other = null, shownBy = null;
+            if (have == null) {
+                ArduNames.Alias a = ArduNames.alias(e.getKey());
+                if (a != null && now.containsKey(a.name())) other = a.name();
+                String en = ArduNames.shownBy(e.getKey());
+                // its enable on the board and on, or turned on by this plan first: it shows then
+                Wanted turnOn = en == null ? null : all.get(en);
+                Float enNow = en == null ? null : now.get(en);
+                if (en != null && enNow != null && (enNow != 0 || turnOn != null && turnOn.value() != 0)) shownBy = en;
+            }
+            out.add(new Change(e.getKey(), have == null ? Float.NaN : have, to, e.getValue().why(), other, shownBy));
         }
         return out;
     }
@@ -175,11 +207,24 @@ public final class ArduPlan {
         return Math.abs(a - b) <= Math.max(1e-3f, Math.abs(b) * 1e-6f);
     }
 
-    /** The plan's lines for CONFIRM; the missing parameters last, marked. */
+    /**
+     * The plan's lines for CONFIRM: what nothing on this board stands for first (NOT SET - a failsafe or the avoidance
+     * missing is never silent), then the changes, those an enable shows, and last the other version's names left out.
+     */
     public static List<String> lines(List<Change> plan) {
         List<String> l = new ArrayList<>();
+        java.util.Set<String> said = new java.util.HashSet<>();
+        for (Change c : plan) {
+            if (!c.notSet() || said.contains(c.name())) continue;
+            ArduNames.Alias a = ArduNames.alias(c.name());
+            if (a != null) said.add(a.name());
+            String en = ArduNames.shownBy(c.name());
+            l.add("NOT SET: " + c.name() + (a == null ? "" : " / " + a.name()) + " - not on this board" + (en == null ? "" : " (" + en + " off)")
+                    + "  (" + c.why() + ")");
+        }
         for (Change c : plan) if (!c.missing()) l.add(c.line());
-        for (Change c : plan) if (c.missing()) l.add(c.name() + " - not in this firmware, left out");
+        for (Change c : plan) if (c.missing() && c.shownBy() != null) l.add(c.name() + " -> " + num(c.to()) + "  (" + c.why() + "; once " + c.shownBy() + " is on)");
+        for (Change c : plan) if (c.missing() && c.other() != null && c.shownBy() == null) l.add(c.name() + " - this firmware has " + c.other() + ", left out");
         return l;
     }
 

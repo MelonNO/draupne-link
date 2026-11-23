@@ -2345,7 +2345,7 @@ public class Udp {
                 // fleet RT-8: a whole route, uploaded to the FC over USB here (the pilot's session only)
                 int dataSize = buffer.getRemaining();
                 byte[] buf = new byte[dataSize];
-                if (buffer.read(buf, 0, dataSize) == dataSize) mavlink.missionBlock(de.droiddrone.common.MissionBlock.read(buf, 0, dataSize));
+                if (buffer.read(buf, 0, dataSize) == dataSize) mavlink.missionPart(buf, 0, dataSize); // one part of a block
                 break;
             }
             case MavTunnel.PACKET:

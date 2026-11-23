@@ -63,7 +63,9 @@ class ArduSetupTest {
         ArduPlan.Change adsb = plan.stream().filter(x -> x.name().equals("ADSB_TYPE")).findFirst().orElseThrow();
         assertTrue(adsb.missing());
         List<String> lines = ArduPlan.lines(plan);
-        assertTrue(lines.get(lines.size() - 1).contains("not in this firmware"), "missing ones last");
+        assertTrue(lines.get(0).startsWith("NOT SET: ") && lines.get(1).startsWith("NOT SET: ADSB_TYPE"), "what nothing stands for: said first " + lines);
+        assertTrue(lines.get(lines.size() - 1).contains("this firmware has"), "the other version's names last " + lines);
+        assertTrue(lines.contains("RTL_ALT_M - this firmware has RTL_ALT, left out"), lines.toString());
         assertTrue(lines.stream().anyMatch(l -> l.startsWith("RTL_ALT 1500 -> 3000")), lines.toString());
     }
 

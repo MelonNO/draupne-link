@@ -162,13 +162,22 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   MISSION_ITEM_INT, MISSION_ACK, MISSION_CURRENT, MISSION_ITEM_REACHED, COMMAND_ACK, POSITION_TARGET_GLOBAL_INT,
   HOME_POSITION, LOG_ENTRY, LOG_DATA) and its HEARTBEAT, one frame a packet, only while the PC sent a tunnel frame in
   the last 30 s.
-- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only; or inside a `FleetCmd`):
-  `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][count u16]` then per item `[frame u8]
-  [command u16][autocontinue u8][p1..p4 f32][x i32][y i32][z f32]` (`MissionItem.pack`, 28 bytes an item, at most
-  1500). The length must be exactly 6 + 28 x count (a count lower than the items sent would upload a cut route); an
-  empty route is no block, an empty fence or rally list clears it. The PC sends it every second until telemetry record
-  **0x40E1** `[block id u16][state u8][percent u8][reason length u8][ASCII, at most 120]` names it (state: 1 uploading,
-  2 reading back, 3 done, 4 failed), then again after 2 s without a new status (the phone says an upload's end once).
+- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only; or inside a `FleetCmd`), **in parts**:
+  the phone reads at most 1100 bytes of a datagram (`UdpCommon.packetLength`; a Tailscale path carries about 1250),
+  and a block in one datagram over about 33 items was cut and dropped, nothing said. Each part is a datagram of its
+  own: `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][part u8][parts u8][block CRC-32 u32]
+  [items in the block u16][first item u16][items here u8]` then per item `[frame u8][command u16][autocontinue u8]
+  [p1..p4 f32][x i32][y i32][z f32]` (28 bytes), at most 30 items a part: 855 bytes, 921 inside a `FleetCmd` with a
+  64-byte key (`FleetCmd.wrap` refuses anything over 1100). Parts = max(1, ceil(items / 30)), part i starts at item
+  30 i, its length exactly 15 + 28 x its items; at most 1500 items (50 parts). The CRC-32 is over the whole block's
+  `MissionItem.pack` and its type: the phone (`MissionBlock.Assembler`) uploads a block only when every part has come
+  and they make that block; parts may come lost, twice or out of order; a part with other numbers under the same id
+  starts that block anew; a few blocks are gathered at once. An empty route is no block, an empty fence or rally list
+  (one part, no items) clears it. The PC sends every part each second until telemetry record **0x40E1** `[block id
+  u16][state u8][percent u8][reason length u8][ASCII, at most 120]` names the block with a state past 5 (state: 5
+  receiving its parts - percent of the parts, the PC sends them all again; 1 uploading, 2 reading back, 3 done, 4
+  failed), then the first part again after 2 s without a new status (the phone answers every part of a block it has
+  with that block's status; it says an upload's end once).
   The phone runs the mission protocol with the FC over USB and reads every item back (a route's item 0 is the FC's
   home: not compared; a parameter sent NaN ("its default") matches what is read back; a frame matches its plain twin - 6 reads back as 3, MISSION as GLOBAL). One upload at a time (`MissionBlockQueue`): a block of the
   list under way replaces it (the replaced one: failed, "replaced by a newer one"); a block of another list waits its
@@ -184,19 +193,29 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
 
 ## Fleet packets (the `fleet` branch: a PC and the drones it commands but does not pilot)
 
+Datagram sizes: the phone reads at most 1100 bytes of a datagram (`UdpCommon.packetLength`), a Tailscale path carries
+about 1250. Every fleet datagram fits: a `FleetCmd` is 2 + key (at most 64) + its inner packet - GroupOrder 49, ExitPlan
+25, LAUNCH 26, TRAFFIC at most 194, CLEAR 13, MARK 7, LEAD 4, RETURN 3, a `MissionBlock` part at most 855 (921 in all;
+`FleetCmd.wrap` refuses over 1100); `FleetStatus` 36; LAUNCH_STATUS 18; `FcCommand` at most 10; the tunnel carries one
+MAVLink frame (at most 280 bytes) a datagram each way. Only a `MissionBlock` could ever be longer: it goes in parts.
+
 - **`FleetCmd` 0x34** (PC to phone, unnumbered, the drone's commander only - `FleetCommandGate`):
   `[0x34][key length u8, 1..64][key UTF-8][one inner packet]`. Inner packets: `FcCommand` 0x30, `MissionBlock` 0x33,
   GROUP `[0x35][GroupOrder]`, EXIT `[0x36][ExitPlan]`, LAUNCH `[0x37][LaunchWire order]`, TRACK `[0x39][seconds u8]`,
   LEAD `[0x3A][lead u8][RTL height above home dm u16]` (0: RTL_ALT left as it is - the hand-over names the lead before
   its return height is known; RTL_ALT 0 would be ArduPilot's "home at the height it has"), CLEAR `[0x3B][lat i32][lon
   i32][height above sea level dm i32]` (0 / 0 or off the globe refused; the PC's writer sends nonsense so), DISBAND
-  `[0x3C]`, MARK `[0x3D][mark id i32][floor dm u16]` (0 clears). The commander: a pilot session's PC, else the PC that
+  `[0x3C]`, MARK `[0x3D][mark id i32][floor dm u16]` (0 clears), RETURN `[0x40][RTL height above home dm u16]` (RT-9 /
+  FD-6: the phone sets RTL_ALT by PARAM_SET and its reports carry what ArduPilot answered; 0 changes nothing; also from
+  the pilot session's PC). The commander: a pilot session's PC, else the PC that
   piloted or commanded it last; another only with the FC known DISARMED and the commander silent 10 s.
 - **`FleetStatus` 0x38** (phone to its commander, twice a second while commanded): `[0x38][version 1][lat i32 1e-7]
   [lon i32][height above sea level dm i32][vel east, north, up cm/s i16][battery % u8, 255 not known][flags u8: 1 armed,
   2 GNSS 3D, 4 landed (known DISARMED: a stale heartbeat is neither), 8 piloted, 16 PC heard][ArduPilot mode u8, 255 not
   known][follower phase u8, 255 none][error radius dm u16][home height above sea level dm i32][the PC's newest route
-  block u16][its state u8][percent u8]`, 34 bytes. Numbers past a field's range are saturated, never wrapped.
+  block u16][its state u8][percent u8][RTL_ALT dm u16, 65535 not known]`, 36 bytes - RTL_ALT as the FC last answered
+  it (PARAM_VALUE), the PC's check that a RETURN is on the drone; an older PC reads 34, a 34-byte report (an older
+  phone) reads as not known. Numbers past a field's range are saturated, never wrapped.
 - **LAUNCH_STATUS `0x3E`** (phone to its commander): `[0x3E][LaunchWire status]`. `LaunchWire` order `[version 1][kind
   u8: 1 launch, 2 cancel][mark id i32][call id u16][approach height dm u16][floor dm u16][column lat i32][lon i32,
   i32 min = not known][lead sysid u8][join layer u8][join cell u8][min battery % u8][CRC-8]`, 25 bytes; status

@@ -24,7 +24,12 @@ public final class Dispatch {
 
     /** One drone's part: its slot, its layer above the route height, its mission, its first height, when it launches. */
     public record Leg(String name, double slotLat, double slotLon, double layerM, MissionBuilder.Mission mission,
-                      double climbToM, double launchAfterS) {}
+                      double climbToM, double launchAfterS, double rtlMinM) {
+        public Leg(String name, double slotLat, double slotLon, double layerM, MissionBuilder.Mission mission, double climbToM,
+                   double launchAfterS) {
+            this(name, slotLat, slotLon, layerM, mission, climbToM, launchAfterS, Double.NaN);
+        }
+    }
 
     private Dispatch() {
     }
@@ -51,7 +56,17 @@ public final class Dispatch {
      */
     public static List<Leg> plan(List<Drone> drones, double targetLat, double targetLon, double heightM, TerrainSource terrain,
                                  RoutePlanner.Limits limits) throws RoutePlanner.MissingTerrain {
-        return plan(drones, targetLat, targetLon, heightM, terrain, limits, 0);
+        return plan(drones, targetLat, targetLon, heightM, terrain, limits, java.util.Map.of(), 0);
+    }
+
+    /**
+     * As above, each leg with its RT-9 return height ({@link Leg#rtlMinM}, m above home): over the highest ground on the
+     * straight lines from its route to its home and to its rally point (rallies: {lat, lon} by name; none: home), clear
+     * by the drone's own route height (its layer, AC-3 / AC-10).
+     */
+    public static List<Leg> plan(List<Drone> drones, double targetLat, double targetLon, double heightM, TerrainSource terrain,
+                                 RoutePlanner.Limits limits, java.util.Map<String, double[]> rallies) throws RoutePlanner.MissingTerrain {
+        return plan(drones, targetLat, targetLon, heightM, terrain, limits, rallies, 0);
     }
 
     /**
@@ -59,7 +74,8 @@ public final class Dispatch {
      *                   DISPATCH - this one's drones go above them (before, a second DISPATCH reused the first's layers)
      */
     public static List<Leg> plan(List<Drone> drones, double targetLat, double targetLon, double heightM, TerrainSource terrain,
-                                 RoutePlanner.Limits limits, int firstLayer) throws RoutePlanner.MissingTerrain {
+                                 RoutePlanner.Limits limits, java.util.Map<String, double[]> rallies, int firstLayer)
+            throws RoutePlanner.MissingTerrain {
         List<double[]> free = slots(targetLat, targetLon, drones.size());
         List<Leg> legs = new ArrayList<>();
         List<double[]> missing = new ArrayList<>();
@@ -79,7 +95,9 @@ public final class Dispatch {
                 RoutePlanner.Plan p = RoutePlanner.plan(r, new double[]{d.lat(), d.lon()}, false, terrain, limits);
                 MissionBuilder.Mission m = MissionBuilder.build(p, d.lat(), d.lon(), d.homeAmsl());
                 double first = p.out().waypoints().isEmpty() ? heightM : p.out().waypoints().get(0).altAmslM() - d.homeAmsl();
-                legs.add(new Leg(d.name(), slot[0], slot[1], layer * LAYER_M, m, Math.max(first, heightM + layer * LAYER_M), k * STAGGER_S));
+                double[] to = rallies.getOrDefault(d.name(), new double[]{d.lat(), d.lon()});
+                double rtl = RoutePlanner.rtlAltCm(p, terrain, d.lat(), d.lon(), to[0], to[1], heightM + layer * LAYER_M) / 100.0;
+                legs.add(new Leg(d.name(), slot[0], slot[1], layer * LAYER_M, m, Math.max(first, heightM + layer * LAYER_M), k * STAGGER_S, rtl));
             } catch (RoutePlanner.MissingTerrain e) {
                 missing.addAll(e.nodes());
             }

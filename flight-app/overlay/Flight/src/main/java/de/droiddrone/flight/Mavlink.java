@@ -578,6 +578,7 @@ public class Mavlink {
         s.battery = batteryPercent;
         s.mode = customModeNow < 0 || customModeNow > 254 ? 255 : customModeNow;
         s.homeAmsl = Double.isNaN(homeAmslM) ? 0 : homeAmslM;
+        s.rtlAltDm = rtlAltCmRead < 0 ? -1 : (int) Math.round(rtlAltCmRead / 10.0); // RT-9: as ArduPilot answered
         if (armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.ARMED;
         if (gnssOk()) s.flags |= de.droiddrone.common.FleetStatus.GNSS;
         if (disarmedKnown(now)) s.flags |= de.droiddrone.common.FleetStatus.LANDED; // a stale heartbeat is neither
@@ -616,6 +617,9 @@ public class Mavlink {
                 0f, mask, targetSys(), targetComponent, FRAME_GLOBAL_INT, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
 
+    /** RTL_ALT (cm) as the FC last answered it (PARAM_VALUE); -1 not known. Fleet RT-9: the PC's check before a launch. */
+    private volatile float rtlAltCmRead = -1;
+
     /** RTL_ALT (cm above home) for the follower's or lead's way home (AC-41). */
     void setRtlAltM(double relM) {
         byte[] id = new byte[16];
@@ -623,6 +627,8 @@ public class Mavlink {
         System.arraycopy(n, 0, id, 0, n.length);
         send(new com.MAVLink.common.msg_param_set((float) Math.round(relM * 100), targetSys(), targetComponent, id, (short) 9,
                 config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+        // Copter 4.7 moved RTL_ALT (cm) to RTL_ALT_M (m): both asked, the firmware answers the one it has (found in SITL 4.7.3)
+        setParam("RTL_ALT_M", (float) (Math.round(relM * 10) / 10.0));
     }
 
     // ---- fleet area F: what the launch reads and does
@@ -706,8 +712,25 @@ public class Mavlink {
     private int saidBlock = -1, saidState = -1;
     private long saidAt;
 
-    /** A route, fence or rally block from the PC (the buffer thread): started, queued, or answered with its status. */
-    public void missionBlock(de.droiddrone.common.MissionBlock b) {
+    /** The parts of the PC's blocks: a block goes to the uploads only whole and matching its CRC-32 (MissionBlock.Assembler). */
+    private final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();
+
+    /**
+     * A part of a route, fence or rally block from the PC (the pilot's buffer thread, or a FleetCmd on the receive thread),
+     * the payload after its packet byte: gathered; a whole block is started, queued, or answered with its status - and
+     * every part is answered (RECEIVING with the percent of its parts, until the block is whole).
+     */
+    public void missionPart(byte[] d, int off, int len) {
+        if (!isArduPilot()) return;
+        de.droiddrone.common.MissionBlock.Part p = de.droiddrone.common.MissionBlock.readPart(d, off, len);
+        if (p == null) return;
+        de.droiddrone.common.MissionBlock b = parts.offer(p);
+        if (b != null) missionBlock(b);
+        else say(p.blockId);
+    }
+
+    /** A whole block: started, queued, or answered with its status. */
+    private void missionBlock(de.droiddrone.common.MissionBlock b) {
         if (b == null || !isArduPilot()) return;
         if (uploads.offer(b, android.os.SystemClock.elapsedRealtime())) say(b.blockId);
         // AC-10: the PC's rally point for a drone it sends out - its RTL goes there, not home
@@ -801,7 +824,11 @@ public class Mavlink {
     /** A PC block's status to the PC (MissionBlock.STATUS_RECORD); its end in the log. */
     private void say(int block) {
         int[] s = uploads.status(block);
-        if (s == null) return;
+        if (s == null) { // not whole yet: the percent of its parts here
+            int got = parts.percent(block);
+            if (got < 0) return;
+            s = new int[]{de.droiddrone.common.MissionBlock.RECEIVING, got};
+        }
         String reason = uploads.reason(block);
         if ((block != saidBlock || s[0] != saidState) && (s[0] == de.droiddrone.common.MissionUpload.DONE || s[0] == de.droiddrone.common.MissionUpload.FAILED)) {
             log("Upload " + block + ": " + (s[0] == de.droiddrone.common.MissionUpload.DONE ? "done, read back" : "FAILED - " + reason));
@@ -1005,6 +1032,8 @@ public class Mavlink {
                     }
                     case msg_param_value.MAVLINK_MSG_ID_PARAM_VALUE: {
                         msg_param_value message = new msg_param_value(packet);
+                        if ("RTL_ALT".equals(message.getParam_Id())) rtlAltCmRead = message.param_value; // DRAUPNE Link (fleet RT-9)
+                        if ("RTL_ALT_M".equals(message.getParam_Id())) rtlAltCmRead = message.param_value * 100; // Copter 4.7
                         if (fcParams == null) break;
                         fcParams.setParam(message.getParam_Id(), message.param_value);
                         break;
@@ -1406,7 +1435,21 @@ public class Mavlink {
             if (mavlink.fcVariant == FcInfo.FC_VARIANT_PX4) initializeFcConfigPx4();
         }
 
+        /**
+         * DRAUPNE Link (fleet): when the phone first asked for the FC's config (elapsedRealtime, 0 not yet). ArduPilot hides
+         * the OSD's parameters while OSD_TYPE is 0 (a board without an OSD chip, a digital link): asked for in vain, they
+         * kept the config from ever counting as read - and with it the telemetry (attitude, battery, GPS, position) was
+         * never asked for. After {@link #OSD_WAIT_MS} the OSD's count as off; the stick map (RCMAP_*) is still waited for.
+         */
+        private long configAskedAt;
+        static final long OSD_WAIT_MS = 10_000;
+
+        private boolean osdGivenUp() {
+            return configAskedAt != 0 && android.os.SystemClock.elapsedRealtime() - configAskedAt > OSD_WAIT_MS;
+        }
+
         private void initializeFcConfigAp(){
+            if (configAskedAt == 0) configAskedAt = android.os.SystemClock.elapsedRealtime(); // DRAUPNE Link (fleet)
             new Thread(() -> {
                 if (!osd1EnabledReceived) mavlink.requestFcParameter(FcCommon.AP_PARAM_OSD1_ENABLE);
                 if (!osd1TxtResReceived) mavlink.requestFcParameter(FcCommon.AP_PARAM_OSD1_TXT_RES);
@@ -1460,14 +1503,15 @@ public class Mavlink {
         }
 
         private boolean isFcConfigInitializedAp(){
-            if (!osd1EnabledReceived || !osd1TxtResReceived || !osdUnitsReceived
-                    || !osdMsgTimeReceived || !osdWarnRssiReceived || !osdWarnNumSatReceived
-                    || !osdWarnBatVoltReceived || !osdWarnAvgCellVoltReceived || !osdCellCountReceived
-                    || !rcMapPitchReceived || !rcMapRollReceived
+            if (!rcMapPitchReceived || !rcMapRollReceived
                     || !rcMapThrottleReceived || !rcMapYawReceived) return false;
             for (RcOptionParam item : rcOptionParams){
                 if (!item.isInitialized()) return false;
             }
+            if (osdGivenUp()) return true; // DRAUPNE Link (fleet): no OSD on this board - its parameters never come
+            if (!osd1EnabledReceived || !osd1TxtResReceived || !osdUnitsReceived
+                    || !osdMsgTimeReceived || !osdWarnRssiReceived || !osdWarnNumSatReceived
+                    || !osdWarnBatVoltReceived || !osdWarnAvgCellVoltReceived || !osdCellCountReceived) return false;
             for (OsdItemParam item : osdItems){
                 if (!item.isInitialized()) {
                     return false;

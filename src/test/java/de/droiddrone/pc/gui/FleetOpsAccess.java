@@ -140,6 +140,15 @@ public final class FleetOpsAccess {
         javax.swing.SwingUtilities.invokeAndWait(() -> { }); // its action ran on Swing's thread
     }
 
+    /** RT-9 / FD-6: the RTL height planned for a drone out alone (m above home), NaN none. */
+    public double returnHeightOf(String drone) {
+        return ops.returnHeightOf(drone);
+    }
+
+    public boolean returnOnDrone(String drone) {
+        return ops.returnOnDrone(drone);
+    }
+
     public void close() {
         ops.close();
         if (radioLink != null) radioLink.close();

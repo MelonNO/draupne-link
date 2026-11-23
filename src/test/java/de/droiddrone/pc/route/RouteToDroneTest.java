@@ -32,13 +32,17 @@ class RouteToDroneTest {
         final List<MissionItem> onFc = new ArrayList<>();
         MissionUpload upload;
         int block = -1;
+        final MissionBlock.Assembler parts = new MissionBlock.Assembler();
         int dropFirst;
         boolean refuse;
 
         boolean take(byte[] packet) {
             if (dropFirst-- > 0) return true; // sent, lost on the way
-            MissionBlock b = MissionBlock.read(packet, 1, packet.length - 1);
-            assertNotNull(b);
+            MissionBlock.Part part = MissionBlock.readPart(packet, 1, packet.length - 1);
+            assertNotNull(part, "every part fits and reads");
+            assertTrue(packet.length <= de.droiddrone.common.UdpCommon.packetLength, packet.length + " bytes");
+            MissionBlock b = parts.offer(part);
+            if (b == null) return true; // more parts to come (the phone says RECEIVING; not needed here)
             if (b.blockId != block) {
                 block = b.blockId;
                 onFc.clear();
@@ -104,14 +108,14 @@ class RouteToDroneTest {
         Phone phone = new Phone();
         phone.dropFirst = 1;
         List<MissionItem> items = route(100);
-        byte[] packet = MissionBlock.packet(7, items);
+        List<byte[]> packet = MissionBlock.packets(7, MissionUpload.TYPE_MISSION, items);
         AtomicInteger sends = new AtomicInteger();
         RouteSender.Result r = RouteSender.run(7, packet, p -> {
             sends.incrementAndGet();
             return phone.take(p);
         }, phone.pcSide::getRouteUpload, null);
         assertTrue(r.done(), r.text());
-        assertEquals(2, sends.get(), "the lost block sent again, then no more");
+        assertEquals(8, sends.get(), "100 items in 4 parts; the first lost: all 4 again, then no more");
         assertEquals(100, phone.onFc.size());
         for (int i = 0; i < 100; i++) assertTrue(items.get(i).sameAs(phone.onFc.get(i)), "item " + i);
         assertTrue(r.text().contains("100 points"), r.text());
@@ -121,7 +125,7 @@ class RouteToDroneTest {
     void aRefusalSaysWhy() throws Exception {
         Phone phone = new Phone();
         phone.refuse = true;
-        RouteSender.Result r = RouteSender.run(9, MissionBlock.packet(9, route(5)), phone::take, phone.pcSide::getRouteUpload, null);
+        RouteSender.Result r = RouteSender.run(9, List.of(MissionBlock.packet(9, route(5))), phone::take, phone.pcSide::getRouteUpload, null);
         assertFalse(r.done());
         assertTrue(r.text().startsWith("Route upload failed"), r.text());
     }

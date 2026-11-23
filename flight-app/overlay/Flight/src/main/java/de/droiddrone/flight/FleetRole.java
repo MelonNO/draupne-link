@@ -100,7 +100,7 @@ final class FleetRole {
                 break;
             }
             case MissionBlock.PACKET:
-                m.missionBlock(MissionBlock.read(c.data, c.at + 1, c.length - 1));
+                m.missionPart(c.data, c.at + 1, c.length - 1); // one part of a block (MissionBlock.Assembler)
                 break;
             case FleetCmd.GROUP: {
                 GroupOrder o = GroupOrder.decode(c.data, c.at + 1);
@@ -161,6 +161,11 @@ final class FleetRole {
             case FleetCmd.TRAFFIC: // FD-8 / AC-11: the other drones to the FC as ADS-B targets (the lead's too)
                 m.adsbTraffic(de.droiddrone.common.group.Traffic.decode(c.data, c.at + 1, c.length - 1));
                 break;
+            case FleetCmd.RETURN: { // RT-9 / FD-6: its RTL_ALT; the reports say what ArduPilot answered
+                double h = FleetCmd.readReturnHeight(c);
+                if (h > 0) m.setRtlAltM(h);
+                break;
+            }
             case FleetCmd.TRACK:
                 if (c.length >= 2) reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 break;
