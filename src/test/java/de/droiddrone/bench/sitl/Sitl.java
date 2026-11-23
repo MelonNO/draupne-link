@@ -233,10 +233,13 @@ public final class Sitl {
         }
     }
 
-    /** MSP_FC_VERSION as "4.4.1". */
+    /** MSP_FC_VERSION as "4.4.1" - or "2025.12.5" for the 25.12.5 that Betaflight 2025.12.5 says. */
     public static String version(BetaflightUsb fc) throws IOException {
         byte[] v = fc.msp(Msp.FC_VERSION, null);
-        return v.length < 3 ? "?" : (v[0] & 0xff) + "." + (v[1] & 0xff) + "." + (v[2] & 0xff);
+        if (v.length < 3) return "?";
+        int major = v[0] & 0xff;
+        // Betaflight 2025.12 on says its year in two digits (25.12.5): named as its release is (2025.12.5), as bench.ps1 starts it
+        return (major >= 25 ? 2000 + major : major) + "." + (v[1] & 0xff) + "." + (v[2] & 0xff);
     }
 
     /**
@@ -278,8 +281,32 @@ public final class Sitl {
         List<String> said = new ArrayList<>();
         try (BetaflightUsb fc = open(log)) {
             if (Msp.armed(fc.msp(Msp.STATUS, null))) throw new IOException("SITL is armed: not set up");
+            if (version(fc).startsWith("4.3.")) {
+                // 4.3's SITL ends with a segmentation fault a second after it starts with a GPS on a UART (tools\sitl\sitl.sh
+                // patches that from 4.4 on only), and it has no GPS rescue (its SITL target leaves it out): no GPS, failsafe DROP
+                lines.removeIf(l -> l.startsWith("serial 2 ") || l.equals("feature GPS") || l.startsWith("set failsafe_procedure"));
+                lines.add(4, "set failsafe_procedure = DROP");
+                said.add("(Betaflight 4.3 as a program: no GPS on UART3 - its SITL crashes with one - and failsafe DROP, it has no GPS rescue)");
+            }
             fc.enterCli();
             for (String line : lines) {
+                // a setting this Betaflight does not have is left out and said, as Drone setup does it (GpsSetup.armingWithoutFixPlan:
+                // "get" first) - 4.3.2 has no gps_rescue_allow_arming_without_fix, its "set" was refused (2026-11-23)
+                if (line.startsWith("set ")) {
+                    String name = line.substring(4, line.indexOf('=')).trim();
+                    String now = fc.command("get " + name);
+                    if (!now.contains(name + " = ")) { // (not "refused": 4.5's list of debug modes has AC_ERROR in it)
+                        said.add("(" + name + " left out: this Betaflight does not have it - \"get\" said " + now.strip().replaceAll("\\s+", " ") + ")");
+                        continue;
+                    }
+                    // a value it does not offer (4.3.2 has no debug_mode FAILSAFE): left out too
+                    String value = line.substring(line.indexOf('=') + 1).trim();
+                    java.util.regex.Matcher allowed = java.util.regex.Pattern.compile("Allowed values:\\s*(.*)").matcher(now);
+                    if (allowed.find() && !java.util.Arrays.asList(allowed.group(1).trim().split("\\s*,\\s*")).contains(value)) {
+                        said.add("(" + line + " left out: this Betaflight offers " + name + " " + allowed.group(1).trim() + ")");
+                        continue;
+                    }
+                }
                 taken(fc, line);
                 said.add(line);
             }

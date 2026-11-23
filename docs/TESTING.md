@@ -399,9 +399,9 @@ what a simulator sends it, no battery (it reads 0 V), and motors by PWM only. No
 
 ```
 .\bench.ps1 sitl                         the suite on 4.4.1 (the drone's version): SITL started before it, stopped after
-.\bench.ps1 sitl -Betaflight 4.5.5       on another version (4.5.5, 2025.12.5; 4.3.2 has no GPS rescue in SITL)
+.\bench.ps1 sitl -Betaflight 4.5.5       on another version (4.3.2, 4.5.5, 2025.12.5): what a version cannot show is skipped, with why
 tools\sitl\build.ps1 -Version 4.4.1      built from Betaflight's tag (-All: 4.4.1, 4.5.5, 2025.12.5, 4.3.2); a minute each
-tools\sitl\start.ps1 -Version 4.4.1 -Feed   one started by hand; returns when it answers MSP, says its folder
+tools\sitl\start.ps1 -Version 4.4.1 -Feed   one started by hand; returns when it answers MSP through its forwarder, says its folder
 tools\sitl\status.ps1                    which runs, where, how often it was started; which are built
 tools\sitl\stop.ps1                      ended
 gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand against it
@@ -510,6 +510,16 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   not back for 10 s gets SITL restarted by MSP's reboot over a port that answers. The scenario ends with the CLI's
   `defaults`: the next scenario finds the board as a fresh run starts it (CONFIRM puts PREARM on AUX3, which no other
   scenario's sticks raise - NOPREARM).
+- **Other versions** (`-Betaflight 4.3.2 / 4.5.5 / 2025.12.5`, 2026-11-23). `Sitl.likeTheDrone` asks `get` for each
+  setting first and leaves out, and says, what that Betaflight does not have (4.3.2: no
+  gps_rescue_allow_arming_without_fix), as Drone setup does. 4.3's SITL ends with a segmentation fault a second after
+  it starts with a GPS on a UART (sitl.sh patches that from 4.4 on) and has no GPS rescue: there no GPS, failsafe
+  DROP. 2025.12 says its version as 25.12.5 over MSP: `Sitl.version` names it 2025.12.5. A scenario a version cannot
+  show is skipped with why, never failed: Drone setup on an armed board on all but 4.4 (no MSP arming lock in SITL
+  from 4.5 on), the failsafe on a SITL with no GPS RESCUE; the keeper on 4.5 on checks only that it opens no window.
+  2025.12.5 "did not answer MSP on 127.0.0.1:5761 within 30 s" (22 and 23 Nov) looks like WSL's forwarding again: no
+  connection reached it in those 30 s (no "New connection" in its sitl.log); started by hand it answered at once,
+  inside WSL and from Windows. start.ps1 now waits for Betaflight through its forwarder, there before Betaflight is.
 
 ## For whoever adds a scenario
 

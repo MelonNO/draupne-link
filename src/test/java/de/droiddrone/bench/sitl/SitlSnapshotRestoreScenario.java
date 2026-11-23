@@ -87,9 +87,20 @@ class SitlSnapshotRestoreScenario {
 
             // ---- the restore
             BoardRestore.Report restored = again("the restore", () -> BoardRestore.run(Sitl.BOARD, snapshot, new BoardRestore.Options(false, false, false, boardRoot, Sitl.TIMING), film::remark));
+            String notes = String.valueOf(restored.notes());
+            boolean savedFirst = restored.saved();
+            if (restored.left() == null && notes.contains("could not be read again") && (!notes.contains("does not answer") || Sitl.revive(film::remark))) {
+                // saved, and then not read again: SITL took no connection after that restart (revived), or its two "dump all"
+                // came back different - the restore once more (it is the same when made twice)
+                film.remark("the restore: saved, but not read again (" + (notes.contains("does not answer") ? "no connection after its restart: revived"
+                        : "its two reads differed") + ") - the restore once more");
+                restored = again("the restore", () -> BoardRestore.run(Sitl.BOARD, snapshot, new BoardRestore.Options(false, false, false, boardRoot, Sitl.TIMING), film::remark));
+            }
             film.add("restore: saved=" + restored.saved() + ", stopped=" + restored.stopped() + ", left=" + restored.left() + ", notes=" + restored.notes(), null, "sitl", "");
             check(restored.refused() == null, "the restore was not refused: " + restored.refused());
-            check(restored.saved(), "every line of the snapshot's dump all was taken and saved");
+            // (made once more after a restart that took no connection: the first had saved, the second finds nothing left to write)
+            check(restored.saved() || savedFirst && restored.left() != null && restored.left().isEmpty(), "every line of the snapshot's dump all was taken and saved"
+                    + (savedFirst && !restored.saved() ? " (by the first restore; the second found the board as the snapshot)" : ""));
             check(restored.asSnapshot(), "after the restore its dump all and MSP facts are the snapshot's: " + restored.left());
 
             BoardRestore.Report again = again("compare-only after the restore", () -> BoardRestore.run(Sitl.BOARD, snapshot, new BoardRestore.Options(false, false, true, boardRoot, Sitl.TIMING), film::remark));
@@ -120,8 +131,17 @@ class SitlSnapshotRestoreScenario {
             try {
                 return read.call();
             } catch (java.io.IOException e) {
-                if (attempt == 3 || !String.valueOf(e.getMessage()).contains("read differently twice")) throw e;
-                film.remark(what + ": " + e.getMessage() + " - read again (" + attempt + " of 3): SITL's TCP stand-in garbles a long answer now and then");
+                String why = String.valueOf(e.getMessage());
+                if (attempt == 3) throw e;
+                if (why.contains("read differently twice")) {
+                    film.remark(what + ": " + why + " - read again (" + attempt + " of 3): SITL's TCP stand-in garbles a long answer now and then");
+                } else if (why.contains("does not answer") && Sitl.revive(film::remark)) {
+                    // after the restore's save SITL took no connection for a minute now and then (4.4.1 and 4.5.5, 2026-11-23,
+                    // through the forwarder too): revived, the step again - a restore is the same when made twice
+                    film.remark(what + ": " + why + " - SITL revived, the step again (" + attempt + " of 3)");
+                } else {
+                    throw e;
+                }
             }
         }
     }

@@ -52,25 +52,23 @@ $p = Start-Process -FilePath 'wsl.exe' -ArgumentList $words -WindowStyle Hidden 
     -RedirectStandardOutput (Join-Path $Run 'supervisor.out') -RedirectStandardError (Join-Path $Run 'supervisor.err')
 Set-Content -Path (Join-Path $Run 'wsl.pid') -Value $p.Id -Encoding ascii
 $until = (Get-Date).AddSeconds($TimeoutSec)
-$api = $null
+# Betaflight answering through its forwarder (sitl.sh, forwarder.py) - the bench connects there, and the forwarder's
+# port is there before Betaflight's: WSL's forwarding of 127.0.0.1 took up SITL's own new port late or not at all
+# now and then (2025.12.5, 2026-11-23: no connection reached it on 5761 for 30 s; started again it answered at once)
+$fwdApi = $null
 while ((Get-Date) -lt $until -and -not $p.HasExited) {
-    $api = Get-SitlApi $Port
-    if ($api) { break }
+    $fwdApi = Get-SitlApi $SitlForwardPort
+    if ($fwdApi) { break }
     Start-Sleep -Milliseconds 300
 }
-if (-not $api) {
+if (-not $fwdApi) {
     $why = @(Get-Content (Join-Path $Run 'supervisor.err') -ErrorAction SilentlyContinue) + @(Get-Content (Join-Path $Run 'sitl.log') -Tail 8 -ErrorAction SilentlyContinue)
     if (-not $p.HasExited) { & (Join-Path $PSScriptRoot 'stop.ps1') | Out-Null }
-    throw ("Betaflight $Version did not answer MSP on 127.0.0.1:$Port within $TimeoutSec s. " + ($why -join ' | '))
+    throw ("Betaflight $Version did not answer MSP through its forwarder on 127.0.0.1:$SitlForwardPort within $TimeoutSec s. " + ($why -join ' | '))
 }
-# the forwarder (sitl.sh, forwarder.py): its port in front of UART1 answers too - the bench connects there
-$fwdApi = $null
-$until = (Get-Date).AddSeconds(10)
-while ((Get-Date) -lt $until -and -not $fwdApi) {
-    $fwdApi = Get-SitlApi $SitlForwardPort
-    if (-not $fwdApi) { Start-Sleep -Milliseconds 300 }
-}
-Set-Content -Path (Join-Path $Run 'start.txt') -Encoding utf8 -Value @("version=$Version", "folder=$Run", "msp=127.0.0.1:$Port", "api=$api", "wsl=$($p.Id)",
-    "feed=$([bool]$Feed)", "forwarder=127.0.0.1:$SitlForwardPort $(if ($fwdApi) { 'answers' } else { 'DOES NOT ANSWER' })", "started=$((Get-Date).ToString('s'))")
-Write-Host ("Betaflight $Version (SITL) answers MSP $api on 127.0.0.1:$Port, " + $(if ($fwdApi) { "and through its forwarder on 127.0.0.1:$SitlForwardPort" } else { "but NOT through its forwarder on 127.0.0.1:$SitlForwardPort" }) + "; its folder: $Run")
+# its own port, said only: the scenarios do not use it
+$api = Get-SitlApi $Port
+Set-Content -Path (Join-Path $Run 'start.txt') -Encoding utf8 -Value @("version=$Version", "folder=$Run", "msp=127.0.0.1:$SitlForwardPort (forwarder)", "api=$fwdApi",
+    "own=127.0.0.1:$Port $(if ($api) { 'answers' } else { 'does not answer from Windows' })", "wsl=$($p.Id)", "feed=$([bool]$Feed)", "started=$((Get-Date).ToString('s'))")
+Write-Host ("Betaflight $Version (SITL) answers MSP $fwdApi through its forwarder on 127.0.0.1:$SitlForwardPort" + $(if ($api) { ", and on its own 127.0.0.1:$Port" } else { " (its own 127.0.0.1:$Port does not answer from Windows)" }) + "; its folder: $Run")
 Write-Output $Run

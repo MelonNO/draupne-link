@@ -122,6 +122,12 @@ class SitlFailsafeScenario {
                 boxIds = new int[ids.length];
                 for (int i = 0; i < ids.length; i++) boxIds[i] = ids[i] & 0xff;
             }
+            if (index(boxIds, GPS_RESCUE_BOX) < 0) {
+                // the drone's failsafe is GPS rescue: a Betaflight whose SITL has none (4.3 takes it out in its SITL target)
+                // cannot show it - skipped, not failed
+                throw new Skip("Betaflight " + version + " as a program offers no GPS RESCUE mode (4.3's SITL leaves GPS rescue out): the drone's "
+                        + "failsafe, GPS rescue, cannot be shown on it");
+            }
             check(blocks.equals("RXLOSS"), "before any stick frame its one arming block is RXLOSS: " + blocks);
             check(index(boxIds, GPS_RESCUE_BOX) >= 0, "it offers the mode GPS RESCUE (built with the GPS, the GPS on UART3)");
 
@@ -221,6 +227,9 @@ class SitlFailsafeScenario {
                         version, seconds(rxLoss), seconds(stage2), held, seconds(stage2), runUp, seconds(disarmed), seconds(failsafeBlock), seconds(free.s())));
                 link.stopSticks();
             }
+        } catch (Skip s) {
+            skipped = s.getMessage();
+            film.remark("SKIPPED: " + skipped);
         } catch (Exception e) {
             wrong.add("the scenario broke off: " + e);
             film.remark("BROKE OFF: " + e);
@@ -230,7 +239,17 @@ class SitlFailsafeScenario {
             film.close(wrong.isEmpty(), wrong);
         }
         if (!wrong.isEmpty()) fail("sitl-failsafe: " + wrong.size() + " problem(s):\n - " + String.join("\n - ", wrong));
+        Assumptions.assumeTrue(skipped == null, skipped);
     }
+
+    /** Why this Betaflight cannot show what the scenario is about: the test is skipped with it, not failed. */
+    private static final class Skip extends Exception {
+        Skip(String why) {
+            super(why);
+        }
+    }
+
+    private String skipped;
 
     private static String seconds(Double s) {
         return s == null ? "never" : String.format(Locale.ROOT, "%.2f s", s);

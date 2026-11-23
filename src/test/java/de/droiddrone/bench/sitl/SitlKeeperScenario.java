@@ -191,7 +191,9 @@ class SitlKeeperScenario {
             } else {
                 check(Boolean.TRUE.equals(s.locked()) && Boolean.FALSE.equals(s.armed()), "locked from the moment it is taken, disarmed: " + s);
                 check(s.number("lockBit") >= 0, "where the lock shows in Betaflight's status was measured: bit " + s.get("lockBit"));
-                check(s.get("failsafe").equals("GPS-RESCUE") && s.number("failsafeDelay") == 200, "the board's failsafe as read: " + s.get("failsafe") + " after " + s.get("failsafeDelay"));
+                String procedure = version.startsWith("4.3.") ? "DROP" : "GPS-RESCUE"; // 4.3's SITL has no GPS rescue: Sitl.likeTheDrone sets DROP
+                check(s.get("failsafe").equals(procedure) && s.number("failsafeDelay") == 200, "the board's failsafe as read: " + s.get("failsafe") + " after "
+                        + s.get("failsafeDelay") + " (as set up: " + procedure + " after 200)");
                 check(s.number("outputLimit") == 15, "motor_output_limit read in every PID profile: at most " + s.get("outputLimit"));
 
                 // ---- the rig's heartbeat and the phone's sticks

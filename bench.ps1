@@ -437,7 +437,7 @@ function Start-Sitl {
         [void]$pending.Add("Betaflight as a program - SITL $Betaflight did not start ($why; logs\sitl-start.log).   .\bench.ps1 sitl")
         return $null
     }
-    Write-Host "          answers MSP on 127.0.0.1:5761; its folder: $folder"
+    Write-Host "          answers MSP through its forwarder on 127.0.0.1:15761; its folder: $folder"
     $env:BENCH_SITL_VERSION = $Betaflight
     $env:BENCH_SITL_FOLDER = $folder
     # the scenarios reach SITL through its forwarder in WSL (tools\sitl\forwarder.py: UART1 on 15761, UART2 on 15762,

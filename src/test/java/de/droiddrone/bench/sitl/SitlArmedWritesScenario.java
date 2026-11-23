@@ -79,6 +79,16 @@ class SitlArmedWritesScenario {
     void anArmedBoardGetsNoWriteFromDroneSetupAndThePageSaysWhy() throws Exception {
         String missing = Sitl.missing();
         Assumptions.assumeTrue(missing == null, missing);
+        String version;
+        try (BetaflightUsb fc = Sitl.open(s -> { })) {
+            version = Sitl.version(fc);
+        } finally {
+            BetaflightUsb.use(null);
+        }
+        // what F-077 to F-079 are about needs Betaflight's MSP arming lock, which 4.5 on leaves out of SITL (msp.c,
+        // #ifndef SIMULATOR_BUILD), and GPS rescue, which 4.3's SITL leaves out: on those it is skipped, not failed
+        Assumptions.assumeTrue(version.startsWith("4.4."), "Betaflight " + version + " as a program: this scenario wants 4.4 (4.5 on leaves MSP's "
+                + "arming lock out of SITL; 4.3 has no GPS rescue there)");
         AppRig.scenario("sitl-armed-writes").run(this::run);
     }
 
