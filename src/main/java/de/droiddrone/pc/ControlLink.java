@@ -2147,6 +2147,7 @@ public class ControlLink {
             case de.droiddrone.common.FcCommand.MISSION_START -> "START";
             case de.droiddrone.common.FcCommand.PAUSE -> "PAUSE";
             case de.droiddrone.common.FcCommand.CONTINUE -> "CONTINUE";
+            case de.droiddrone.common.FcCommand.GO_LOOK -> "GO LOOK";
             default -> "?";
         };
     }

@@ -433,6 +433,10 @@ public class Mavlink {
             case de.droiddrone.common.FcCommand.CONTINUE:
                 setMode(COPTER_AUTO);
                 break;
+            case de.droiddrone.common.FcCommand.GO_LOOK: // fleet AP-12: there at its height, the camera on the spot
+                commandInt(192, -1, 1, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), Float.NaN, (short) 6); // DO_REPOSITION, change mode
+                commandInt(195, 0, 0, (int) Math.round(c.lat * 1e7), (int) Math.round(c.lon * 1e7), 0f, (short) 6); // DO_SET_ROI_LOCATION, on the ground
+                break;
             default:
                 return false;
         }
@@ -443,6 +447,13 @@ public class Mavlink {
     /** ArduPilot's mode by its number (MAV_CMD_DO_SET_MODE); the phone's own link-loss rules use it too. */
     public void setMode(int customMode) {
         commandLong(MAV_CMD.MAV_CMD_DO_SET_MODE, CUSTOM_MODE_ENABLED, customMode);
+    }
+
+    /** COMMAND_INT: a place in whole 1e7 degrees (DO_REPOSITION, DO_SET_ROI_LOCATION); frame 6 = heights above home. */
+    private void commandInt(int command, float p1, float p2, int lat, int lon, float z, short frame) {
+        awaitingAck.add(command);
+        send(new com.MAVLink.common.msg_command_int(p1, p2, 0, Float.NaN, lat, lon, z, command, targetSys(), targetComponent, frame,
+                (short) 0, (short) 0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
 
     private void commandLong(int command, float p1, float p2) {

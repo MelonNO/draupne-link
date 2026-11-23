@@ -5517,6 +5517,15 @@ public class MainWindow extends JFrame {
         fleetOps.tickReserves(); // fleet area F: calls waiting for a column, orders sent again until answered
     }
 
+    /** Fleet AP-12: GO LOOK - the ArduPilot drone this PC flies goes to the alert's ground point and looks at it. */
+    void goLook(String alertedBy, double[] at) {
+        de.droiddrone.pc.ControlLink l = flownLink();
+        boolean sent = l != null && l.getTelemetry().isArmedNow(MonoClock.ms(), 3000)
+                && l.sendFcCommand(de.droiddrone.common.FcCommand.goLook(at[0], at[1]));
+        if (sent) logLine("GO LOOK: to " + alertedBy + "'s alert, the camera on it.");
+        else logLine("GO LOOK: needs an ArduPilot drone this PC flies, in the air.");
+    }
+
     /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */
     de.droiddrone.pc.ControlLink flownLink() {
         Connection c = connection;
