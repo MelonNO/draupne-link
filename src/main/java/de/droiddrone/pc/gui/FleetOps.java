@@ -136,7 +136,7 @@ final class FleetOps {
 
     /** FD-3: each a slot, a layer and a terrain route of its own, staggered launches; at the slot it holds (YOUR TURN). */
     void dispatch(double lat, double lon) {
-        if (host.watchOnly()) return; // GU-8
+        if (host.watchOnly() || closed) return; // GU-8; nothing after close
         List<de.droiddrone.pc.route.Dispatch.Drone> drones = new ArrayList<>();
         GroupLink l;
         try {
@@ -305,6 +305,9 @@ final class FleetOps {
     private int nextMark = (int) (System.nanoTime() & 0x3fffffff) + 1;
 
     private GroupLink ensureLink() throws java.io.IOException {
+        // closed (the tour or DEMO ended, its show with it): a late call (the tour's DISPATCH timer, a reserve tick)
+        // made a new GroupLink - its socket and threads - that nothing ever closed
+        if (closed) throw new java.io.IOException("the fleet controls are closed");
         if (link == null) link = new GroupLink(host.key(), new GroupLink.Listener() {
             public void event(String text) {
                 SwingUtilities.invokeLater(() -> {
@@ -583,6 +586,8 @@ final class FleetOps {
     private final Host host;
     private final Set<String> chosen = new LinkedHashSet<>();
     private GroupLink link;
+    /** close() was called: no new group link after it. */
+    private volatile boolean closed;
     private double floorM = 40;
 
     FleetOps(Host host) {
@@ -596,7 +601,7 @@ final class FleetOps {
 
     /** The radio's switch: DISCARD LEAD (FL-6) here; CALL RESERVE is the reserves'. Called off the stick thread's back. */
     void onSwitch(int event) {
-        if (host.watchOnly()) return; // GU-8
+        if (host.watchOnly() || closed) return; // GU-8; nothing after close
         if (event == FleetSwitches.CALL_RESERVE) {
             SwingUtilities.invokeLater(this::callReserve);
             return;
@@ -739,6 +744,7 @@ final class FleetOps {
     }
 
     void close() {
+        closed = true;
         launchViews.close();
         GroupLink l = link;
         link = null;
