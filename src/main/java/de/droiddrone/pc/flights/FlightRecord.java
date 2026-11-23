@@ -51,6 +51,14 @@ public final class FlightRecord {
     private String ended;
     private Path track, linkLog;
     private final List<Path> videos = new ArrayList<>();
+    /** AC-14: the others were watched in this flight (a line "closestwatch"); the nearest of them, or null: none came. */
+    private boolean closestWatched;
+    private ClosestApproach.Near closest;
+    private long closestAtMs, closestWrittenAt;
+    private boolean closestUnwritten;
+    /** A nearer approach is written at once when it is this much nearer, else at most once a second (and at the end). */
+    static final double CLOSEST_STEP_M = 1;
+    static final long CLOSEST_EVERY_MS = 1000;
     /** Held open and locked from the start to the end by the app that has this connection open (see {@link #heldElsewhere}). */
     private java.nio.channels.FileChannel hold;
 
@@ -187,11 +195,61 @@ public final class FlightRecord {
         }
     }
 
+    /**
+     * AC-14: the other drones are watched in this flight (asked while the flown drone is armed): written once, so a flight
+     * none came near reads as NONE, not as not known.
+     */
+    public synchronized void closestWatched() {
+        if (ended != null || closestWatched) return;
+        closestWatched = true;
+        append("closestwatch=1");
+    }
+
+    /**
+     * AC-14: another drone this near now (null: none in the air). A nearer one than so far is kept and written - at once
+     * when {@link #CLOSEST_STEP_M} nearer, else at most every {@link #CLOSEST_EVERY_MS}, and at the end.
+     */
+    public synchronized void closest(ClosestApproach.Near near, long nowMs) {
+        if (ended != null) return;
+        closestWatched();
+        if (near == null || Double.isNaN(near.distanceM())) return;
+        if (closest != null && near.distanceM() >= closest.distanceM()) return;
+        boolean bigStep = closest == null || closest.distanceM() - near.distanceM() >= CLOSEST_STEP_M;
+        closest = new ClosestApproach.Near(clean(near.drone()), near.sideM(), near.heightM());
+        closestAtMs = nowMs;
+        closestUnwritten = true;
+        if (bigStep || nowMs - closestWrittenAt >= CLOSEST_EVERY_MS) writeClosest(nowMs);
+    }
+
+    private void writeClosest(long nowMs) {
+        if (!closestUnwritten || closest == null) return;
+        closestUnwritten = false;
+        closestWrittenAt = nowMs;
+        append(String.format(java.util.Locale.ROOT, "closest=%d %.1f %s %s", closestAtMs, closest.sideM(),
+                Double.isNaN(closest.heightM()) ? "-" : String.format(java.util.Locale.ROOT, "%.1f", closest.heightM()), closest.drone()));
+    }
+
+    /** AC-14: the nearest another drone came, or null: none came (see {@link #closestWatched()}) or not known. */
+    public synchronized ClosestApproach.Near closest() {
+        return closest;
+    }
+
+    /** When the nearest came (epoch ms); 0 without one. */
+    public synchronized long closestAtMs() {
+        return closest == null ? 0 : closestAtMs;
+    }
+
+    /** The others were watched in this flight: no {@link #closest()} then means none came near. */
+    public synchronized boolean watchedOthers() {
+        return closestWatched;
+    }
+
     /** The flight is over; written and on disk when this returns (it waits a moment for the writer). */
     public void end(String reason, long nowMs) {
         Future<?> written;
         synchronized (this) {
             if (ended != null) return;
+            writeClosest(nowMs);
             ended = reason;
             endMs = nowMs;
             written = append("end=" + nowMs + " " + reason);
@@ -248,6 +306,21 @@ public final class FlightRecord {
                     case "video" -> {
                         Path v = Path.of(value);
                         if (!r.videos.contains(v)) r.videos.add(v);
+                    }
+                    case "closestwatch" -> r.closestWatched = true;
+                    case "closest" -> { // AC-14: "atMs side height|- drone"; the last line is the nearest
+                        String[] p = value.split(" ", 4);
+                        if (p.length == 4) {
+                            try {
+                                double side = Double.parseDouble(p[1]);
+                                double height = "-".equals(p[2]) ? Double.NaN : Double.parseDouble(p[2]);
+                                r.closest = new ClosestApproach.Near(p[3], side, height);
+                                r.closestAtMs = number(p[0]);
+                                r.closestWatched = true;
+                            } catch (NumberFormatException ignored) {
+                                // a line cut short: the one before stands
+                            }
+                        }
                     }
                     case "end" -> {
                         int space = value.indexOf(' ');
