@@ -1411,7 +1411,21 @@ public class Mavlink {
             if (mavlink.fcVariant == FcInfo.FC_VARIANT_PX4) initializeFcConfigPx4();
         }
 
+        /**
+         * DRAUPNE Link (fleet): when the phone first asked for the FC's config (elapsedRealtime, 0 not yet). ArduPilot hides
+         * the OSD's parameters while OSD_TYPE is 0 (a board without an OSD chip, a digital link): asked for in vain, they
+         * kept the config from ever counting as read - and with it the telemetry (attitude, battery, GPS, position) was
+         * never asked for. After {@link #OSD_WAIT_MS} the OSD's count as off; the stick map (RCMAP_*) is still waited for.
+         */
+        private long configAskedAt;
+        static final long OSD_WAIT_MS = 10_000;
+
+        private boolean osdGivenUp() {
+            return configAskedAt != 0 && android.os.SystemClock.elapsedRealtime() - configAskedAt > OSD_WAIT_MS;
+        }
+
         private void initializeFcConfigAp(){
+            if (configAskedAt == 0) configAskedAt = android.os.SystemClock.elapsedRealtime(); // DRAUPNE Link (fleet)
             new Thread(() -> {
                 if (!osd1EnabledReceived) mavlink.requestFcParameter(FcCommon.AP_PARAM_OSD1_ENABLE);
                 if (!osd1TxtResReceived) mavlink.requestFcParameter(FcCommon.AP_PARAM_OSD1_TXT_RES);
@@ -1465,14 +1479,15 @@ public class Mavlink {
         }
 
         private boolean isFcConfigInitializedAp(){
-            if (!osd1EnabledReceived || !osd1TxtResReceived || !osdUnitsReceived
-                    || !osdMsgTimeReceived || !osdWarnRssiReceived || !osdWarnNumSatReceived
-                    || !osdWarnBatVoltReceived || !osdWarnAvgCellVoltReceived || !osdCellCountReceived
-                    || !rcMapPitchReceived || !rcMapRollReceived
+            if (!rcMapPitchReceived || !rcMapRollReceived
                     || !rcMapThrottleReceived || !rcMapYawReceived) return false;
             for (RcOptionParam item : rcOptionParams){
                 if (!item.isInitialized()) return false;
             }
+            if (osdGivenUp()) return true; // DRAUPNE Link (fleet): no OSD on this board - its parameters never come
+            if (!osd1EnabledReceived || !osd1TxtResReceived || !osdUnitsReceived
+                    || !osdMsgTimeReceived || !osdWarnRssiReceived || !osdWarnNumSatReceived
+                    || !osdWarnBatVoltReceived || !osdWarnAvgCellVoltReceived || !osdCellCountReceived) return false;
             for (OsdItemParam item : osdItems){
                 if (!item.isInitialized()) {
                     return false;

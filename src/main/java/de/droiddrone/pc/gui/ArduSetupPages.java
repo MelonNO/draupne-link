@@ -674,14 +674,14 @@ final class ArduSetupPages {
         private void replan() {
             Map<String, Float> now = state.params;
             if (now == null) return;
-            Float id = now.get("SYSID_THISMAV");
+            Float id = de.droiddrone.pc.setup.ardu.ArduNames.value(now, "SYSID_THISMAV"); // MAV_SYSID on Copter 4.7
             de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
             changes = ArduPlan.plan(choices(), bf == null ? Map.of() : bf.extra(), now);
             plan.setText("");
             List<String> lines = ArduPlan.lines(changes);
             if (lines.isEmpty()) append(plan, "Nothing to change.");
             for (String l : lines) append(plan, l);
-            confirm.setEnabled(!writing && changes.stream().anyMatch(c -> !c.missing()));
+            confirm.setEnabled(!writing && changes.stream().anyMatch(de.droiddrone.pc.setup.ardu.ArduPlan.Change::writable));
             if (id != null && !written && id.intValue() != 1 && (Integer) sysId.getValue() == 2) sysId.setValue(id.intValue());
         }
 
@@ -691,7 +691,7 @@ final class ArduSetupPages {
             if (now == null) return;
             de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
             changes = ArduPlan.plan(choices(), bf == null ? Map.of() : bf.extra(), now);
-            confirm.setEnabled(changes.stream().anyMatch(c -> !c.missing()));
+            confirm.setEnabled(changes.stream().anyMatch(de.droiddrone.pc.setup.ardu.ArduPlan.Change::writable));
         }
 
         /** A write runs: CONFIRM stays grey until it is over (a second press would write it all again). */
