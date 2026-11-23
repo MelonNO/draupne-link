@@ -25,12 +25,27 @@ public final class FleetSwitches {
         reserveChannel = reserveAux <= 0 ? -1 : 3 + reserveAux;
     }
 
+    /** The radio's switches as set; none unless the pilot put them on the radio (AUX5 / AUX6 may be other things). */
     public static FleetSwitches from(PcConfig config) {
+        if (!onRadio(config)) return new FleetSwitches(0, 0);
         return new FleetSwitches(aux(config.getString(DISCARD_LEAD_KEY), DEFAULT_DISCARD_LEAD_AUX),
                 aux(config.getString(CALL_RESERVE_KEY), DEFAULT_CALL_RESERVE_AUX));
     }
 
-    static int aux(String saved, int fallback) {
+    /** GU-7: the pilot has put the fleet's switches on the radio (calibration asks for them). */
+    public static final String ON_RADIO_KEY = "fleet.switchesOnRadio";
+
+    public static boolean onRadio(PcConfig config) {
+        return "true".equalsIgnoreCase(config.getString(ON_RADIO_KEY));
+    }
+
+    /** The settings that put them on the radio (AUX5, AUX6) or take them off. */
+    public static java.util.Map<String, String> settings(boolean on) {
+        return java.util.Map.of(ON_RADIO_KEY, on ? "true" : "false", DISCARD_LEAD_KEY, String.valueOf(DEFAULT_DISCARD_LEAD_AUX),
+                CALL_RESERVE_KEY, String.valueOf(DEFAULT_CALL_RESERVE_AUX));
+    }
+
+    public static int aux(String saved, int fallback) {
         if (saved == null || saved.isBlank()) return fallback;
         try {
             int a = Integer.parseInt(saved.trim());

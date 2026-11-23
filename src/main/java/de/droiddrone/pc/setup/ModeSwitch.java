@@ -272,6 +272,19 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         if (prearm > 0 && p[prearm - 1] == null) {
             p[prearm - 1] = new Purpose("PREARM", "Flip PREARM up. Needed before ARM.");
         }
+        // fleet GU-7: the radio's DISCARD LEAD and CALL RESERVE, when the pilot put them on it
+        if (de.droiddrone.pc.FleetSwitches.onRadio(config)) {
+            int discard = de.droiddrone.pc.FleetSwitches.aux(config.getString(de.droiddrone.pc.FleetSwitches.DISCARD_LEAD_KEY),
+                    de.droiddrone.pc.FleetSwitches.DEFAULT_DISCARD_LEAD_AUX);
+            int reserve = de.droiddrone.pc.FleetSwitches.aux(config.getString(de.droiddrone.pc.FleetSwitches.CALL_RESERVE_KEY),
+                    de.droiddrone.pc.FleetSwitches.DEFAULT_CALL_RESERVE_AUX);
+            if (discard >= 1 && discard <= MAX_AUX && p[discard - 1] == null) {
+                p[discard - 1] = new Purpose("DISCARD LEAD", "Flip DISCARD LEAD up: the next drone becomes the lead.");
+            }
+            if (reserve >= 1 && reserve <= MAX_AUX && p[reserve - 1] == null) {
+                p[reserve - 1] = new Purpose("CALL RESERVE", "Flip CALL RESERVE up: one more reserve launches.");
+            }
+        }
         return p;
     }
 
