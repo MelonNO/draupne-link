@@ -12,4 +12,6 @@ Write-Host ("built: " + $(if ($built.Trim()) { $built.Trim() } else { 'none (too
 $code = Invoke-SitlScript @('status')
 $api = Get-SitlApi $SitlMspPort
 Write-Host $(if ($api) { "MSP from Windows: 127.0.0.1:$SitlMspPort answers, API $api" } else { "MSP from Windows: nothing answers on 127.0.0.1:$SitlMspPort" })
+$fwdApi = Get-SitlApi $SitlForwardPort
+Write-Host $(if ($fwdApi) { "MSP from Windows through the forwarder: 127.0.0.1:$SitlForwardPort answers, API $fwdApi" } else { "MSP from Windows through the forwarder: nothing answers on 127.0.0.1:$SitlForwardPort" })
 if ($code -eq 0 -and $api) { exit 0 } else { exit 1 }

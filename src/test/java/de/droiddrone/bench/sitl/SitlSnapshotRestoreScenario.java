@@ -53,6 +53,7 @@ class SitlSnapshotRestoreScenario {
         film = new Film(Sandbox.runRoot().resolve("film").resolve("sitl-snapshot-restore"), "sitl-snapshot-restore");
         Path boardRoot = film.dir().resolve("board");
         try {
+            film.add("a fresh board: " + Sitl.fresh(film::remark), null, "sitl", "");
             String version;
             try (BetaflightUsb fc = Sitl.open(film::remark)) {
                 version = Sitl.version(fc);

@@ -3,6 +3,9 @@
 $SitlDistro = $(if ($env:DRAUPNE_SITL_DISTRO) { $env:DRAUPNE_SITL_DISTRO } else { 'Ubuntu' })
 # Betaflight's own numbers, fixed in its source: UART n listens on TCP 5760 + n (UART1, MSP, on 5761)
 $SitlMspPort = 5761
+# the forwarder in WSL (sitl.sh, forwarder.py) listens 10000 above each UART it serves (UART1, 2, 4) and stays while
+# Betaflight restarts: WSL's forwarding of 127.0.0.1 lost SITL's own port after a restart now and then (2026-11-23)
+$SitlForwardPort = $SitlMspPort + $(if ($env:DRAUPNE_SITL_FORWARD_OFFSET) { [int]$env:DRAUPNE_SITL_FORWARD_OFFSET } else { 10000 })
 $SitlVersions = @('4.4.1', '4.5.5', '2025.12.5', '4.3.2')
 $SitlRoot = Join-Path $env:LOCALAPPDATA 'DraupneBench\sitl'
 

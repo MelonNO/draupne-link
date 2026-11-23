@@ -63,7 +63,14 @@ if (-not $api) {
     if (-not $p.HasExited) { & (Join-Path $PSScriptRoot 'stop.ps1') | Out-Null }
     throw ("Betaflight $Version did not answer MSP on 127.0.0.1:$Port within $TimeoutSec s. " + ($why -join ' | '))
 }
+# the forwarder (sitl.sh, forwarder.py): its port in front of UART1 answers too - the bench connects there
+$fwdApi = $null
+$until = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $until -and -not $fwdApi) {
+    $fwdApi = Get-SitlApi $SitlForwardPort
+    if (-not $fwdApi) { Start-Sleep -Milliseconds 300 }
+}
 Set-Content -Path (Join-Path $Run 'start.txt') -Encoding utf8 -Value @("version=$Version", "folder=$Run", "msp=127.0.0.1:$Port", "api=$api", "wsl=$($p.Id)",
-    "feed=$([bool]$Feed)", "started=$((Get-Date).ToString('s'))")
-Write-Host "Betaflight $Version (SITL) answers MSP $api on 127.0.0.1:$Port; its folder: $Run"
+    "feed=$([bool]$Feed)", "forwarder=127.0.0.1:$SitlForwardPort $(if ($fwdApi) { 'answers' } else { 'DOES NOT ANSWER' })", "started=$((Get-Date).ToString('s'))")
+Write-Host ("Betaflight $Version (SITL) answers MSP $api on 127.0.0.1:$Port, " + $(if ($fwdApi) { "and through its forwarder on 127.0.0.1:$SitlForwardPort" } else { "but NOT through its forwarder on 127.0.0.1:$SitlForwardPort" }) + "; its folder: $Run")
 Write-Output $Run

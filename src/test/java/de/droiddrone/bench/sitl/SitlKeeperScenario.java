@@ -104,9 +104,15 @@ class SitlKeeperScenario {
             phone.sticks(1000, 1000);
             calm(rig);
             int lostBefore = count("RECEIVER LOST");
+            rig.ask("MARK"); // the keeper's figures of the stick frames it passes to the board, from here
             String open = rig.ask("OPEN 15");
             boolean ok = open.startsWith("OK window=15000") && arm(rig, phone) && body.run();
             KeeperClient.State s = state(rig);
+            if (count("RECEIVER LOST") > lostBefore) {
+                // whether the gap is ours (no frame passed to the board for 100 ms and more) or SITL's own
+                film.remark(what + ": the stick frames the keeper passed to the board since the window was asked for (maxGapMs: the largest gap "
+                        + "between two; Betaflight says RXLOSS after 100 ms): " + rig.ask("FIGURES"));
+            }
             // SITL's receiver gap, and nothing else: the keeper ended the window for the board's RXLOSS, would not open one
             // while the board said RXLOSS or was slow to answer its status (the same gap, seen from the keeper's side), or
             // the board would not arm for the BADRX such a gap leaves at the ARM switch
@@ -144,6 +150,7 @@ class SitlKeeperScenario {
         StandInPhone phone = null;
         Thread beater = null;
         try {
+            film.add("a fresh board: " + Sitl.fresh(film::remark), null, "sitl", "");
             String version;
             try (BetaflightUsb fc = Sitl.open(film::remark)) {
                 version = Sitl.version(fc);

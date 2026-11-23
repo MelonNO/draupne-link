@@ -421,7 +421,8 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   did).
 - **Ports.** Fixed in Betaflight's source: UART n listens on TCP 5760 + n (UART1, MSP, on 5761; the drone's GPS
   UART3 on 5763, where nothing answers - no fix), UDP 9003 takes the simulator's packets. WSL brings TCP to Windows'
-  127.0.0.1 by itself. One SITL at a time; it takes one TCP client at a time.
+  127.0.0.1 by itself. One SITL at a time; it takes one TCP client at a time. The bench's scenarios go through the
+  forwarder on 15761 (and 15762, 15764): see below.
 - **Save and restart.** `save`, the CLI's `exit` and MSP's reboot end the program (exit code 0); the start script's
   supervisor starts it again in the same folder within a second, eeprom.bin kept - as a board restarts. Five crashes
   in a row at start and it is not started again (`sitl.log` says so). `diff all` and `dump all` read the same twice in
@@ -437,7 +438,41 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   **SITL's gyro loop takes nearly all its time:** at Betaflight's own serial_update_rate_hz 100 its "tasks" showed
   the serial task running 18 to 32 times a second (2026-11-23), stick frames queued, MSP answers 0.1 to 1 s late,
   RXLOSS every two seconds or so - and the suite went 0 of 4. `likeTheDrone` sets 2000, as Drone setup does on the
-  drone: about 75 a second, a quarter of the RXLOSS. That is SITL's TCP stand-in for USB alone: the real board answered 250 stick frames a
+  drone: about 75 a second, a quarter of the RXLOSS.
+  **Its task rates** (CLI `tasks`, task_statistics ON, set up as the drone, 2026-11-23 10:40; desired rate in
+  brackets): idle - GYRO 7905 (8000), PID 438, ACC 71 (1000), ATTITUDE 23 (100), RX 8, SERIAL 104 (2000), GPS 23,
+  total load 0.2 %; with a window's MSP traffic (sticks 25 a second and MSP_STATUS 10 a second on UART1, 5 a second on
+  UART4; disarmed - no CLI opens while armed) - GYRO 8000 (its max load 124 %), SERIAL 434, ACC 182, ATTITUDE 21,
+  RX 7, total 0.4 %. So not the CPU: SITL's main loop sleeps 50 microseconds a pass (main.c), and in this WSL a 50
+  microsecond sleep takes 121 (median; 162 at the 99th percentile) - about 8000 passes a second, nearly every one
+  taken by the 8 kHz gyro task. (Windows' timer resolution asked down to 0.5 ms changed nothing in WSL.)
+  **The cause: Linux's timer slack** (50 microseconds by default, a process may sleep that much longer). At 1
+  microsecond a 50 microsecond sleep takes 71 (median; 102 at the 99th percentile), and SITL's tasks run near
+  their rates: GYRO 8230, PID 496, ACC 902 to 951 (1000), ATTITUDE 97 (100), SERIAL 1325 to 1403 (2000), GPS 96 to
+  97 (100), RX 10 (idle) - where the default slack gave ACC 19 to 206, ATTITUDE 12 to 35, SERIAL 22 to 348, GPS 12
+  to 30, varying from one start to the next. **tools\sitl\sitl.sh sets 1 microsecond** (DRAUPNE_SITL_SLACK_NS) on
+  the supervisor's shell, which every Betaflight it starts - after each restart too - and the feeder inherit;
+  `sitl.log` says it at each start, `status.ps1` shows the running one's. Betaflight's builds are as they were.
+  **What the slack does not cure: "no connection after a restart"** is WSL's forwarding of Windows' 127.0.0.1, not
+  Betaflight: after a restart Betaflight bound UART1 ("bind port 5761") and its log then had no "New connection" for
+  a minute, while the keeper on Windows was first refused, then connected and got no answer (1123-1131-sitl,
+  11:36). Ending the program (`Sitl.revive`) makes it bind again, and the forwarding takes it up.
+  **The forwarder** (`tools\sitl\forwarder.py`, Python's standard library) is the cure: sitl.sh starts it with the
+  supervisor and ends it with it, never with Betaflight's restarts; it listens on 15761, 15762 and 15764 (UART1, 2, 4
+  plus 10000, DRAUPNE_SITL_FORWARD_OFFSET) and gives each connection from Windows a fresh one to SITL's own port
+  inside WSL, both ended together - so WSL's forwarding only ever sees ports that stay. `sitl.log` says its ports,
+  `forwarder.log` what it did, `status.ps1` whether it answers. bench.ps1 points the scenarios at it
+  (BENCH_SITL_PORT -> bench.sitl.port; `Sitl.uart(n)` for the other UARTs); by hand, without it, they use 5761.
+  **The keeper's 10 MSP_STATUS a second in a window do not cause its RXLOSS:** a made-up window (sticks 25 a second,
+  armed, throttle 1080, from inside WSL and from Windows) showed no RXLOSS in 38 to 48 s armed with 10 or 25 asks a
+  second on the stick port, and one in 38 s with none (a Python test by hand, the rig's eyes on UART4). The keeper
+  scenario's film now has the keeper's own figures for every window SITL's RXLOSS ends: in the first (1123-1044-sitl)
+  111 frames in 4.4 s passed to the board, 25 a second, the largest gap 54 ms, the keeper holding one 0.14 ms at most -
+  the stick frames reached SITL on time; its starved loop did not take them in time.
+- **Each scenario starts from a fresh board** (`Sitl.fresh`, 2026-11-23): answering MSP, disarmed (MSP's arming
+  block), then the CLI's `defaults` (Betaflight restarts) - one scenario's leftovers (armed, its CLI open, PREARM on
+  AUX3) never reach the next. A SITL that bench.ps1 started and that answers no MSP is revived first (also in
+  `Sitl.missing`): "exit" for a CLI left open, else `pkill` of its program, which its supervisor starts again. That is SITL's TCP stand-in for USB alone: the real board answered 250 stick frames a
   second with the phone's requests between them in 12 ms (median), none lost (`mspRateProbe`, F-081).
 - **What was seen of the drone's failsafe** (4.4.1, `SitlFailsafeScenario`; GPS-RESCUE after failsafe_delay 200,
   rxfail 3 h and 4 h, no GPS fix, arming without a fix allowed): the sticks stop at throttle 1080; RXLOSS 0.15 - 0.17 s
@@ -445,7 +480,9 @@ gradlew fcKeeper board=tcp:127.0.0.1:5761 battery=none ...   the keeper by hand 
   fix gives up at once - disarmed 0 - 0.09 s later, the motors at rest, FAILSAFE and ARMSWITCH among the blocks.
   **In that moment the rescue can run every motor up to its hover throttle** (gps_rescue_throttle_hover 1275: the
   motors read 1290) - seen in two runs of five, for no longer than the 20 to 90 ms between two looks. Sticks back with
-  ARM off: free again 2.1 s later. The film's `failsafe-timeline.tsv` has every change.
+  ARM off: free again 2.1 s later. The film's `failsafe-timeline.tsv` has every change. When SITL's own receiver gap
+  comes as the ARM switch goes up (BADRX), the scenario waits for a second with no arming block and flips the switch
+  again, five times at most, and says so (2026-11-23).
 - **A new connection is cleaned first** (`Sitl.usb`): SITL sends the next client what it still had to say to the one
   before (answers to requests left in its queue), cut where its buffer ran over - a "diff all" read with that in
   front is not whole. One question is asked and all that comes is thrown away until 150 ms pass with nothing. A long

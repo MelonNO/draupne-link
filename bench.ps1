@@ -440,6 +440,9 @@ function Start-Sitl {
     Write-Host "          answers MSP on 127.0.0.1:5761; its folder: $folder"
     $env:BENCH_SITL_VERSION = $Betaflight
     $env:BENCH_SITL_FOLDER = $folder
+    # the scenarios reach SITL through its forwarder in WSL (tools\sitl\forwarder.py: UART1 on 15761, UART2 on 15762,
+    # UART4 on 15764), which stays while Betaflight restarts - not on its own 5761 that WSL's forwarding now and then lost
+    $env:BENCH_SITL_PORT = '15761'
     return $folder
 }
 

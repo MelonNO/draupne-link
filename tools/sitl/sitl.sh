@@ -163,6 +163,21 @@ stamp() {
 
 running_pid() { pgrep -x betaflight_SITL | head -1; }
 
+# Linux's timer slack for every Betaflight the supervisor starts, in nanoseconds. SITL's main loop sleeps 50 us a pass
+# (main.c: delayMicroseconds_real(50)); with Linux's default slack of 50 us such a sleep took 120 us in this WSL
+# (2026-11-23), about 8000 passes a second, nearly all of them the 8 kHz gyro task's: its serial task (MSP, the
+# sticks) ran 22 to 350 times a second of the 2000 asked, the accelerometer 19 to 206 of 1000, the attitude 12 to 35
+# of 100 - the receiver lost now and then, long CLI answers garbled. With 1 us of slack the sleep takes 71 us and
+# they ran 1325, 951 and 97. Set on the supervisor's own shell: each program it starts (and the feeder) inherits it.
+SLACK_NS=${DRAUPNE_SITL_SLACK_NS:-1000}
+
+# The forwarder (forwarder.py): ports of its own that stay while SITL restarts, each in front of one of SITL's UARTs -
+# WSL's forwarding of Windows' 127.0.0.1 now and then lost SITL's own port after a restart (2026-11-23). The bench
+# connects to these: UART1 (MSP, the app's USB), UART2 and UART4 (the rig's sticks and eyes); UART3 is the GPS's.
+FORWARD_OFFSET=${DRAUPNE_SITL_FORWARD_OFFSET:-10000}
+FORWARD_UARTS="5761 5762 5764"
+forward_pairs() { local p; for p in $FORWARD_UARTS; do printf '%s:%s ' "$p" "$((p + FORWARD_OFFSET))"; done; }
+
 run() {
     local v=${1:?which version} folder=${2:?which folder} feed=${3:-}
     local elf=$HOME_DIR/$v/betaflight_SITL.elf
@@ -177,16 +192,22 @@ run() {
     echo "$$" >supervisor.pid
     echo "$v" >version.txt
     cp "$HOME_DIR/$v/build.txt" build.txt 2>/dev/null
+    echo "$SLACK_NS" >"/proc/$BASHPID/timerslack_ns" 2>/dev/null || echo "$(now) [supervisor] the timer slack could not be set" >>sitl.log
     local feeder=""
     if [ "$feed" = feed ]; then
         python3 -I "$HERE/feeder.py" "$v" >feeder.log 2>&1 &
         feeder=$!
     fi
+    # shellcheck disable=SC2046
+    python3 -I "$HERE/forwarder.py" $(forward_pairs) >>forwarder.log 2>&1 &
+    local forwarder=$!
+    echo "$forwarder" >forwarder.pid
+    echo "$(now) [supervisor] forwarder pid $forwarder: $(forward_pairs | sed 's/\([0-9]*\):\([0-9]*\)/\2 -> \1/g')(it stays while Betaflight restarts)" >>sitl.log
     local n=0 rc began crashes=0
     trap '' HUP
     while [ ! -e stop ]; do
         n=$((n + 1))
-        echo "$(now) [supervisor] start $n of Betaflight $v in $folder" >>sitl.log
+        echo "$(now) [supervisor] start $n of Betaflight $v in $folder (timer slack $(cat "/proc/$BASHPID/timerslack_ns" 2>/dev/null) ns)" >>sitl.log
         echo "$n" >starts.txt
         began=$SECONDS
         # the feeder waits while Betaflight starts: a packet that comes before its sensors are set up ends it with a
@@ -209,7 +230,8 @@ run() {
         sleep 0.2
     done
     [ -n "$feeder" ] && kill "$feeder" 2>/dev/null
-    rm -f "$CURRENT" supervisor.pid
+    kill "$forwarder" 2>/dev/null
+    rm -f "$CURRENT" supervisor.pid forwarder.pid
     echo "$(now) [supervisor] stopped" >>sitl.log
 }
 
@@ -225,6 +247,7 @@ stop() {
     pid=$(running_pid)
     [ -n "$pid" ] && kill -9 "$pid"
     pkill -f "$HERE/feeder.py" 2>/dev/null
+    pkill -f "$HERE/forwarder.py" 2>/dev/null
     say "stopped${folder:+ ($folder)}"
 }
 
@@ -241,7 +264,11 @@ status() {
     fi
     local v; v=$(cat "$folder/version.txt" 2>/dev/null)
     local ports; ports=$(ss -ltnH 2>/dev/null | awk '{print $4}' | grep -oE ':57[6-9][0-9]$' | tr -d : | sort -n | tr '\n' ' ')
-    say "running: Betaflight ${v:-?} pid $pid, folder ${folder:-?}, starts $(cat "$folder/starts.txt" 2>/dev/null), TCP ${ports:-none}"
+    say "running: Betaflight ${v:-?} pid $pid, folder ${folder:-?}, starts $(cat "$folder/starts.txt" 2>/dev/null), TCP ${ports:-none}, timer slack $(cat "/proc/$pid/timerslack_ns" 2>/dev/null) ns"
+    local fwd; fwd=$(pgrep -f "$HERE/forwarder.py" | head -1)
+    local fports="" p
+    for p in $FORWARD_UARTS; do ss -ltnH "sport = :$((p + FORWARD_OFFSET))" 2>/dev/null | grep -q . && fports="$fports$((p + FORWARD_OFFSET)) "; done
+    say "forwarder: ${fwd:+pid $fwd, }listening on ${fports:-nothing} ($(forward_pairs | sed 's/\([0-9]*\):\([0-9]*\)/\2 -> \1/g'))"
 }
 
 case ${1:-} in

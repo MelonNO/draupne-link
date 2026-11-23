@@ -47,9 +47,18 @@ public final class Sitl {
     private Sitl() {
     }
 
-    /** UART1's TCP port: 5760 + 1, fixed in Betaflight's SITL (bench.sitl.port says otherwise only for a test). */
+    /**
+     * UART1's TCP port: 5760 + 1, fixed in Betaflight's SITL - or, as bench.ps1 sets bench.sitl.port, the forwarder's in
+     * front of it (tools\sitl\forwarder.py, 15761): it stays while Betaflight restarts, where WSL's forwarding of
+     * 127.0.0.1 now and then lost SITL's own port after a restart (2026-11-23).
+     */
     public static int port() {
         return Integer.getInteger("bench.sitl.port", 5761);
+    }
+
+    /** UART n's TCP port, on the same side as {@link #port}: SITL's own 5760 + n, or the forwarder's 15760 + n. */
+    public static int uart(int n) {
+        return port() - 1 + n;
     }
 
     /** The version bench.ps1 started ("4.4.1"), or "" when the run did not say. */
@@ -62,10 +71,82 @@ public final class Sitl {
         return System.getProperty("bench.sitl.folder", "").trim();
     }
 
-    /** Why the SITL scenarios cannot run now, or null: something answers MSP on 127.0.0.1:5761. */
+    /**
+     * Why the SITL scenarios cannot run now, or null: something answers MSP on 127.0.0.1:5761. One that bench.ps1
+     * started and that does not answer is revived first ({@link #revive}): a scenario before may have left it so.
+     */
     public static String missing() {
-        return answersMsp(2000) ? null : "No Betaflight as a program answers MSP on " + HOST + ":" + port()
+        if (answersMsp(2000) || revive(System.out::println)) return null;
+        return "No Betaflight as a program answers MSP on " + HOST + ":" + port()
                 + ": .\\bench.ps1 sitl starts one (by hand: tools\\sitl\\start.ps1 -Version 4.4.1 -Feed)";
+    }
+
+    /**
+     * The SITL bench.ps1 started (bench.sitl.version is set), answering no MSP: a CLI left open answers none - "exit"
+     * leaves it (Betaflight restarts); else the program is ended (pkill in WSL) and its supervisor (tools\sitl\sitl.sh)
+     * starts it again at once, eeprom.bin kept. Seen 2026-11-23: after the snapshot scenario's restore no connection
+     * reached Betaflight for a minute, and the two scenarios after it were skipped. A SITL started by hand is left alone.
+     * @return true once it answers MSP again
+     */
+    static boolean revive(Consumer<String> log) {
+        if (startedVersion().isEmpty()) return false;
+        try (Socket s = new Socket()) {
+            s.connect(new InetSocketAddress(HOST, port()), 2000);
+            s.getOutputStream().write("exit\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII)); // MSP takes no notice of it
+        } catch (IOException ignored) {
+            // not even a connection
+        }
+        if (answersWithin(8000)) {
+            log.accept("SITL answered no MSP: its CLI was left open - \"exit\" sent, Betaflight restarted.");
+            return true;
+        }
+        try {
+            Process p = new ProcessBuilder("wsl.exe", "-d", "Ubuntu", "-u", "root", "--", "pkill", "-x", "betaflight_SITL")
+                    .redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (IOException e) {
+            log.accept("SITL answers no MSP, and its program could not be restarted: " + e.getMessage());
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        boolean back = answersWithin(20_000);
+        log.accept("SITL answered no MSP, not even after \"exit\": its program was ended and started again by its supervisor - "
+                + (back ? "it answers again." : "it does NOT answer."));
+        return back;
+    }
+
+    private static boolean answersWithin(long ms) {
+        long end = System.currentTimeMillis() + ms;
+        do {
+            if (answersMsp(1000)) return true;
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        } while (System.currentTimeMillis() < end);
+        return false;
+    }
+
+    /**
+     * Each scenario starts from a fresh board, whatever the one before left (2026-11-23: one left it armed - "SITL is
+     * armed: not set up", "Betaflight opens no CLI then" - another its CLI open, another PREARM on AUX3): answering
+     * MSP ({@link #revive} if not), disarmed, Betaflight's defaults (the CLI's "defaults", which restarts it - as
+     * a run's fresh SITL starts, but in the same folder). What was found is said.
+     */
+    public static String fresh(Consumer<String> log) throws IOException {
+        List<String> found = new ArrayList<>();
+        if (!answersMsp(2000)) {
+            if (!revive(log)) throw new IOException("SITL answers no MSP and could not be revived");
+            found.add("it answered no MSP: revived");
+        }
+        String serial = toDefaults(log, found);
+        found.add("Betaflight's defaults, restarted (" + (serial.contains("serial 0 1 ") ? "UART1 MSP" : "serial: " + serial.replaceAll("\\s+", " ")) + ")");
+        return String.join("; ", found);
     }
 
     /** MSP_API_VERSION asked on a connection of its own (SITL takes one at a time: none may be open). */
@@ -136,10 +217,20 @@ public final class Sitl {
         }
     }
 
-    /** The board, open and answering MSP - waited for while it restarts. {@link #usb()} is put in place first. */
+    /**
+     * The board, open and answering MSP - waited for while it restarts. {@link #usb()} is put in place first. One that
+     * bench.ps1 started and that does not come back within TIMING's 20 s is revived once ({@link #revive}): now and
+     * then a restart left Betaflight taking no connection at all (2026-11-23, with the timer slack set too).
+     */
     public static BetaflightUsb open(Consumer<String> log) throws IOException {
         BetaflightUsb.use(usb());
-        return BoardPort.open(BOARD, TIMING, log);
+        try {
+            return BoardPort.open(BOARD, TIMING, log);
+        } catch (IOException notBack) {
+            if (startedVersion().isEmpty() || !revive(log)) throw notBack;
+            BetaflightUsb.use(usb());
+            return BoardPort.open(BOARD, TIMING, log);
+        }
     }
 
     /** MSP_FC_VERSION as "4.4.1". */
@@ -234,11 +325,24 @@ public final class Sitl {
      * The board back to Betaflight's own defaults - as a run's fresh SITL starts - for a scenario that leaves more
      * changed than the next one sets up for itself (the suite's scenarios share one SITL and its eeprom.bin): the CLI's
      * "defaults" resets everything (the accelerometer's calibration, the serial ports, what Drone setup wrote), saves
-     * and restarts. Waited for; returns its "serial" lines read afterwards (that visit ends with "exit").
+     * and restarts. An armed board is disarmed first (MSP's arming block: no CLI opens while armed). Waited for;
+     * returns its serial ports afterwards as "serial &lt;port&gt; &lt;functions&gt;" lines, read over MSP.
      */
     public static String toDefaults(Consumer<String> log) throws IOException {
+        return toDefaults(log, new ArrayList<>());
+    }
+
+    private static String toDefaults(Consumer<String> log, List<String> found) throws IOException {
         try (BetaflightUsb fc = open(log)) {
-            if (Msp.armed(fc.msp(Msp.STATUS, null))) throw new IOException("SITL is armed: not reset");
+            if (Msp.armed(fc.msp(Msp.STATUS, null))) {
+                fc.msp(Msp.ARMING_DISABLE, new byte[]{1}); // disarms it; the restart below takes the block off
+                long end = System.currentTimeMillis() + 5000;
+                while (Msp.armed(fc.msp(Msp.STATUS, null))) {
+                    if (System.currentTimeMillis() > end) throw new IOException("SITL is armed and did not disarm on MSP's arming block");
+                    pause(100);
+                }
+                found.add("it was ARMED: disarmed by MSP's arming block");
+            }
             fc.enterCli();
             try {
                 fc.command("defaults", 3000); // "Rebooting": no prompt follows
@@ -247,10 +351,21 @@ public final class Sitl {
             }
         }
         pause(1000);
+        // the serial ports as Betaflight has them now, over MSP - no CLI visit, so no second restart (open revives a
+        // Betaflight that takes no connection after the first: seen now and then on 2026-11-23)
         try (BetaflightUsb fc = open(log)) {
-            fc.enterCli();
-            return fc.command("serial");
-        } // "exit": Betaflight restarts
+            return serialLines(fc.msp(MSP_CF_SERIAL_CONFIG, null));
+        }
+    }
+
+    /** MSP_CF_SERIAL_CONFIG: per port its identifier, function mask (u16) and four baud rate indexes. */
+    static final int MSP_CF_SERIAL_CONFIG = 54;
+
+    /** MSP_CF_SERIAL_CONFIG as the CLI's "serial" lines say it: "serial 0 1 ...", one a port (function mask only). */
+    static String serialLines(byte[] p) {
+        StringBuilder s = new StringBuilder();
+        for (int i = 0; i + 7 <= p.length; i += 7) s.append("serial ").append(p[i] & 0xff).append(' ').append(Msp.u16(p, i + 1)).append(" \n");
+        return s.toString();
     }
 
     /** A CLI line Betaflight has to take: its "error", "invalid" or "unavailable" throws. */

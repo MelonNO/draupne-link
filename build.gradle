@@ -200,6 +200,8 @@ benchTask('benchSitl', 'sitl & !finding', 'Real Betaflight firmware (SITL) answe
     // the SITL bench.ps1 started (tools\sitl\start.ps1): its version and folder, for the scenarios' films
     systemProperty 'bench.sitl.version', System.getenv('BENCH_SITL_VERSION') ?: ''
     systemProperty 'bench.sitl.folder', System.getenv('BENCH_SITL_FOLDER') ?: ''
+    // UART1 through the forwarder in WSL (tools\sitl\forwarder.py), UART n at this + n - 1; unset: SITL's own 5761
+    systemProperty 'bench.sitl.port', System.getenv('BENCH_SITL_PORT') ?: ''
 }
 benchTask('benchFindings', 'finding', 'The tests of bugs found and not fixed yet: each fails until its bug is fixed')
 benchTask('benchExplore', 'explore', "For the bench's author: the app started and looked at, nothing checked")

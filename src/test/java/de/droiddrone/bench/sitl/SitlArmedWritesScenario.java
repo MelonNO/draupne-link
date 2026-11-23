@@ -59,8 +59,8 @@ import java.util.function.Predicate;
 @Tag("sitl")
 class SitlArmedWritesScenario {
     private static final String ARMED = BetaflightUsb.ARMED;
-    /** UART2's and UART4's TCP ports in SITL (5760 + n): MSP is given to both here, the receiver's sticks and the rig's eyes. */
-    private static final int UART2 = 5762, UART4 = 5764;
+    /** UART2's and UART4's TCP ports (Sitl.uart: SITL's own or the forwarder's): MSP is given to both here, the receiver's sticks and the rig's eyes. */
+    private static final int UART2 = Sitl.uart(2), UART4 = Sitl.uart(4);
     /** Betaflight 4.4's arming block MSP among MSP_STATUS' arming-disable flags. */
     private static final int MSP_BLOCK = 1 << Msp.ARMING_DISABLED_MSP_BIT;
     private static final int MSP_ATTITUDE = 108;
@@ -89,7 +89,8 @@ class SitlArmedWritesScenario {
         Tap tap = new Tap();
         Receiver rx = null;
         try {
-            // ---- the board: Betaflight as a program, set up as the drone is, MSP on UART2 and UART4 for the rig
+            // ---- the board: Betaflight as a program, fresh, set up as the drone is, MSP on UART2 and UART4 for the rig
+            film.add("a fresh board: " + Sitl.fresh(film::remark), null, "sitl", "");
             String version;
             try (BetaflightUsb fc = Sitl.open(film::remark)) {
                 version = Sitl.version(fc);

@@ -74,6 +74,19 @@ class SitlFailsafeScenario {
                 Msp.modeFlag(status, index(boxIds, FAILSAFE_BOX)), motors, phase >= 0 && phase < Sitl.PHASES.size() ? Sitl.PHASES.get(phase) : "?" + phase);
     }
 
+    /** Looks until the board has said no arming block for a second running (8 s at most); the last look. */
+    private static Look calm(SitlLink link, int[] boxIds) throws Exception {
+        long end = System.currentTimeMillis() + 8000, since = System.currentTimeMillis();
+        Look l = look(link, boxIds, System.nanoTime());
+        while (System.currentTimeMillis() < end) {
+            if (l.flags() != 0) since = System.currentTimeMillis();
+            else if (System.currentTimeMillis() - since >= 1000) return l;
+            Sitl.pause(100);
+            l = look(link, boxIds, System.nanoTime());
+        }
+        return l;
+    }
+
     private static int index(int[] ids, int id) {
         for (int i = 0; i < ids.length; i++) if (ids[i] == id) return i;
         return -1;
@@ -87,6 +100,7 @@ class SitlFailsafeScenario {
         List<String> timeline = new ArrayList<>();
         timeline.add("s after the last stick frame\tarmed\tarming blocks\tmodes\tmotors\tfailsafe phase");
         try {
+            film.add("a fresh board: " + Sitl.fresh(film::remark), null, "sitl", "");
             String version;
             try (BetaflightUsb fc = Sitl.open(film::remark)) {
                 version = Sitl.version(fc);
@@ -114,12 +128,23 @@ class SitlFailsafeScenario {
             try (SitlLink link = new SitlLink()) {
                 link.sticks(1000, 1000).startSticks();
                 Sitl.pause(1500);
-                Look rest = look(link, boxIds, System.nanoTime());
+                Look rest = calm(link, boxIds);
                 check(rest.flags() == 0, "stick frames over MSP, ARM off: nothing keeps it from arming (" + Msp.armingBlocks(rest.flags()) + ")");
-                link.sticks(1000, 2000);
-                long until = System.currentTimeMillis() + 3000;
+                // SITL drops its own receiver for a tenth of a second now and then (docs/TESTING.md, 2026-11-23); one that comes
+                // as the switch goes up leaves BADRX and ARMSWITCH: the switch down and up again, as a pilot would, 5 times at most
                 Look armed = rest;
-                while (!armed.armed() && System.currentTimeMillis() < until) armed = look(link, boxIds, System.nanoTime());
+                for (int flip = 1; flip <= 5 && !armed.armed(); flip++) {
+                    if (flip > 1) {
+                        film.remark("The ARM switch up did not arm it (" + Msp.armingBlocks(armed.flags()) + "): down and up again (" + flip + " of 5).");
+                        link.sticks(1000, 1000);
+                        calm(link, boxIds);
+                    }
+                    link.sticks(1000, 2000);
+                    long until = System.currentTimeMillis() + 3000;
+                    do {
+                        armed = look(link, boxIds, System.nanoTime());
+                    } while (!armed.armed() && System.currentTimeMillis() < until);
+                }
                 check(armed.armed(), "the ARM switch on with the throttle down arms it");
                 link.sticks(1080, 2000);
                 Sitl.pause(1500);
