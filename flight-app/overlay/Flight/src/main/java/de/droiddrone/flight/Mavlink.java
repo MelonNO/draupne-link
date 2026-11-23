@@ -835,7 +835,7 @@ public class Mavlink {
     }
 
     public void addData(byte[] buf, int dataLength){
-        if (dataLength < MAVLinkPacket.MAVLINK1_HEADER_LEN) return;
+        if (dataLength <= 0) return; // DRAUPNE Link (fleet): a short read is a frame's tail or head (MavFrameStream), never dropped
         byte[] data = new byte[dataLength];
         System.arraycopy(buf, 0, data, 0, dataLength);
         serialRawData.offer(data);
@@ -888,14 +888,27 @@ public class Mavlink {
         }
     }
 
+    /**
+     * DRAUPNE Link (fleet): the FC's bytes as a stream (MavFrameStream) - a frame split across two USB reads is put
+     * together, a read that begins inside a frame resyncs on the next start byte; upstream parsed each read alone and
+     * lost both (and every frame after a bad first byte). Each candidate is checked by parsePackets (its CRC).
+     */
+    private final de.droiddrone.common.MavFrameStream frames = new de.droiddrone.common.MavFrameStream();
+
     private void processData(byte[] data){
-        List<MAVLinkPacket> packets = null;
+        final List<MAVLinkPacket> packets = new ArrayList<>();
         try {
-            packets = parsePackets(data);
+            frames.feed(data, data.length, (d, off, len) -> {
+                List<MAVLinkPacket> one = parsePackets(java.util.Arrays.copyOfRange(d, off, off + len));
+                if (one.size() != 1) return false;
+                packets.add(one.get(0));
+                return true;
+            });
         }catch (Exception e){
+            frames.reset();
             log("Mavlink - parsePackets error: " + e);
         }
-        if (packets == null || packets.isEmpty()) return;
+        if (packets.isEmpty()) return;
         sendUdpPackets(packets);
         for (MAVLinkPacket packet : packets) {
             tunnelToPc(packet); // DRAUPNE Link (fleet): the PC's tunnel, while open
