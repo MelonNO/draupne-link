@@ -513,6 +513,23 @@ rule, in Common; it also reads the sources: no wake lock beside the notice). On 
 stays down). Until pc.59 is on the drones a screen lock does it; the pilot says every drone phone has one (Q-010).
 **The pilot: approved.**
 
+**F-084 - SETUP > Set up a new drone froze the window for about half a second as it opened.** The bench's freeze
+watch (0.5 s) caught it in about half of ten runs of Betaflight as a program on 2026-11-23 (0.46 - 0.61 s), always
+at the guide's opening. Measured: nothing slow was asked of the network, Tailscale, the phone or the USB ports. The
+guide built and laid out all seven of its pages at once, and the motors step read its 3D drone (a model and two large
+pictures, 0.12 - 0.16 s) on the window's thread, the first time in a run. **Mended (PC):** a page is built when it is
+first shown; the 3D drone is read in the background as the guide opens; every page's own checks still start at once.
+The window now stands still 0.25 - 0.28 s at the first open (later opens about 0.1 s); the suite of Betaflight as a
+program passed twice in a row on it. Same in every setup guide; words and steps unchanged. Test:
+`WizardPagesBuiltWhenShownTest` - red before.
+
+**F-085 - The arming block MSP's words blamed Configurator alone.** Since F-078, Drone setup sets this block itself
+before it opens Betaflight's CLI. If the link drops then, the block stays until the drone restarts (seen on
+Betaflight as a program when a connection broke), and TOOLS > RC check said "Configurator connected. Disconnect it,
+or power-cycle the FC." **Mended (PC):** "Arming blocked over MSP (Drone setup or Configurator). Restart the drone."
+The FC line ("FC: ARMING BLOCKED BY MSP (TOOLS > RC CHECK)") was right and stays. Test: `FcTelemetryTest` - red
+before.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
