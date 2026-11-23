@@ -72,6 +72,7 @@ final class MapWindow extends JFrame {
             routeWindow = new RouteWindow(this, map, elevation, () -> main == null ? null : main.flownLink(), () -> track,
                     () -> main != null && main.fleetWatchOnly()); // GU-8: a watching PC sends no route
             if (main != null) routeWindow.setRallyPlace((lat, lon) -> main.fleetOps.rallyForFlown(lat, lon)); // AC-10
+            if (main != null) routeWindow.setReturnPlan(main.fleetOps::returnForFlown, main.fleetOps::flownReturnOnDrone); // RT-9 / FD-6
         }
         return routeWindow;
     }

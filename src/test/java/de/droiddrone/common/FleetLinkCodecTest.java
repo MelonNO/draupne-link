@@ -48,7 +48,7 @@ class FleetLinkCodecTest {
         s.routeState = 3;
         s.routePercent = 100;
         byte[] d = s.encode();
-        assertEquals(FleetStatus.BYTES, d.length);
+        assertEquals(FleetStatus.WITH_RTL_BYTES, d.length);
         FleetStatus b = FleetStatus.decode(d, d.length);
         assertEquals(60.1234567, b.lat, 1e-7);
         assertEquals(10.7654321, b.lon, 1e-7);
@@ -59,7 +59,7 @@ class FleetLinkCodecTest {
         assertEquals(4, b.mode);
         assertEquals(1, b.phase);
         assertEquals(777, b.routeBlock);
-        assertNull(FleetStatus.decode(d, d.length - 1));
+        assertNull(FleetStatus.decode(d, FleetStatus.BYTES - 1));
         d[1] = 9;
         assertNull(FleetStatus.decode(d, d.length), "another version");
     }

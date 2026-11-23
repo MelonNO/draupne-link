@@ -94,6 +94,10 @@ class AutolaunchLoopbackTest {
                 return 0; // awake (listening)
             }
 
+            public de.droiddrone.pc.route.TerrainSource terrain() { // RT-9: a reserve's way home over flat ground
+                return (la, lo) -> GROUND;
+            }
+
             public boolean confirm(String question) {
                 return true;
             }

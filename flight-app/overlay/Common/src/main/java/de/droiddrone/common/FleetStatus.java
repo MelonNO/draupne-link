@@ -22,11 +22,15 @@ package de.droiddrone.common;
  * is commanded (FleetCmd) - [0x38][version 1] then: lat, lon (1e7 i32), height above sea level (dm i32), velocity east,
  * north, up (cm/s i16 each), battery % (u8, 255 not known), flags (u8: armed, GNSS 3D, landed, pilot session up, PC
  * heard), ArduPilot mode (u8, 255 not known), the follower's phase (u8, 255 none), error radius (dm u16), home height
- * above sea level (dm i32), the route upload's block (u16), state (u8) and percent (u8). 34 bytes. Java 11.
+ * above sea level (dm i32), the route upload's block (u16), state (u8) and percent (u8). 34 bytes. Then (fleet RT-9)
+ * RTL_ALT as ArduPilot last answered it (dm u16 above home, 65535 not known): 36 bytes. An older PC reads the first 34;
+ * a report of 34 (an older phone) reads as not known. Java 11.
  */
 public final class FleetStatus {
     public static final byte PACKET = 0x38;
-    public static final int VERSION = 1, BYTES = 34;
+    public static final int VERSION = 1, BYTES = 34, WITH_RTL_BYTES = 36;
+    /** RTL_ALT on the FC as it answered (dm above home); -1 not known. */
+    public int rtlAltDm = -1;
     public static final int ARMED = 1, GNSS = 2, LANDED = 4, PILOTED = 8, PC_HEARD = 16;
 
     public double lat, lon, altAmsl, velE, velN, velU, errM, homeAmsl;
@@ -37,7 +41,7 @@ public final class FleetStatus {
     }
 
     public byte[] encode() {
-        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(BYTES);
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(WITH_RTL_BYTES);
         b.put(PACKET).put((byte) VERSION)
                 .putInt(i(lat * 1e7)).putInt(i(lon * 1e7)).putInt(i(altAmsl * 10))
                 .putShort(s(velE * 100)).putShort(s(velN * 100)).putShort(s(velU * 100))
@@ -45,6 +49,8 @@ public final class FleetStatus {
                 .putShort((short) Math.max(0, Math.min(65535, Math.round(errM * 10))))
                 .putInt(i(homeAmsl * 10))
                 .putShort((short) routeBlock).put((byte) routeState).put((byte) routePercent);
+
+        b.putShort((short) (rtlAltDm < 0 ? 65535 : Math.min(65534, rtlAltDm)));
         return b.array();
     }
 
@@ -69,6 +75,10 @@ public final class FleetStatus {
         s.routeState = b.get() & 0xff;
         s.routePercent = b.get() & 0xff;
         if (Math.abs(s.lat) > 90 || Math.abs(s.lon) > 180) return null;
+        if (len >= WITH_RTL_BYTES && d.length >= WITH_RTL_BYTES) { // RT-9: RTL_ALT read back (an older phone: not known)
+            int r = (d[BYTES] & 0xff) << 8 | (d[BYTES + 1] & 0xff);
+            s.rtlAltDm = r == 65535 ? -1 : r;
+        }
         return s;
     }
 

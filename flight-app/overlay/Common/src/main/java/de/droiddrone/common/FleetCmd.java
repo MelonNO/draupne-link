@@ -42,6 +42,24 @@ public final class FleetCmd {
      * each as an ADS-B target (ADSB_VEHICLE).
      */
     public static final byte TRAFFIC = 0x3F;
+    /**
+     * Fleet RT-9 / FD-6 / AC-10: RETURN [0x40][RTL height above home dm u16] - a drone out on its own (dispatched, a
+     * reserve on its way, the pilot's own on a route) gets its RTL_ALT; the phone sets it (PARAM_SET) and its reports
+     * carry RTL_ALT as ArduPilot answered ({@link FleetStatus#rtlAltDm}). 0 changes nothing.
+     */
+    public static final byte RETURN = 0x40;
+
+    /** RETURN: RTL_ALT relM above home (dm, rounded up: never under the height planned). */
+    public static byte[] ret(double relM) {
+        int dm = Double.isNaN(relM) ? 0 : (int) Math.max(0, Math.min(65534, Math.ceil(relM * 10 - 1e-6)));
+        return new byte[]{RETURN, (byte) (dm >>> 8), (byte) dm};
+    }
+
+    /** RETURN's height (m above home): 0 changes nothing; -1 when cut short or not a RETURN. */
+    public static double readReturnHeight(FleetCmd c) {
+        if (c == null || c.inner() != RETURN || c.length < 3) return -1;
+        return ((c.data[c.at + 1] & 0xff) << 8 | (c.data[c.at + 2] & 0xff)) / 10.0;
+    }
 
     public static byte[] mark(int id, double floorM) {
         int dm = (int) Math.max(0, Math.min(65535, Math.round(floorM * 10)));
