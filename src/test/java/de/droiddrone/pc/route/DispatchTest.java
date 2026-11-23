@@ -37,6 +37,37 @@ class DispatchTest {
     }
 
     @Test
+    void eachLegsReturnHeightClearsTheGroundOnTheWayToItsRallyPointByItsLayer() throws Exception {
+        // a 150 m ridge east of the start: not under the route north, but on the straight line to a rally point east
+        double[] rally = GeoLocal.offset(60, 10, 300, 0);
+        TerrainSource ridge = (lat, lon) -> {
+            double e = GeoLocal.east(60, 10, lat, lon);
+            return e > 140 && e < 160 ? 250.0 : 100.0;
+        };
+        List<Dispatch.Drone> d = List.of(new Dispatch.Drone("A", 60, 10, 100), new Dispatch.Drone("B", 60.0005, 10, 100));
+        List<Dispatch.Leg> home = Dispatch.plan(d, 60.01, 10.0, 60, ridge, RoutePlanner.Limits.ARDUCOPTER_DEFAULT);
+        assertEquals(60, home.get(0).rtlMinM(), 0.01, "home: flat, its route height");
+        assertEquals(70, home.get(1).rtlMinM(), 0.01, "the second its layer higher");
+        List<Dispatch.Leg> legs = Dispatch.plan(d, 60.01, 10.0, 60, ridge, RoutePlanner.Limits.ARDUCOPTER_DEFAULT,
+                java.util.Map.of("A", rally));
+        assertEquals(150 + 60, legs.get(0).rtlMinM(), 0.01, "over the ridge on the way to its rally point, by its route height");
+        // FD-6 with the mission's own way home: over flat ground the return legs keep the layers apart in the same order
+        // as the RTL heights (the RTL goes no lower than the layer its return leg flies)
+        List<Dispatch.Leg> flat = Dispatch.plan(d, 60.01, 10.0, 60, FLAT, RoutePlanner.Limits.ARDUCOPTER_DEFAULT);
+        for (Dispatch.Leg l : flat) {
+            MissionBuilder.Mission m = l.mission();
+            for (int i = m.returnSeq(); i <= m.endSeq(); i++) {
+                MissionItem it = m.items().get(i);
+                if (it.command == MissionItem.NAV_WAYPOINT || it.command == MissionItem.NAV_LOITER_UNLIM) {
+                    assertEquals(100 + 60 + l.layerM(), it.z, 0.6, "the way home in its own layer: " + it);
+                    assertTrue(l.rtlMinM() >= it.z - 100 - 0.6, "RTL not under its return leg");
+                }
+            }
+        }
+        assertEquals(Dispatch.LAYER_M, flat.get(1).rtlMinM() - flat.get(0).rtlMinM(), 0.01);
+    }
+
+    @Test
     void missingTerrainIsNamedNotGuessed() {
         TerrainSource none = (lat, lon) -> Double.NaN;
         RoutePlanner.MissingTerrain m = assertThrows(RoutePlanner.MissingTerrain.class, () -> Dispatch.plan(

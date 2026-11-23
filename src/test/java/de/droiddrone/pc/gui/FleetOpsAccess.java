@@ -76,6 +76,15 @@ public final class FleetOpsAccess {
         javax.swing.SwingUtilities.invokeAndWait(ops::tickReserves);
     }
 
+    /** RT-9 / FD-6: the RTL height planned for a drone out alone (m above home), NaN none. */
+    public double returnHeightOf(String drone) {
+        return ops.returnHeightOf(drone);
+    }
+
+    public boolean returnOnDrone(String drone) {
+        return ops.returnOnDrone(drone);
+    }
+
     public void close() {
         ops.close();
     }

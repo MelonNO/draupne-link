@@ -117,6 +117,10 @@ final class SitlFleetPhone implements AutoCloseable {
                         }
                     }
                     case FleetCmd.DISBAND -> brain = null;
+                    case FleetCmd.RETURN -> {
+                        double h = FleetCmd.readReturnHeight(c);
+                        if (h > 0) rtlAltSet(h);
+                    }
                     case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                     case FleetCmd.MARK -> mark(c.data, c.at, c.length);
                     case FleetCmd.LAUNCH -> {
@@ -151,9 +155,44 @@ final class SitlFleetPhone implements AutoCloseable {
     }
 
     private volatile de.droiddrone.common.MissionUpload upload;
+
+    /** The upload under way, for a failing test's message. */
+    String uploadWhy() {
+        de.droiddrone.common.MissionUpload u = upload;
+        return u == null ? "no upload" : "block " + routeBlock + " type " + u.missionType() + " state " + u.state() + " " + u.percent() + " % " + u.reason();
+    }
     /** AC-10: the rally list ArduPilot read back (null: none yet), and RALLY_INCL_HOME as ArduPilot answered it. */
     volatile java.util.List<de.droiddrone.common.MissionItem> rallyRead;
     volatile float rallyInclHome = Float.NaN;
+
+    /** RT-9: RTL_ALT as ArduPilot answered the last RETURN (dm), -1 none yet. */
+    volatile int rtlAltDmRead = -1;
+    private volatile boolean rtlBusy;
+
+    /** As the phone's FleetRole: RETURN - PARAM_SET RTL_ALT; the answer (PARAM_VALUE) goes into the reports. */
+    private void rtlAltSet(double relM) {
+        if (rtlBusy) return; // the PC sends it again in a second
+        rtlBusy = true;
+        Thread t = new Thread(() -> {
+            try {
+                float got;
+                try {
+                    got = fc.setParam("RTL_ALT_M", (float) (Math.round(relM * 10) / 10.0), 3000) * 100; // Copter 4.7
+                } catch (IOException none) {
+                    got = fc.setParam("RTL_ALT", Math.round(relM * 10) * 10, 3000); // 4.6 and before
+                }
+                texts.add("phone: RTL_ALT " + relM + " m asked, ArduPilot said " + got);
+                if (!Float.isNaN(got)) rtlAltDmRead = Math.round(got / 10);
+            } catch (Exception e) {
+                texts.add("phone: RTL_ALT " + e);
+                // asked again with the next RETURN
+            } finally {
+                rtlBusy = false;
+            }
+        }, "sitlRtlAlt");
+        t.setDaemon(true);
+        t.start();
+    }
 
     private void rallyInclHomeOff() {
         Thread t = new Thread(() -> {
@@ -254,6 +293,10 @@ final class SitlFleetPhone implements AutoCloseable {
         System.arraycopy("RTL_ALT".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, id, 0, 7);
         fc.send(new msg_param_set((float) Math.round(relM * 100), (short) Math.max(1, fc.fcSysId()), (short) 1, id, (short) 9,
                 MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+        byte[] m = new byte[16]; // Copter 4.7: RTL_ALT_M (m), as the phone sends both
+        System.arraycopy("RTL_ALT_M".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, m, 0, 9);
+        fc.send(new msg_param_set((float) (Math.round(relM * 10) / 10.0), (short) Math.max(1, fc.fcSysId()), (short) 1, m, (short) 9,
+                MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
     }
 
     /** As DRAUPNE Flight's LaunchRunner, with SITL's attitude taken as level (its IMU is the simulated one). */
@@ -327,6 +370,7 @@ final class SitlFleetPhone implements AutoCloseable {
         s.velN = p[6];
         s.battery = 80;
         s.homeAmsl = sitl.homeAlt;
+        s.rtlAltDm = rtlAltDmRead;
         de.droiddrone.common.MissionUpload u = upload;
         if (u != null) {
             s.routeBlock = routeBlock;

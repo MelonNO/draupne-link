@@ -88,7 +88,7 @@ class SitlFleetTest {
         ops = new de.droiddrone.pc.gui.FleetOpsAccess("Lead", name -> {
             SitlFleetPhone p = phones.get(name);
             return p == null ? null : p.address();
-        }, log);
+        }, log, (la, lo) -> ALT); // RT-9: the reserve's way home over flat ground
         ops.click("F1", "FOLLOW GROUP: add");
         ops.click("F2", "FOLLOW GROUP: add");
         ops.click("F2", "FOLLOW GROUP: start");

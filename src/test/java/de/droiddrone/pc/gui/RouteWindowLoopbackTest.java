@@ -71,6 +71,7 @@ class RouteWindowLoopbackTest {
             map.setFollow(false);
             map.centreOn(LAT, LON, 15);
             window = new RouteWindow(null, map, new TerrainStore(null), (la, lo) -> GROUND, () -> link, () -> null, () -> false);
+            window.setRtlSetter((l, cm) -> null); // the virtual phone has no tunnel: RT-9 in RouteWindowTest and SITL
             Route r = new Route("Loop");
             r.add(LAT + 0.002, LON);
             r.add(LAT + 0.002, LON + 0.003);

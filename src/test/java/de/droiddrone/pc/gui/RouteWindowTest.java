@@ -91,6 +91,9 @@ class RouteWindowTest {
         final StandInTelemetry t = new StandInTelemetry();
         final List<byte[]> blocks = new CopyOnWriteArrayList<>();
         final List<byte[]> commands = new CopyOnWriteArrayList<>();
+        /** RTL_ALT (cm) set on the drone, in order; the drone refuses it. */
+        final List<Integer> rtlSet = new CopyOnWriteArrayList<>();
+        volatile boolean rtlRefused;
         volatile Phone phone = Phone.ANSWERS;
 
         StandInLink() throws java.io.IOException {
@@ -162,6 +165,10 @@ class RouteWindowTest {
             map.setFollow(false);
             map.centreOn(LAT, LON, 15);
             window = new RouteWindow(null, map, new TerrainStore(null), ground, () -> link, () -> null, () -> watching);
+            window.setRtlSetter((l, cm) -> { // RT-9: as the tunnel would, read back
+                link.rtlSet.add(cm);
+                return link.rtlRefused ? "RTL_ALT not taken." : null;
+            });
         });
     }
 
@@ -299,6 +306,30 @@ class RouteWindowTest {
     }
 
     // ------------------------------------------------------------------ what goes wrong
+
+    @Test
+    void itsReturnHeightClearsTheGroundAndIsReadBackBeforeGo() throws Exception {
+        route(new double[]{LAT + 0.002, LON}, new double[]{LAT + 0.002, LON + 0.003});
+        planned();
+        double[] asked = new double[2];
+        SwingUtilities.invokeAndWait(() -> window.setReturnPlan((min, la, lo, homeAmsl) -> {
+            asked[0] = min;
+            return min + 10; // another drone's way home crosses: a layer up
+        }, dm -> asked[1] = dm));
+        click(upload());
+        waitForOnSwing(() -> go().isEnabled(), 10_000, "uploaded");
+        assertEquals(1, link.rtlSet.size(), "RTL_ALT set once, after the route");
+        // over the highest ground on the way home (at least home's own) by the route's height
+        assertTrue(asked[0] >= new de.droiddrone.pc.route.Route("x").heightM() - 0.01, "RT-9 over the ground: " + asked[0]);
+        assertEquals(Math.ceil((asked[0] + 10) * 10 - 1e-6) * 10, link.rtlSet.get(0), 0.01, "the planner's height, to the dm");
+        assertEquals(link.rtlSet.get(0) / 10, (int) asked[1], "told back as read back");
+        SwingUtilities.invokeAndWait(() -> assertTrue(window.statusText().contains("Comes home"), window.statusText()));
+        // refused by the drone: no GO
+        link.rtlRefused = true;
+        click(upload());
+        waitForOnSwing(() -> window.statusText().startsWith("Return height"), 10_000, "refused");
+        SwingUtilities.invokeAndWait(() -> assertFalse(go().isEnabled(), "no GO without its return height"));
+    }
 
     @Test
     void theRallyPointGoesUpBeforeTheRouteOnlyWhenItChanged() throws Exception {

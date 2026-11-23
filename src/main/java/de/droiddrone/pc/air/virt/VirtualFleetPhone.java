@@ -191,7 +191,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 }
                 case FleetCmd.RETURN -> { // RT-9 / FD-6: as FleetRole - its RTL_ALT, "read back" at once
                     double h = FleetCmd.readReturnHeight(c);
-                    if (h > 0) rtlAltDm = (int) Math.round(h * 10);
+                    if (h > 0 && !ignoreReturn) rtlAltDm = (int) Math.round(h * 10);
                 }
                 case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 default -> {
@@ -250,7 +250,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             if (copter.landed) s.flags |= FleetStatus.LANDED;
             if (now - commanderHeardAt <= 3000) s.flags |= FleetStatus.PC_HEARD;
             s.errM = copter.errorM((now - start) / 1000.0);
-            s.rtlAltDm = rtlAltDm;
+            s.rtlAltDm = ignoreReturn ? -1 : rtlAltDm;
             FollowerBrain b = brain;
             s.phase = b == null ? 255 : b.phase();
         }
@@ -313,6 +313,8 @@ public final class VirtualFleetPhone implements AutoCloseable {
     public volatile de.droiddrone.common.group.Traffic traffic;
     /** RT-9: RTL_ALT on its "FC" (dm above home): ArduPilot Copter's default 15 m until the PC sets it. */
     public volatile int rtlAltDm = 150;
+    /** An older phone: RETURN unknown to it, its reports without RTL_ALT (tests). */
+    public volatile boolean ignoreReturn;
 
     public double rtlAltM() {
         return rtlAltDm / 10.0;

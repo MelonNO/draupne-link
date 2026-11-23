@@ -123,6 +123,22 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    fixed. FL-14 - the floor's - / + and a typed value on the group's map label. FL-9 - GROUP DESIGN, with the size
    (AC-35) and layer (AC-13) checks. Rally points of a group's followers come from the group's exit plans; those of
    drones sent out on their own from `RallyPlan`: the two are not yet checked against each other.
+6. **Return heights (RT-9, FD-6, A5), 2026-11-23:** every drone the PC sends out on its own (DISPATCH, CALL RESERVE,
+   the route window's GO) gets an RTL_ALT over the highest ground on its straight ways home and to its rally point,
+   clear by its own route height (dispatch: its layer; a reserve: its approach height). `ReturnHeights` runs
+   `SoloReturns` over all of them at each one that goes out or comes back: ways home within 20 m go a layer apart,
+   never under a drone's own terrain height. Dispatched drones and reserves get it by `FleetCmd` RETURN; the launch
+   order waits until the drone's report says ArduPilot has it (said after 10 s; an older phone never confirms and
+   stays on the ground). The pilot's own drone: through the tunnel after the route, read back before GO; a later
+   change goes by RETURN. A reserve that joins the group leaves the set (its exit plan sets RTL_ALT). Drone setup
+   writes FS_EKF_ACTION 2: GNSS lost, ArduPilot holds its height (ALT_HOLD) instead of landing (A5).
+   - **Not as asked:** RTL_ALT is above ArduPilot's home, the terrain heights above sea level: a home height off the
+     map (RT-5) shifts the clearance by as much. A drone's "way home" for FD-6 is the straight line from the far end of
+     its way out (a dispatch slot, the group, the route's farthest point) to its rally point. The dispatch mission's own
+     return leg (`returnSeq`) is never entered by the PC; it flies in the drone's layer, the same order as the RTL
+     heights within one dispatch, not re-planned with later solo drones.
+   - Tests: `ReturnHeightsTest`, `DispatchTest`, `RouteWindowTest`, `ReturnHeightsLoopbackTest`; real ArduPilot
+     `SitlReturnTest` (instances 10, 11).
 
 **The pilot GUI (area G), 2026-11-23:**
 - GU-1 - GU-7 built (the merges of `fleet-osd`, `fleet-ardx`, `fleet-tour`): words and FC type, right-click fleet items,

@@ -190,13 +190,17 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   LEAD `[0x3A][lead u8][RTL height above home dm u16]` (0: RTL_ALT left as it is - the hand-over names the lead before
   its return height is known; RTL_ALT 0 would be ArduPilot's "home at the height it has"), CLEAR `[0x3B][lat i32][lon
   i32][height above sea level dm i32]` (0 / 0 or off the globe refused; the PC's writer sends nonsense so), DISBAND
-  `[0x3C]`, MARK `[0x3D][mark id i32][floor dm u16]` (0 clears). The commander: a pilot session's PC, else the PC that
+  `[0x3C]`, MARK `[0x3D][mark id i32][floor dm u16]` (0 clears), RETURN `[0x40][RTL height above home dm u16]` (RT-9 /
+  FD-6: the phone sets RTL_ALT by PARAM_SET and its reports carry what ArduPilot answered; 0 changes nothing; also from
+  the pilot session's PC). The commander: a pilot session's PC, else the PC that
   piloted or commanded it last; another only with the FC known DISARMED and the commander silent 10 s.
 - **`FleetStatus` 0x38** (phone to its commander, twice a second while commanded): `[0x38][version 1][lat i32 1e-7]
   [lon i32][height above sea level dm i32][vel east, north, up cm/s i16][battery % u8, 255 not known][flags u8: 1 armed,
   2 GNSS 3D, 4 landed (known DISARMED: a stale heartbeat is neither), 8 piloted, 16 PC heard][ArduPilot mode u8, 255 not
   known][follower phase u8, 255 none][error radius dm u16][home height above sea level dm i32][the PC's newest route
-  block u16][its state u8][percent u8]`, 34 bytes. Numbers past a field's range are saturated, never wrapped.
+  block u16][its state u8][percent u8][RTL_ALT dm u16, 65535 not known]`, 36 bytes - RTL_ALT as the FC last answered
+  it (PARAM_VALUE), the PC's check that a RETURN is on the drone; an older PC reads 34, a 34-byte report (an older
+  phone) reads as not known. Numbers past a field's range are saturated, never wrapped.
 - **LAUNCH_STATUS `0x3E`** (phone to its commander): `[0x3E][LaunchWire status]`. `LaunchWire` order `[version 1][kind
   u8: 1 launch, 2 cancel][mark id i32][call id u16][approach height dm u16][floor dm u16][column lat i32][lon i32,
   i32 min = not known][lead sysid u8][join layer u8][join cell u8][min battery % u8][CRC-8]`, 25 bytes; status
