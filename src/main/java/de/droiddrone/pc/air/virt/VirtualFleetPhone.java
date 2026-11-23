@@ -36,12 +36,18 @@ public final class VirtualFleetPhone implements AutoCloseable {
 
     public VirtualFleetPhone(String id, double refLat, double refLon, double groundAmsl, double e, double n, double altAmsl, String key)
             throws IOException {
+        this(id, InetAddress.getLoopbackAddress(), refLat, refLon, groundAmsl, e, n, altAmsl, key);
+    }
+
+    /** On a loopback address of its own (the virtual fleet's 127.0.0.x, so the name service finds it as a phone). */
+    public VirtualFleetPhone(String id, InetAddress bind, double refLat, double refLon, double groundAmsl, double e, double n,
+                             double altAmsl, String key) throws IOException {
         this.refLat = refLat;
         this.refLon = refLon;
         this.groundAmsl = groundAmsl;
         this.key = key;
         this.copter = new VirtualCopter(id, e, n, altAmsl, groundAmsl, id.hashCode());
-        socket = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+        socket = new DatagramSocket(0, bind);
         Thread r = new Thread(this::receive, "virtualFleetPhone-" + id);
         r.setDaemon(true);
         r.start();
@@ -51,7 +57,23 @@ public final class VirtualFleetPhone implements AutoCloseable {
     }
 
     public InetSocketAddress address() {
-        return new InetSocketAddress(InetAddress.getLoopbackAddress(), socket.getLocalPort());
+        return new InetSocketAddress(socket.getLocalAddress(), socket.getLocalPort());
+    }
+
+    /** Packets that are not fleet commands (a name query: the virtual fleet answers it as a phone does). */
+    private volatile java.util.function.Consumer<DatagramPacket> other;
+
+    public void onOther(java.util.function.Consumer<DatagramPacket> handler) {
+        other = handler;
+    }
+
+    /** A datagram from this phone's own socket. */
+    public void sendRaw(byte[] data, InetSocketAddress to) {
+        try {
+            socket.send(new DatagramPacket(data, data.length, to.getAddress(), to.getPort()));
+        } catch (IOException ignored) {
+            // the next one
+        }
     }
 
     /** The phone's 4G cut (nothing in, nothing out) or back. */
@@ -79,7 +101,12 @@ public final class VirtualFleetPhone implements AutoCloseable {
             }
             if (!linkUp) continue;
             FleetCmd c = FleetCmd.read(p.getData(), p.getLength());
-            if (c == null || !c.key.equals(key)) continue;
+            if (c == null) {
+                java.util.function.Consumer<DatagramPacket> h = other;
+                if (h != null) h.accept(p);
+                continue;
+            }
+            if (!c.key.equals(key)) continue;
             long now = System.currentTimeMillis();
             commander = new InetSocketAddress(p.getAddress(), p.getPort());
             commanderHeardAt = now;

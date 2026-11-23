@@ -1458,6 +1458,12 @@ final class MapWindow extends JFrame {
         return tools.ruler;
     }
 
+    /** Fleet TO-3: MAP TOOLS > TOOLS > ROUTE. */
+    javax.swing.JComponent tourRoute() {
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
+        return tools.route;
+    }
+
     javax.swing.JComponent tourDraw() {
         tools.showGroup(MapToolsPanel.Group.DRAW, false);
         return tools.line;
