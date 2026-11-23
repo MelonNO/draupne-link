@@ -745,6 +745,11 @@ public class Udp {
                         boolean samePc = sameAddress && receiverPacket.getPort() == lastPcPort;
                         SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress,
                                 () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now, SessionGate.sessionId(d, len));
+                        // fleet FL-6: the group's own PC takes this follower as its new lead (FleetCommandGate.leadConnect)
+                        if (v == SessionGate.Verdict.SPECTATOR && fleet.mayLead(from, now)) {
+                            v = gate.leadSession(now, SessionGate.sessionId(d, len));
+                            log("New lead: the group's PC " + from.getHostAddress() + " takes the sticks");
+                        }
                         if (v == SessionGate.Verdict.DROP) continue;
                         if (v == SessionGate.Verdict.WRONG_KEY) {
                             noteWrongKey(receiverPacket);
