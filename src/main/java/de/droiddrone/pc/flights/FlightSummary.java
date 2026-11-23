@@ -76,9 +76,16 @@ public final class FlightSummary {
     public final int failsafes;
     /** The highest ping during the flight, ms: the link log's, else the recording's; -1 not known. */
     public final int worstPingMs;
+    /**
+     * AC-14: the nearest another DRAUPNE drone came while this one was armed (its record's), or null; with
+     * {@link #othersWatched} null means none came near, without it nothing is known (a flight from before, a spectator's).
+     */
+    public final ClosestApproach.Near closest;
+    public final boolean othersWatched;
 
     private FlightSummary(long durationMs, long armedMs, double distanceM, double furthestM, double maxAltM, AltitudeKind maxAltKind,
-                          double minCellVolts, double minPackVolts, int linkLosses, int failsafes, int worstPingMs) {
+                          double minCellVolts, double minPackVolts, int linkLosses, int failsafes, int worstPingMs,
+                          ClosestApproach.Near closest, boolean othersWatched) {
         this.durationMs = durationMs;
         this.armedMs = armedMs;
         this.distanceM = distanceM;
@@ -90,6 +97,8 @@ public final class FlightSummary {
         this.linkLosses = linkLosses;
         this.failsafes = failsafes;
         this.worstPingMs = worstPingMs;
+        this.closest = closest;
+        this.othersWatched = othersWatched;
     }
 
     /** Reads the flight's files, then {@link #of(FlightData)}: not on the Swing thread. */
@@ -183,8 +192,10 @@ public final class FlightSummary {
         }
         if (worstPing < 0) for (FlightData.Sample s : d.telemetry) worstPing = Math.max(worstPing, s.pingMs());
 
+        // AC-14: the closest approach, from the flight's record
+        FlightRecord record = d.flight.record() == null ? null : FlightRecord.read(d.flight.record());
         return new FlightSummary(d.flight.durationMs(), armedMs, distance, furthest, maxAlt, kind, minCell, minPack, losses, failsafes,
-                Math.max(-1, worstPing));
+                Math.max(-1, worstPing), record == null ? null : record.closest(), record != null && record.watchedOthers());
     }
 
     /** The time between samples that both say armed, added up; -1 without samples. */
@@ -252,6 +263,12 @@ public final class FlightSummary {
         return worstPingMs < 0 ? UNKNOWN : worstPingMs + " MS";
     }
 
+    /** AC-14: "14 M" (who and how: {@link ClosestApproach.Near#text}); NONE when the others were watched and none came; {@link #UNKNOWN} not known. */
+    public String closestText() {
+        if (closest != null) return Math.round(closest.distanceM()) + " M";
+        return othersWatched ? "NONE" : UNKNOWN;
+    }
+
     /** Every figure in the order a screen or the report shows them. */
     public List<Figure> figures() {
         return List.of(new Figure("DURATION", durationText(), true),
@@ -262,6 +279,7 @@ public final class FlightSummary {
                 new Figure(batteryLabel(), batteryText(), !Double.isNaN(minCellVolts) || !Double.isNaN(minPackVolts)),
                 new Figure("LINK LOSSES", linkLossesText(), linkLosses >= 0),
                 new Figure("FAILSAFES", failsafesText(), failsafes >= 0),
-                new Figure("WORST PING", worstPingText(), worstPingMs >= 0));
+                new Figure("WORST PING", worstPingText(), worstPingMs >= 0),
+                new Figure("CLOSEST", closestText(), closest != null || othersWatched));
     }
 }

@@ -52,6 +52,20 @@ final class ArduSetupPages {
         volatile int autotunePos;
         /** The cells the SETTINGS page chose (the tuning's battery compensation). */
         volatile int cells = 4;
+        /**
+         * GU-4: the pilot's radio switches as Drone setup knows them (SETUP's ARM and FLIGHT MODES switches): ARM and the
+         * mode switch go on the same AUX channels as on the Betaflight drones, so one radio flies both. AUX1 / AUX2 when
+         * not set (or set to "leave as it is").
+         */
+        volatile int radioArmAux = 1, radioModeAux = 2;
+
+        /** The radio's switches from this PC's settings. */
+        void radioFrom(de.droiddrone.pc.PcConfig config) {
+            int arm = de.droiddrone.pc.setup.ModeSwitch.parseArmAux(config.getString(de.droiddrone.pc.setup.ModeSwitch.ARM_KEY));
+            de.droiddrone.pc.setup.ModeSwitch modes = de.droiddrone.pc.setup.ModeSwitch.parse(config.getString(de.droiddrone.pc.setup.ModeSwitch.KEY));
+            radioArmAux = arm > 0 ? arm : 1;
+            radioModeAux = modes != null && modes.aux() != radioArmAux ? modes.aux() : radioArmAux == 2 ? 3 : 2;
+        }
 
         MavSession fc() {
             ArduUsb.Found f = found;
@@ -68,6 +82,7 @@ final class ArduSetupPages {
     /** SETUP &rarr; ArduPilot drone setup. */
     static void open(MainWindow main) {
         State state = new State();
+        state.radioFrom(main.config());
         List<WizardDialog.Page> pages = List.of(new FindPage(state), new SettingsPage(state), new PortsPage(state),
                 new TuningPage(state), new CalibratePage(state), new MotorsPage(state), new BenchPage(state));
         WizardDialog w = new WizardDialog(main, "ArduPilot drone setup", pages, () -> main.logLine("ArduPilot drone setup finished."));
@@ -575,7 +590,8 @@ final class ArduSetupPages {
 
         ArduPlan.Choices choices() {
             state.cells = (Integer) cells.getValue();
-            ArduPlan.Choices c = new ArduPlan.Choices((Integer) sysId.getValue(), (Integer) cells.getValue(), (Integer) capacity.getValue(), 1, 2,
+            ArduPlan.Choices c = new ArduPlan.Choices((Integer) sysId.getValue(), (Integer) cells.getValue(), (Integer) capacity.getValue(), 
+                    state.radioArmAux, state.radioModeAux,
                     de.droiddrone.pc.setup.ardu.ArduTuning.modesWith(ArduPlan.DEFAULT_MODES, state.autotunePos), (Integer) rtlAlt.getValue(), 10, 2.5, 1.5, true);
             de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
             // the switches from Betaflight; cells and pack went into the boxes (and can be changed there)

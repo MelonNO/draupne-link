@@ -36,8 +36,13 @@ import java.util.Map;
 public final class ArduPlan {
     /** ArduPilot's arm / disarm switch function for an RCx_OPTION. */
     public static final int RC_OPTION_ARM_DISARM = 153;
-    /** Copter's flight modes the mode switch offers by default, low to high: STABILIZE, ALT HOLD, LOITER, POS HOLD, RTL, LAND. */
-    public static final int[] DEFAULT_MODES = {0, 2, 5, 16, 6, 9};
+    /**
+     * Copter's flight modes on the mode switch by default, positions 1 to 6: STABILIZE, ALT HOLD, LOITER, ALT HOLD, RTL,
+     * LOITER. GU-4: a 3-position switch (about 1000 / 1500 / 2000 us) lands on positions 1, 4 and 6 - STABILIZE, ALT HOLD
+     * and LOITER, the order of the Betaflight drones' acro, angle and position hold. Before, its top was LAND. RTL and LAND
+     * are the OSD's buttons (and position 5 of a 6-position switch).
+     */
+    public static final int[] DEFAULT_MODES = {0, 2, 5, 2, 6, 5};
 
     /** The pilot's choices for one drone. */
     public record Choices(int sysId, int cells, int capacityMah, int armAux, int modeAux, int[] flightModes,

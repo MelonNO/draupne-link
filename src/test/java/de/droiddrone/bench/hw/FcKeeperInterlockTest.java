@@ -140,6 +140,9 @@ class FcKeeperInterlockTest {
         // tripped: no window until the rig says CLEAR - and then only with the throttle back under the ceiling
         phone.sticks(1000, 1000);
         assertTrue(bench.ask("OPEN 5").startsWith("NO the keeper has tripped (THROTTLE CAP"), bench.ask("STATE"));
+        // the ARM switch off reaches the board with the next stick frames, and the keeper reads it in the board's next
+        // status (a loaded PC: maybe not before OPEN is asked - then the board still says ARMSWITCH)
+        Waits.waitFor(() -> "-".equals(bench.state().get("cannotArm")), 3000, "the board to see the ARM switch off", bench.said);
         assertEquals("OK", bench.ask("CLEAR"));
         assertEquals("OK window=5000", bench.ask("OPEN 5"));
         bench.arm(phone);
@@ -228,7 +231,7 @@ class FcKeeperInterlockTest {
         assertTrue(board.armingLocked());
         assertNull(bench.state().tripped(), "a window that ends disarmed is no trip");
 
-        assertEquals("OK window=1000", bench.ask("OPEN 1"));
+        assertEquals("OK window=3000", bench.ask("OPEN 3")); // time to arm in it on a loaded PC (bench.arm waits up to 5 s)
         bench.arm(phone);
         bench.waitForSaid("ARMED TIME: the arm window's time was over and the board was still armed - the arm window is closed.");
         Waits.waitFor(() -> !board.armed() && board.armingLocked(), 3000, "the board locked and disarmed", bench.said);
@@ -342,8 +345,14 @@ class FcKeeperInterlockTest {
         bench.start().beat();
         phone = bench.phone().sticks(1000, 1000).startSticks();
         assertEquals("OK window=30000", bench.ask("OPEN 30"));
-        bench.arm(phone);
+        // armed as bench.arm does it, but not waited for: the keeper's error at "THE BOARD IS ARMED" disarms the board
+        // within milliseconds, and a loaded PC's test thread may never see it armed in between
+        phone.sticks(1000, 1000);
+        Thread.sleep(60);
+        phone.sticks(1000, 2000);
+        bench.waitForSaid("ENDING: an error of the keeper's own");
         FcKeeper.Safe word = bench.keeper.awaitEnd();
+        assertTrue(bench.saidOf("THE BOARD IS ARMED (in the arm window"), "the board was armed when the error came: " + bench.said);
         assertTrue(bench.keeper.failed());
         assertTrue(word.safe(), word.text());
         assertFalse(board.armed());

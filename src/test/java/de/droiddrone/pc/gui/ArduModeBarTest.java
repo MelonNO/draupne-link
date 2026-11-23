@@ -125,4 +125,56 @@ class ArduModeBarTest {
     private static int kind(byte[] c) {
         return FcCommand.read(c, c.length).kind;
     }
+
+    /**
+     * GU-4: the radio's mode switch first, these buttons as backup. A route paused with GO and then taken elsewhere by
+     * the switch is not "paused" any more: the next GO starts it, and the lit button follows what the switch chose.
+     */
+    @Test
+    void theRadiosModeSwitchAndTheButtonsWorkTogether() {
+        List<byte[]> sent = new ArrayList<>();
+        ArduModeBar bar = new ArduModeBar(c -> sent.add(c));
+        FcTelemetry.Status ardu = new FcTelemetry.Status(true, List.of("ARM"), List.of(), 0, 0, 0, true, "AUTO");
+        bar.update(ardu, ArduModes.AUTO, null, 0);
+        bar.press(ArduModeBar.Action.START);
+        assertEquals(FcCommand.PAUSE, kind(last(sent)));
+        bar.update(ardu, ArduModes.STABILIZE, null, 1); // the pilot's switch: STABILIZE
+        for (ArduModeBar.Action a : ArduModeBar.Action.values()) assertFalse(bar.lit(a), a + ": the switch's mode has no button");
+        bar.update(ardu, ArduModes.LOITER, null, 2); // and back to LOITER on the switch
+        assertTrue(bar.lit(ArduModeBar.Action.LOITER));
+        bar.press(ArduModeBar.Action.START);
+        assertEquals(FcCommand.MISSION_START, kind(last(sent)), "the switch took it out of the pause: GO starts the route");
+    }
+
+    /** GU-4: a 3-position mode switch (low, middle, top) gives STABILIZE, ALT HOLD and LOITER on ArduPilot - never LAND. */
+    @Test
+    void aThreePositionSwitchGivesStabilizeAltHoldAndLoiter() {
+        int[] modes = de.droiddrone.pc.setup.ardu.ArduPlan.DEFAULT_MODES;
+        // ArduPilot's bands: position 1 up to 1230 us, 4 from 1491 to 1620, 6 from 1750
+        assertEquals(ArduModes.STABILIZE, modes[0], "low (1000 us)");
+        assertEquals(ArduModes.ALT_HOLD, modes[3], "middle (1500 us)");
+        assertEquals(ArduModes.LOITER, modes[5], "top (2000 us)");
+        assertEquals(ArduModes.LOITER, modes[2], "position 3 stays LOITER (the SITL gate flies it)");
+        for (int m : modes) assertNotEquals(ArduModes.LAND, m, "no LAND on the switch: the LND button");
+    }
+
+    /** GU-4: ArduPilot drone setup puts ARM and the mode switch where the radio has them for the Betaflight drones. */
+    @Test
+    void setupTakesTheRadiosSwitchesFromThisPc() throws Exception {
+        de.droiddrone.pc.PcConfig config = de.droiddrone.pc.PcConfig.defaults();
+        ArduSetupPages.State s = new ArduSetupPages.State();
+        s.radioFrom(config);
+        assertEquals(1, s.radioArmAux, "not set: ARM on AUX1");
+        assertEquals(2, s.radioModeAux, "the mode switch on AUX2");
+        config.set(de.droiddrone.pc.setup.ModeSwitch.ARM_KEY, "4");
+        config.set(de.droiddrone.pc.setup.ModeSwitch.KEY, "3:ACRO,ANGLE,POS_HOLD");
+        s.radioFrom(config);
+        assertEquals(4, s.radioArmAux);
+        assertEquals(3, s.radioModeAux);
+        config.set(de.droiddrone.pc.setup.ModeSwitch.ARM_KEY, "2");
+        config.set(de.droiddrone.pc.setup.ModeSwitch.KEY, "off");
+        s.radioFrom(config);
+        assertEquals(2, s.radioArmAux);
+        assertEquals(3, s.radioModeAux, "never on the ARM switch");
+    }
 }

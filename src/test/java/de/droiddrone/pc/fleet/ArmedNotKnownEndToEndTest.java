@@ -75,14 +75,21 @@ class ArmedNotKnownEndToEndTest {
         return lines.get(row).split(",", -1)[List.of(lines.get(0).split(",")).indexOf("armed")];
     }
 
+    // The waits below are long: on a loaded PC (the other test classes beside it) the link, the virtual drone and this
+    // test's threads all run late. They wait for what must come; none of them shortens what is checked.
     @Test
     void theAppStartedAgainWithItsDroneInTheAirDoesNotTakeItForDisarmed(@TempDir Path dir) throws Exception {
         PcConfig config = PcConfig.defaults();
         FlightModel.Setup setup = new FlightModel.Setup();
         setup.procedure = FlightModel.Procedure.GPS_RESCUE; // without sticks it stays armed and flies on by itself
+        // this test is about the armed state after a new connection, not Betaflight's 100 ms RX loss: its sticks come from
+        // a test thread, and on a loaded PC (the other test classes run beside it) 100 ms go by without one now and then -
+        // the drone then fell into failsafe before it was up. The app still closing ends its sticks for good: failsafe.
+        setup.rxLossMs = 1000;
         long droneStartedAt = System.currentTimeMillis();
         drone = new VirtualDrone(0, "MobileZulu", config.getKey(), InetAddress.getLoopbackAddress(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON, 0,
                 setup, log::add);
+        drone.ownTimeKept(); // its rules' times are what this test goes by: not starved by the other tests
         drone.start(0);
         wire = new Wire(InetAddress.getLoopbackAddress(), drone.port());
         ControlLink first = new ControlLink(config, InetAddress.getLoopbackAddress(), wire.port(), 0);
@@ -90,27 +97,34 @@ class ArmedNotKnownEndToEndTest {
         first.start();
         PossiblyFlying flag = new PossiblyFlying(MonoClock::ms); // as the window attaches its link to this PC's flag
         flag.attach(first, "MobileZulu", () -> PossiblyFlying.of(first.getTelemetry().getStatus()));
-        waitFor(() -> first.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+        waitFor(() -> first.getState() == ControlLink.State.READY, 15_000, "the link READY", log);
         FcTelemetry t = first.getTelemetry();
-        waitFor(() -> t.isDisarmedNow(MonoClock.ms(), 1000), 5000, "DISARMED, said with the mode names", log);
+        waitFor(() -> t.isDisarmedNow(MonoClock.ms(), 1000), 15_000, "DISARMED, said with the mode names", log);
         assertEquals(ArmedCheck.CLEAR, ArmedCheck.of(first, 0, MonoClock.ms()), "on the ground and read: nothing is asked");
         assertFalse(flag.holds());
 
         // armed, and up
         startSticks();
-        waitFor(() -> drone.fc.hadSticks(), 2000, "the sticks reach the virtual FC", log);
+        waitFor(() -> drone.fc.hadSticks(), 10_000, "the sticks reach the virtual FC", log);
         Thread.sleep(Math.max(0, FlightModel.BOOT_GRACE_MS + 700 - (System.currentTimeMillis() - droneStartedAt)));
-        armValue = 1900;
-        if (!Waits.until(() -> t.isArmedNow(MonoClock.ms(), 1000), 3000)) { // a gap in the sticks as the switch went on: off and on again
-            log.add("TEST: not armed at the switch's first try; off and on again");
+        // up to three tries: on a loaded PC this test's 50 Hz stick thread can stall past the FC's 100 ms RX loss, or
+        // the link go quiet long enough for a new session - the drone then drops on the ground (stage 2) or wants its
+        // switch off and on again, and only a new try gets it up. What the test is about comes after it is up.
+        for (int attempt = 1; ; attempt++) {
+            throttle = 1000;
             armValue = 1000;
             Thread.sleep(700);
             armValue = 1900;
+            boolean up = Waits.until(() -> t.isArmedNow(MonoClock.ms(), 1000), 8000);
+            if (up) {
+                throttle = 1900;
+                up = Waits.until(() -> drone.fc.altitudeM() > 45 || !drone.fc.isArmed(), 15_000) && drone.fc.altitudeM() > 45;
+            }
+            if (up) break;
+            assertTrue(attempt < 3, "armed and in the air at the third try at the latest\n" + String.join("\n", log));
+            log.add("TEST: not up at try " + attempt + " (" + (drone.fc.isArmed() ? "armed" : "disarmed") + ", " + drone.fc.failsafe() + "); again");
         }
-        waitFor(() -> t.isArmedNow(MonoClock.ms(), 1000), 3000, "armed, as the PC's telemetry says", log);
-        throttle = 1900;
-        waitFor(() -> drone.fc.altitudeM() > 45, 15_000, "in the air", log);
-        waitFor(() -> ArmedCheck.of(first, MonoClock.ms(), MonoClock.ms()) == ArmedCheck.ARMED, 3000, "ARMED, for the guards", log);
+        waitFor(() -> ArmedCheck.of(first, MonoClock.ms(), MonoClock.ms()) == ArmedCheck.ARMED, 10_000, "ARMED, for the guards", log);
         assertTrue(flag.holds());
 
         // the app is closed with the drone in the air (asked, and confirmed); the names' answer is lost from here on
@@ -131,7 +145,7 @@ class ArmedNotKnownEndToEndTest {
         flag.attach(again, "MobileZulu", () -> PossiblyFlying.of(again.getTelemetry().getStatus()));
         again.start();
         FcTelemetry t2 = again.getTelemetry();
-        waitFor(() -> again.getState() == ControlLink.State.READY && t2.getStatus() != null && namesLost.get() > 0, 10_000,
+        waitFor(() -> again.getState() == ControlLink.State.READY && t2.getStatus() != null && namesLost.get() > 0, 20_000,
                 "the new link up, its first statuses here, the mode names' answer lost on the wire", log);
         assertTrue(drone.fc.isArmed(), "still armed in the air (" + drone.fc.failsafe() + ", " + Math.round(drone.fc.altitudeM()) + " m)\n" + String.join("\n", log));
         assertFalse(t2.hasBoxNames());
@@ -155,7 +169,7 @@ class ArmedNotKnownEndToEndTest {
             waitFor(() -> {
                 FcTelemetry.Status s = t2.getStatus();
                 return s != null && s.armedKnown() && s.armed() && MonoClock.ms() - s.receivedAt() < 500;
-            }, 8000, "the mode names here: ARMED, said", log);
+            }, 15_000, "the mode names here: ARMED, said", log);
             assertTrue(drone.fc.isArmed());
             assertEquals(ArmedCheck.ARMED, ArmedCheck.of(again, 0, MonoClock.ms()));
             assertTrue(flag.holds());
@@ -173,16 +187,17 @@ class ArmedNotKnownEndToEndTest {
         drone = new VirtualDrone(0, "MobileZulu", config.getKey(), InetAddress.getLoopbackAddress(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON, 0,
                 new FlightModel.Setup(), log::add);
         drone.setFcLost(true); // nothing on the phone's USB
+        drone.ownTimeKept();
         drone.start(0);
         ControlLink l = new ControlLink(config, InetAddress.getLoopbackAddress(), drone.port(), 0);
         link = l;
         PossiblyFlying flag = new PossiblyFlying(MonoClock::ms);
         flag.attach(l, "MobileZulu", () -> PossiblyFlying.of(l.getTelemetry().getStatus()));
         l.start();
-        waitFor(() -> l.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+        waitFor(() -> l.getState() == ControlLink.State.READY, 15_000, "the link READY", log);
         assertEquals(ArmedCheck.NOT_KNOWN, ArmedCheck.of(l, 0, MonoClock.ms()), "just up, nothing from a flight controller yet: too early to say");
         // FC LOST on the LINK card: from then on STANDBY MODE and closing the window ask nothing
-        waitFor(() -> l.isFcLost() && ArmedCheck.of(l, 0, MonoClock.ms()) == ArmedCheck.CLEAR, 10_000, "FC LOST, and nothing asked", log);
+        waitFor(() -> l.isFcLost() && ArmedCheck.of(l, 0, MonoClock.ms()) == ArmedCheck.CLEAR, 20_000, "FC LOST, and nothing asked", log);
         assertNull(l.getTelemetry().getStatus());
         assertFalse(flag.holds(), "and nothing here may be flying");
     }

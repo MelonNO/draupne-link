@@ -224,6 +224,11 @@ class MapView extends JComponent {
         repaint();
     }
 
+    /** The other drones drawn now, each with its state (a spectator's: the pilot PC's, its fleet words too). */
+    List<NetDrone> netDrones() {
+        return netDrones;
+    }
+
     /** The kept flight whose line passes within 7 px of (x, y), or -1. */
     private int keptAt(int x, int y) {
         MapProjection proj = projection();
@@ -358,6 +363,21 @@ class MapView extends JComponent {
         routePlanned = planned;
         if (r == null || routeSelected >= r.size()) routeSelected = -1;
         repaint();
+    }
+
+    /** The route drawn now (null: none), for the spectators' mirror (GU-8). */
+    de.droiddrone.pc.route.Route route() {
+        return route;
+    }
+
+    /** Its planned line, or null. */
+    List<double[]> routePlanned() {
+        return routePlanned;
+    }
+
+    /** The follower group drawn now (null: none). */
+    de.droiddrone.pc.air.GroupLink.Picture group() {
+        return group;
     }
 
     /** Fleet RT-14: power lines and masts near the route (empty: none). */
@@ -1142,7 +1162,8 @@ class MapView extends JComponent {
     /** The overwatch alert's colour: a red that isn't the map's accent or the warnings' yellow. */
     static final Color ALERT = new Color(0xff4d3a);
 
-    private JPopupMenu menu(int x, int y) {
+    /** The right-click menu at (x, y) (package: the GU-8 tests read what a watching PC is offered). */
+    JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         RouteHost rh = routeHost;

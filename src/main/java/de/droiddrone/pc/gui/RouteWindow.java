@@ -48,6 +48,8 @@ final class RouteWindow extends JDialog {
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 13f), Theme.MUTED);
     private final JButton upload = Theme.primaryButton("UPLOAD");
     private final JButton go = Theme.primaryButton("GO");
+    private final JButton fence = Theme.secondaryButton("FENCE");
+    private final java.util.function.BooleanSupplier watchOnly;
     private Route route;
     private RoutePlanner.Plan plan;
     private MissionBuilder.Mission mission;
@@ -55,11 +57,18 @@ final class RouteWindow extends JDialog {
     private volatile Thread filling;
 
     RouteWindow(Window owner, MapView map, Elevation elevation, Supplier<ControlLink> link, Supplier<FlightTrack> track) {
+        this(owner, map, elevation, link, track, () -> false);
+    }
+
+    /** @param watchOnly GU-8: this PC only watches (a spectator, an observation PC) - routes are drawn and planned, never sent */
+    RouteWindow(Window owner, MapView map, Elevation elevation, Supplier<ControlLink> link, Supplier<FlightTrack> track,
+                java.util.function.BooleanSupplier watchOnly) {
         super(owner, "Route", ModalityType.MODELESS);
         this.map = map;
         this.elevation = elevation;
         this.link = link;
         this.track = track;
+        this.watchOnly = watchOnly;
         JPanel root = new JPanel(new BorderLayout(0, 8));
         root.setBackground(Theme.PANEL);
         root.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -73,7 +82,6 @@ final class RouteWindow extends JDialog {
         buttons.setOpaque(false);
         JButton reverse = Theme.secondaryButton("REVERSE"), save = Theme.secondaryButton("SAVE"), load = Theme.secondaryButton("LOAD"),
                 clear = Theme.secondaryButton("CLEAR");
-        JButton fence = Theme.secondaryButton("FENCE");
         fence.setToolTipText("Airspace areas near the drone, and rectangles named FENCE, as its own geofence: it stops at the edge (AP-9)");
         fence.addActionListener(e -> fence());
         JButton masts = Theme.secondaryButton("MASTS");
@@ -148,6 +156,7 @@ final class RouteWindow extends JDialog {
     }
 
     void open() {
+        refreshButtons();
         if (!isVisible()) setVisible(true);
         toFront();
     }
@@ -382,6 +391,14 @@ final class RouteWindow extends JDialog {
         boolean ardu = l != null && l.getFcInfo() != null && l.getFcInfo().getFcVariant() == de.droiddrone.common.FcInfo.FC_VARIANT_ARDUPILOT;
         upload.setEnabled(plan != null && ardu);
         go.setEnabled(mission != null && ardu);
+        // GU-8: a watching PC draws and plans routes, and sends none
+        boolean watch = watchOnly.getAsBoolean();
+        for (JButton b : new JButton[]{upload, go, fence}) b.setVisible(!watch);
+    }
+
+    /** The buttons that send to a drone, for tests: UPLOAD, GO, FENCE. */
+    JButton[] sendButtons() {
+        return new JButton[]{upload, go, fence};
     }
 
     private void say(String text, java.awt.Color c) {

@@ -75,6 +75,11 @@ public final class FlightModel {
         public Procedure procedure = Procedure.DROP;
         public int cells = 4;
         public int capacityMah = 1500;
+        /**
+         * No sticks this long is RX loss ({@link #RX_LOSS_MS}, Betaflight's). Longer only for a test about something else
+         * that sends its sticks from a test thread on a loaded PC, where 100 ms are missed now and then.
+         */
+        public long rxLossMs = RX_LOSS_MS;
     }
 
     private final Setup setup;
@@ -138,7 +143,7 @@ public final class FlightModel {
      * (not sent, 1.0.49's gap before AUX14) keeps the value it had, as rx_msp holds it.
      */
     public synchronized void sticks(short[] frame, int count, long nowMs) {
-        if (nowMs - lastRxAt > RX_LOSS_MS) rxCleanSince = nowMs;
+        if (nowMs - lastRxAt > setup.rxLossMs) rxCleanSince = nowMs;
         lastRxAt = nowMs;
         hadRx = true;
         for (int i = 0; i < Math.min(count, rc.length); i++) {
@@ -150,7 +155,7 @@ public final class FlightModel {
     /** One step of dt seconds ending at nowMs: the failsafe, the switches, the air, the battery. */
     public synchronized void step(long nowMs, double dt) {
         dt = Math.max(0, Math.min(0.2, dt));
-        boolean rxOk = nowMs - lastRxAt <= RX_LOSS_MS;
+        boolean rxOk = nowMs - lastRxAt <= setup.rxLossMs;
         stepFailsafe(nowMs, rxOk);
         boolean armSwitch = rangeActive(setup.armAux, setup.armStart, setup.armEnd);
         if (!armed) {
@@ -183,7 +188,7 @@ public final class FlightModel {
             if (failsafe == Failsafe.DROPPED && !armed) failsafe = Failsafe.NONE; // recovered: the switch rule blocks re-arming
             return;
         }
-        long lost = nowMs - lastRxAt - RX_LOSS_MS;
+        long lost = nowMs - lastRxAt - setup.rxLossMs;
         if (!armed) {
             if (failsafe == Failsafe.HOLD || failsafe == Failsafe.STAGE1) failsafe = Failsafe.NONE;
             return;
@@ -247,7 +252,7 @@ public final class FlightModel {
 
     /** The receiver's data is believed again: sticks without a gap for RX_RECOVERY_MS. */
     private boolean rxValidated(long nowMs) {
-        return nowMs - lastRxAt <= RX_LOSS_MS && rxCleanSince >= 0 && nowMs - rxCleanSince >= RX_RECOVERY_MS;
+        return nowMs - lastRxAt <= setup.rxLossMs && rxCleanSince >= 0 && nowMs - rxCleanSince >= RX_RECOVERY_MS;
     }
 
     private boolean sticksMoved() {
@@ -380,9 +385,9 @@ public final class FlightModel {
      * after it had sticks (2025.12 beeps for that too - what the PC's idle sticks keep away), a failsafe landing.
      */
     public String beeping(long nowMs) {
-        if (beeperMode() && nowMs - lastRxAt <= RX_LOSS_MS) return "BEEPER";
+        if (beeperMode() && nowMs - lastRxAt <= setup.rxLossMs) return "BEEPER";
         if (failsafe == Failsafe.LANDING) return "RX_LOST_LANDING";
-        if (failsafe == Failsafe.RESCUE && nowMs - lastRxAt > RX_LOSS_MS) return "RX_LOST";
+        if (failsafe == Failsafe.RESCUE && nowMs - lastRxAt > setup.rxLossMs) return "RX_LOST";
         if (hadRx && nowMs - lastRxAt > 1000) return "RX_LOST";
         return null;
     }
@@ -416,7 +421,7 @@ public final class FlightModel {
     /** Betaflight's arming disable flags now (FcTelemetry.BETAFLIGHT_BLOCKERS bits). */
     public int blockers(long nowMs) {
         int f = 0;
-        boolean rxOk = nowMs - lastRxAt <= RX_LOSS_MS;
+        boolean rxOk = nowMs - lastRxAt <= setup.rxLossMs;
         if (!rxOk) f |= FLAG_RXLOSS;
         if (failsafe != Failsafe.NONE && failsafe != Failsafe.HOLD) f |= FLAG_FAILSAFE;
         if (!armed) {
@@ -462,7 +467,7 @@ public final class FlightModel {
     /** ms the sticks have been missing (0 while they come). */
     public long rxMissingMs(long nowMs) {
         long gap = nowMs - lastRxAt;
-        return hadRx && gap > RX_LOSS_MS ? gap : 0;
+        return hadRx && gap > setup.rxLossMs ? gap : 0;
     }
 
     public boolean hadSticks() {

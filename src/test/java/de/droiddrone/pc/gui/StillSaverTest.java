@@ -117,12 +117,21 @@ class StillSaverTest {
         }
     }
 
-    /** What was said on the video and in the log; await() takes one line, waiting for it if it has not come. */
+    /**
+     * What was said on the video and in the log; await() takes one line of each, waiting for them if they have not come.
+     * The saver says a still's end on the video, then writes it in the log: one task on the Swing thread in the app, on
+     * the saver's own thread here - a test that went on at the first could look at the log before it was written.
+     */
     private static final class Said implements StillSaver.Lines {
         final List<String> lines = Collections.synchronizedList(new ArrayList<>()), log = Collections.synchronizedList(new ArrayList<>());
         final List<Boolean> bad = Collections.synchronizedList(new ArrayList<>());
         volatile long ms;
-        private final Semaphore said = new Semaphore(0);
+        private final Semaphore said = new Semaphore(0), logged = new Semaphore(0);
+
+        void log(String line) {
+            log.add(line);
+            logged.release();
+        }
 
         public void say(String text, boolean isBad, long forMs) {
             lines.add(text);
@@ -131,8 +140,13 @@ class StillSaverTest {
             said.release();
         }
 
+        /**
+         * Up to 2 min: the saver's thread runs at the lowest priority (never ahead of the video), and a PC loaded by the
+         * other test classes leaves it little - a 1920x1080 still's two files took over 30 s there.
+         */
         void await() throws InterruptedException {
-            assertTrue(said.tryAcquire(30, TimeUnit.SECONDS), "a line about the still");
+            assertTrue(said.tryAcquire(120, TimeUnit.SECONDS), "a line about the still");
+            assertTrue(logged.tryAcquire(120, TimeUnit.SECONDS), "and its line in the log");
         }
     }
 
@@ -140,7 +154,7 @@ class StillSaverTest {
     private final Said said = new Said();
 
     private StillSaver saver(StillSaver.Dir dir) {
-        return new StillSaver(video, dir, said, said.log::add, Runnable::run);
+        return new StillSaver(video, dir, said, said::log, Runnable::run);
     }
 
     /** The folder's files: the pictures alone first, their copies with the OSD after them. */
@@ -336,7 +350,7 @@ class StillSaverTest {
         View view = new View();
         view.setSize(160, 120);
         VideoPipeline[] pipeline = {null};
-        StillSaver saver = new StillSaver(StillSaver.Source.of(view, () -> pipeline[0], new OsdPreview()::data), () -> dir, said, said.log::add, Runnable::run);
+        StillSaver saver = new StillSaver(StillSaver.Source.of(view, () -> pipeline[0], new OsdPreview()::data), () -> dir, said, said::log, Runnable::run);
         saver.save();
         assertEquals(List.of(StillSaver.NO_PICTURE), said.lines, "not connected: no pipeline");
         said.await();
