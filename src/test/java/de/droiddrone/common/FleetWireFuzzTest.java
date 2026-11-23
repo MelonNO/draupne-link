@@ -221,7 +221,7 @@ class FleetWireFuzzTest {
         s.routeState = 4;
         s.routePercent = 100;
         byte[] e = s.encode();
-        assertEquals(FleetStatus.WITH_RTL_BYTES, e.length);
+        assertEquals(FleetStatus.WITH_SEQ_BYTES, e.length);
         FleetStatus b = FleetStatus.decode(e, e.length);
         assertEquals(-90, b.lat, 1e-9);
         assertEquals(180, b.lon, 1e-9);

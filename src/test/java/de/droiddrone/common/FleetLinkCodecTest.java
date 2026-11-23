@@ -48,7 +48,7 @@ class FleetLinkCodecTest {
         s.routeState = 3;
         s.routePercent = 100;
         byte[] d = s.encode();
-        assertEquals(FleetStatus.WITH_RTL_BYTES, d.length);
+        assertEquals(FleetStatus.WITH_SEQ_BYTES, d.length);
         FleetStatus b = FleetStatus.decode(d, d.length);
         assertEquals(60.1234567, b.lat, 1e-7);
         assertEquals(10.7654321, b.lon, 1e-7);
