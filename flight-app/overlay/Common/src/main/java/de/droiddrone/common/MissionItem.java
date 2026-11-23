@@ -145,12 +145,15 @@ public final class MissionItem {
         }
     }
 
-    /** {@link #pack}'s block read back, items numbered from 0 in order; null when it is cut short or too long. */
+    /** {@link #pack}'s block read back, items numbered from 0 in order; null when it is cut short, has bytes past its last item (the
+     * count and the length disagree), or claims more than {@link #MAX_ITEMS}. */
     public static List<MissionItem> unpack(byte[] data, int offset, int length) {
+        if (data == null || offset < 0 || length < 2 || offset > data.length) return null;
+        length = Math.min(length, data.length - offset); // a length that claims more than the array holds
         try {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(data, offset, length));
             int n = in.readUnsignedShort();
-            if (n > MAX_ITEMS || length < 2 + n * PACKED_SIZE) return null;
+            if (n > MAX_ITEMS || length != 2 + n * PACKED_SIZE) return null; // exactly: a count lower than the items sent would fly a cut route
             List<MissionItem> out = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
                 int frame = in.readUnsignedByte();

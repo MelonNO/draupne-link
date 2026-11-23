@@ -42,7 +42,8 @@ public final class MavlinkSniff {
 
     /** Bytes as they came from the port. True once a heartbeat has been seen (and from then on). */
     public boolean feed(byte[] buf, int len) {
-        for (int i = 0; i < len && !found; i++) take(buf[i] & 0xff);
+        int n = buf == null ? 0 : Math.min(len, buf.length); // a length that claims more than the array holds
+        for (int i = 0; i < n && !found; i++) take(buf[i] & 0xff);
         return found;
     }
 
