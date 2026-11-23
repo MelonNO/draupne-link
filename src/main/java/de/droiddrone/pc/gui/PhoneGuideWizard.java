@@ -276,8 +276,13 @@ final class PhoneGuideWizard {
             // F-043: no empty box and no empty address list while there is no code to show
             qr.showNone("Preparing...");
             urlChoice.setVisible(false);
-            main.nameService().scanSoon();
             return page;
+        }
+
+        /** As the guide opens (F-084: the page itself is built when first shown): the phones asked by name now. */
+        @Override
+        void prepare() {
+            main.nameService().scanSoon();
         }
 
         @Override

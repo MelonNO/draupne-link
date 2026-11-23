@@ -2292,7 +2292,8 @@ final class DroneSetup {
         private final CheckRow level = new CheckRow("Accelerometer");
         private final CheckRow motors = new CheckRow("Motors and props");
         private final CheckRow orientation = new CheckRow("Orientation");
-        private final DroneModelView model = new DroneModelView();
+        /** Made with the page's rows (F-084: its model is read on a thread of its own as the guide opens). */
+        private DroneModelView model;
         /** The model's box: as big as the page leaves (1.0.52, the pilot: "it does not utilise the window's size"). */
         private final JPanel modelBox = new JPanel(new java.awt.BorderLayout()) {
             @Override
@@ -2323,6 +2324,12 @@ final class DroneSetup {
             this.board = board;
         }
 
+        /** As the guide opens: the 3D model read in the background, ready for this step (F-084). */
+        @Override
+        void prepare() {
+            DroneModelView.preload();
+        }
+
         @Override
         String title() {
             return "Motors and orientation";
@@ -2349,6 +2356,7 @@ final class DroneSetup {
             JPanel view = new JPanel(new java.awt.BorderLayout(0, 4));
             view.setOpaque(false);
             modelBox.setOpaque(false);
+            model = new DroneModelView();
             modelBox.add(model, java.awt.BorderLayout.CENTER);
             view.add(modelBox, java.awt.BorderLayout.CENTER);
             view.add(reading, java.awt.BorderLayout.SOUTH);

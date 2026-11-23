@@ -53,6 +53,10 @@ class WizardDialog extends JDialog {
 
         abstract String hint();
 
+        /**
+         * The page's rows. Called the first time the page is shown (F-084), not when the wizard opens: a page that
+         * must start something as the wizard opens does it in {@link #prepare()}.
+         */
         abstract JComponent build();
 
         /**
@@ -95,6 +99,11 @@ class WizardDialog extends JDialog {
         final JComponent view() {
             if (view == null) view = build();
             return view;
+        }
+
+        /** The page has been built (shown once, or its view asked for). */
+        final boolean isBuilt() {
+            return view != null;
         }
 
         /** To the app log (the main window's), when the wizard has one. */
@@ -155,6 +164,8 @@ class WizardDialog extends JDialog {
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 13.5f), Theme.MUTED);
     private final CardLayout cards = new CardLayout();
     private final JPanel cardPanel = new JPanel(cards);
+    /** Which pages have their card in cardPanel: made the first time each is shown (F-084). */
+    private final boolean[] carded;
     private final JButton backButton = Theme.secondaryButton("Back");
     private final JButton nextButton = Theme.primaryButton("Next");
     private final Timer timer;
@@ -171,6 +182,7 @@ class WizardDialog extends JDialog {
         super(owner, heading, ModalityType.APPLICATION_MODAL);
         this.pages = pages;
         this.onFinish = onFinish;
+        carded = new boolean[pages.size()];
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE); // the title bar's X: closeAs, so the log says why
 
         JPanel root = new JPanel(new BorderLayout(0, 18));
@@ -194,16 +206,7 @@ class WizardDialog extends JDialog {
         Theme.transparent(header, titles);
         root.add(header, BorderLayout.NORTH);
 
-        for (int i = 0; i < pages.size(); i++) {
-            Page page = pages.get(i);
-            page.wizard = this;
-            JScrollPane scroll = new JScrollPane(new WidthTrackingPanel(page.view()));
-            scroll.setBorder(BorderFactory.createEmptyBorder());
-            scroll.getViewport().setOpaque(false);
-            scroll.setOpaque(false);
-            scroll.getVerticalScrollBar().setUnitIncrement(16);
-            cardPanel.add(scroll, Integer.toString(i));
-        }
+        for (Page page : pages) page.wizard = this; // each page's card is made when it is first shown (showCard)
         cardPanel.setOpaque(false);
         JPanel centerCard = Theme.card(new BorderLayout());
         centerCard.add(cardPanel, BorderLayout.CENTER);
@@ -388,10 +391,29 @@ class WizardDialog extends JDialog {
         else stepCounter.setText(page.section.isEmpty() ? " " : page.section);
         title.setText(page.title().toUpperCase());
         hint.setHtml(page.hint());
-        cards.show(cardPanel, Integer.toString(index));
+        showCard(index);
         WindowReveal.fadeIn(cardPanel); // Next and Back: the page fades in
         page.onShow();
         tick();
+    }
+
+    /**
+     * F-084 (the bench, 2026-11-23): SETUP &gt; Set up a new drone held the window 0.46 to 0.57 s as it opened - all
+     * seven pages were built and laid out at once, the 3D drone's model read with them. A page is now built the first
+     * time it is shown, and only its own card is laid out.
+     */
+    private void showCard(int i) {
+        String name = Integer.toString(i);
+        if (!carded[i]) {
+            carded[i] = true;
+            JScrollPane scroll = new JScrollPane(new WidthTrackingPanel(pages.get(i).view()));
+            scroll.setBorder(BorderFactory.createEmptyBorder());
+            scroll.getViewport().setOpaque(false);
+            scroll.setOpaque(false);
+            scroll.getVerticalScrollBar().setUnitIncrement(16);
+            cardPanel.add(scroll, name);
+        }
+        cards.show(cardPanel, name);
     }
 
     private void finish() {

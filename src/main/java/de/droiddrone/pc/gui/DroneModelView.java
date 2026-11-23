@@ -44,7 +44,31 @@ final class DroneModelView extends JComponent {
 
     private record Mesh(float[] p, float[] u, float[] v, byte[] flag, int[] tri, int[][] tex) {}
 
-    private static Mesh mesh;
+    private static volatile Mesh mesh;
+    private static final java.util.concurrent.atomic.AtomicBoolean PRELOADING = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * F-084: the model and its two textures read on a thread of their own (0.12 s the first time, on the window's
+     * thread when Set up a new drone opened). Drone setup starts it as it opens; the view made on its second step then
+     * finds it read. A model that cannot be read is said by the view, as before.
+     */
+    static void preload() {
+        if (mesh != null || !PRELOADING.compareAndSet(false, true)) return;
+        Thread t = new Thread(() -> {
+            try {
+                mesh();
+            } catch (RuntimeException e) {
+                PRELOADING.set(false); // the view reads it again and says why
+            }
+        }, "droneModelLoad");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** The model has been read (for the tests). */
+    static boolean loaded() {
+        return mesh != null;
+    }
 
     private static synchronized Mesh mesh() {
         if (mesh == null) {
