@@ -39,6 +39,8 @@ public final class PreArmCheck {
     public static final double MOTION_G = 0.15, MOTION_DPS = 15;
     /** The launch minimum (the PC sends its own with the order; this when it sends none). */
     public static final int DEFAULT_MIN_BATTERY_PERCENT = 40;
+    /** The FC's readings older than this are none (the phone asks health and GPS once a second at 10 Hz telemetry). */
+    public static final long MAX_FC_AGE_MS = 3000;
 
     public static final int OK = 0, WAIT = 1, TIPPED = 2, MOVED = 3, CARRIED = 4, NO_GPS = 5, LOW_BATTERY = 6,
             FC_UNHEALTHY = 7, MARK_GONE = 8;
@@ -71,6 +73,11 @@ public final class PreArmCheck {
         public boolean gpsFix3d;
         public int batteryPercent = -1;
         public boolean imuHealthy, compassHealthy, fcHealthy;
+        /**
+         * How old the oldest of these FC readings is (attitude, health, GPS), ms; 0: fresh. Older than {@link #MAX_FC_AGE_MS}
+         * fails closed (FC UNHEALTHY): an FC rebooting mid-launch sends nothing, and its last words read as OK.
+         */
+        public long fcAgeMs;
     }
 
     private final int minBatteryPercent;
@@ -102,13 +109,14 @@ public final class PreArmCheck {
     /** The answer now; the first failure found, in the order the pilot most needs to hear it. */
     public int check(long nowMs, Reading r, LaunchMark mark) {
         if (mark == null || !mark.valid()) return MARK_GONE;
+        if (r.fcAgeMs < 0 || r.fcAgeMs > MAX_FC_AGE_MS) return FC_UNHEALTHY; // nothing new from the FC: fails closed
         if (!r.imuHealthy || !r.compassHealthy || !r.fcHealthy) return FC_UNHEALTHY;
         if (Double.isNaN(r.rollDeg) || Double.isNaN(r.pitchDeg)) return FC_UNHEALTHY; // no attitude: fails closed
         if (LaunchGeo.tiltDeg(r.rollDeg, r.pitchDeg) > MAX_TILT_DEG) return TIPPED;
         if (lastMotionAt != Long.MIN_VALUE && nowMs - lastMotionAt < STILL_MS) return CARRIED;
         if (!r.gpsFix3d || Double.isNaN(r.lat) || Double.isNaN(r.lon)) return NO_GPS;
         if (Double.isNaN(r.headingDeg) || !mark.stillAt(r.lat, r.lon, r.headingDeg)) return MOVED;
-        if (r.batteryPercent < 0 || r.batteryPercent < minBatteryPercent) return LOW_BATTERY;
+        if (r.batteryPercent < 0 || r.batteryPercent > 100 || r.batteryPercent < minBatteryPercent) return LOW_BATTERY; // 255: not known
         if (samplesSince < 0 || nowMs - samplesSince < STILL_MS) return WAIT; // not yet 5 s of samples
         return OK;
     }

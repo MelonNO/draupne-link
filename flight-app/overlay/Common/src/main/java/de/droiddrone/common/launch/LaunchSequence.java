@@ -52,6 +52,12 @@ public final class LaunchSequence {
     public static final long CHECK_MS = 15_000;
     /** ArduPilot must report ARMED this soon, else NOT LAUNCHED (ARM REFUSED) and a forced disarm to be sure. */
     public static final long ARM_MS = 5000;
+    /**
+     * The same call (call id and mark id) again this soon after it came is a copy - the PC repeats an order until the
+     * status names it, and a late or replayed copy may come after the launch ended: answered with the status, nothing
+     * new. Later it is a new call (the PC's call ids start at 1 each time it starts).
+     */
+    public static final long REPLAY_MS = 60_000;
     /** The approach layer counts as reached this close under it. */
     public static final double REACHED_M = 1.0;
 
@@ -103,6 +109,8 @@ public final class LaunchSequence {
     /** The mark id the accepted order named (0: none accepted). */
     private int acceptedMarkId;
     private long stateAt;
+    /** When the last order (taken or refused) came. */
+    private long orderAt;
     private ClimbWatchdog watchdog;
     private double heightM, climbMps;
     private boolean passedFloor, fcReady, armed;
@@ -149,6 +157,13 @@ public final class LaunchSequence {
     public List<LaunchIntent> order(LaunchWire.Order o, long nowMs) {
         if (o == null) return Collections.emptyList();
         List<LaunchIntent> out = new ArrayList<>();
+        if (o.kind == LaunchWire.KIND_LAUNCH && order != null && order.kind == LaunchWire.KIND_LAUNCH && o.callId == order.callId
+                && o.markId == order.markId && nowMs - orderAt >= 0 && nowMs - orderAt < REPLAY_MS) {
+            // a copy of the call being (or last) carried out: its status again - before, a copy after the launch ended
+            // was taken as a new call, refused (the mark gone) and IN GROUP or LAUNCH FAILED reported as NOT LAUNCHED
+            report(out);
+            return out;
+        }
         if (o.kind == LaunchWire.KIND_CANCEL) {
             if (order != null && o.callId == order.callId && !motorsMayRun(state) && !finished()) {
                 to(CANCELLED, 0, nowMs, out);
@@ -161,6 +176,7 @@ public final class LaunchSequence {
         if (mark == null || !mark.valid() || o.markId != mark.id) {
             LaunchWire.Order refused = o;
             order = refused;
+            orderAt = nowMs;
             acceptedMarkId = 0;
             to(NOT_LAUNCHED, WRONG_MARK, nowMs, out);
             report(out);
@@ -168,6 +184,7 @@ public final class LaunchSequence {
         }
         order = o;
         acceptedMarkId = o.markId;
+        orderAt = nowMs;
         reason = 0;
         heightM = 0;
         climbMps = 0;
@@ -210,8 +227,17 @@ public final class LaunchSequence {
      * @param climb the climb's sample now (null between samples)
      */
     public List<LaunchIntent> tick(long nowMs, PreArmCheck.Reading r, boolean fcArmed, ClimbWatchdog.Sample climb) {
+        return tick(nowMs, r, fcArmed, true, climb);
+    }
+
+    /**
+     * @param fcArmedKnown the FC's armed word is fresh (its heartbeat within 3 s): a gap in the heartbeats is no
+     *                     disarm - before, it read as DISARMED in the climb and the motors were forced off in the air
+     */
+    public List<LaunchIntent> tick(long nowMs, PreArmCheck.Reading r, boolean fcArmed, boolean fcArmedKnown, ClimbWatchdog.Sample climb) {
         List<LaunchIntent> out = new ArrayList<>();
-        armed = fcArmed;
+        if (fcArmedKnown) armed = fcArmed;
+        fcArmed &= fcArmedKnown;
         switch (state) {
             case WAKING:
                 if (fcReady) {
@@ -266,7 +292,7 @@ public final class LaunchSequence {
                     if (!Double.isNaN(climb.heightM)) heightM = climb.heightM;
                     if (!Double.isNaN(climb.climbMps)) climbMps = climb.climbMps;
                 }
-                if (!fcArmed) {
+                if (fcArmedKnown && !fcArmed) {
                     failed(DISARMED_IN_CLIMB, nowMs, out);
                     break;
                 }
