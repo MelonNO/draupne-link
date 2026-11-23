@@ -10,7 +10,8 @@ package de.droiddrone.common.group;
  * drone's offset added; the height is the order's, never under its floor; the nose points at the lead.
  * <p>
  * Where the leash is decided: on the PC, once for the whole group ({@code GroupController}), and every follower is told
- * the same centre and the same velocity - so the cube keeps its shape (AC-18). Were each phone to run the leash on its
+ * the same centre and - while nothing is in its way - the same velocity, so the cube keeps its shape (AC-18); one that
+ * must give way is told its own safe velocity (AC-8) and the place it is at. Were each phone to run the leash on its
  * own relayed copy of the lead's place, the copies would arrive at different times and the followers would start and
  * stop at different moments. The phone's part is this: it flies the PC's centre on between orders (a 4G gap of a
  * second costs no shape) and it never goes under the floor, whatever it is told. Java 11.

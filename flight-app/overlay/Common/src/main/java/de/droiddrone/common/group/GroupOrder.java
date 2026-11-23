@@ -7,9 +7,10 @@ package de.droiddrone.common.group;
 import java.nio.ByteBuffer;
 
 /**
- * DRAUPNE fleet (PRD FL-1 - FL-3, FL-13, AC-18, AC-39): what the PC tells one follower's phone, a few times a second.
- * The group's centre and how fast it moves (the same for every follower, so the cube keeps its shape), where this
- * follower is to be relative to that centre (its cell, or the point of a move through the outer lane and a transit
+ * DRAUPNE fleet (PRD FL-1 - FL-3, FL-13, AC-8, AC-18, AC-39): what the PC tells one follower's phone, a few times a
+ * second. The group's centre, the velocity this follower is to fly (the group's while nothing is in its way; its own
+ * safe velocity while it gives way, one by one - the PC's {@code Orca}), where this follower is to be relative to that
+ * centre (its cell, or the point of a move through the outer lane and a transit
  * area the PC has granted), at what height, the floor it may never go under, and where the lead is (the follower
  * points at it). The phone carries the centre forward by its velocity for the order's age ({@link FollowerRule}).
  * Java 11.
