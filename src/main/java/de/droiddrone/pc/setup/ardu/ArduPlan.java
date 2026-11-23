@@ -26,6 +26,8 @@ import java.util.Map;
  *       ({@link CellVolts}); BATT_ARM_VOLT / BATT_ARM_MAH 0.</li>
  *   <li>No terrain data on the drone (RT-10): TERRAIN_ENABLE 0. Routes carry heights above sea level.</li>
  *   <li>Crash check disarms (AL-15): FS_CRASH_CHECK 1; vibration failsafe on (FS_VIBE_ENABLE 1).</li>
+ *   <li>GNSS lost (A5, AS-8): the EKF failsafe holds height and waits - FS_EKF_ACTION 2 (AltHold in a mode that needs a
+ *       position; Copter 4.6 and 4.7 alike), not 1 (its default: LAND).</li>
  *   <li>Avoidance of the other DRAUPNE drones, given as ADSB_VEHICLE by the PC (AC-11, FD-8): AVD_ENABLE 1, stop and
  *       hold (AVD_F_ACTION 6 = hover) inside 10 m sideways / 10 m height, warn inside 20 m; ADSB_TYPE 1 takes the
  *       messages. Not tried on a real drone.</li>
@@ -79,6 +81,7 @@ public final class ArduPlan {
         put(w, "FS_GCS_TIMEOUT", 5, "5 s without the phone's heartbeat");
         put(w, "FS_CRASH_CHECK", 1, "crash: disarm");
         put(w, "FS_VIBE_ENABLE", 1, "vibration failsafe on");
+        put(w, "FS_EKF_ACTION", 2, "GNSS lost: hold height, wait (A5)");
         // battery: warnings only, LAND at 3 %
         double low = CellVolts.LOW * c.cells(), crit = 3.0 * c.cells();
         put(w, "BATT_CAPACITY", c.capacityMah(), "pack size");
