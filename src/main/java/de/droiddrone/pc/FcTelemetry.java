@@ -434,7 +434,13 @@ public class FcTelemetry {
                 int percent = b.readUnsignedByteAsInt();
                 byte[] reason = new byte[b.readUnsignedByteAsInt()];
                 b.read(reason, 0, reason.length);
-                routeUpload = new RouteUpload(block, state, percent, new String(reason, StandardCharsets.US_ASCII), MonoClock.ms());
+                RouteUpload u = new RouteUpload(block, state, percent, new String(reason, StandardCharsets.US_ASCII), MonoClock.ms());
+                routeUpload = u;
+                synchronized (routeUploads) {
+                    routeUploads.remove(block);
+                    routeUploads.put(block, u);
+                    if (routeUploads.size() > MAX_ROUTE_UPLOADS) routeUploads.remove(routeUploads.keySet().iterator().next());
+                }
             }
             case de.droiddrone.common.FcCommand.ACK_RECORD -> {
                 int command = (b.readUnsignedByteAsInt() << 8) | b.readUnsignedByteAsInt();
@@ -837,6 +843,20 @@ public class FcTelemetry {
 
     public RouteUpload getRouteUpload() {
         return routeUpload;
+    }
+
+    /** Blocks whose newest status is kept: a route and a fence sent together each find their own. */
+    static final int MAX_ROUTE_UPLOADS = 16;
+    private final java.util.LinkedHashMap<Integer, RouteUpload> routeUploads = new java.util.LinkedHashMap<>();
+
+    /**
+     * Fleet RT-8 / AP-9: the newest status the phone gave for this block, or null. The newest of all ({@link #getRouteUpload()})
+     * was all there was: a fence's status that came after the route's DONE hid it from the route's sender.
+     */
+    public RouteUpload getRouteUpload(int block) {
+        synchronized (routeUploads) {
+            return routeUploads.get(block);
+        }
     }
 
     public CommandAck getLastCommandAck() {

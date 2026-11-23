@@ -542,12 +542,12 @@ public class Mavlink {
         s.homeAmsl = Double.isNaN(homeAmslM) ? 0 : homeAmslM;
         if (armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.ARMED;
         if (gnssOk()) s.flags |= de.droiddrone.common.FleetStatus.GNSS;
-        if (!armedNow(now)) s.flags |= de.droiddrone.common.FleetStatus.LANDED;
-        de.droiddrone.common.MissionUpload u = upload;
-        if (u != null) {
-            s.routeBlock = uploadBlock;
-            s.routeState = u.state();
-            s.routePercent = u.percent();
+        if (disarmedKnown(now)) s.flags |= de.droiddrone.common.FleetStatus.LANDED; // a stale heartbeat is neither
+        int[] r = uploads.pcStatus(); // the PC's newest block - also while the phone's own rally upload follows it
+        if (r[0] >= 0) {
+            s.routeBlock = r[0];
+            s.routeState = r[1];
+            s.routePercent = r[2];
         }
     }
 
@@ -659,25 +659,17 @@ public class Mavlink {
 
     // ---- fleet RT-8: a route from the PC (MissionBlock), uploaded and read back over USB here
 
-    private volatile de.droiddrone.common.MissionUpload upload;
-    private volatile int uploadBlock = -1;
-    private long uploadSaidAt;
-    private int uploadSaidState = -1;
+    /** One upload at a time: the PC's blocks and the phone's own rally points (MissionBlockQueue: waits, copies, replays). */
+    private final de.droiddrone.common.MissionBlockQueue uploads = new de.droiddrone.common.MissionBlockQueue(this::makeUpload);
+    /** The PC block whose status was said last, its state then, and when (the status goes again each second while it runs). */
+    private int saidBlock = -1, saidState = -1;
+    private long saidAt;
 
-    /** A route, fence or rally block from the PC (the buffer thread): a new one starts its upload; the same one again is answered. */
+    /** A route, fence or rally block from the PC (the buffer thread): started, queued, or answered with its status. */
     public void missionBlock(de.droiddrone.common.MissionBlock b) {
         if (b == null || !isArduPilot()) return;
-        if (b.blockId == uploadBlock && upload != null) {
-            sayUpload(true);
-            return;
-        }
-        startUpload(b.blockId, b.missionType, b.items, true);
+        if (uploads.offer(b, android.os.SystemClock.elapsedRealtime())) say(b.blockId);
     }
-
-    /** The phone's own rally upload (AC-10) waiting while another upload runs: started when it ends. */
-    private volatile java.util.List<de.droiddrone.common.MissionItem> rallyWaiting;
-    /** The rally points last read back on the FC: not uploaded again while they are the same. */
-    private java.util.List<de.droiddrone.common.MissionItem> rallyOnFc;
 
     /**
      * Fleet AC-10: this follower's own rally point, so its RTL goes there and not to its home - uploaded only when it
@@ -687,20 +679,11 @@ public class Mavlink {
         if (!isArduPilot() || Double.isNaN(lat) || Double.isNaN(lon)) return;
         java.util.List<de.droiddrone.common.MissionItem> want = java.util.Collections.singletonList(new de.droiddrone.common.MissionItem(0,
                 6, 5100, true, 0, 0, 0, 0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) relAltM)); // NAV_RALLY_POINT, MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
-        if (sameItems(want, rallyOnFc) || sameItems(want, rallyWaiting)) return;
-        de.droiddrone.common.MissionUpload u = upload;
-        if (u != null && !u.done() && !u.failed()) {
-            rallyWaiting = want;
-            return;
+        de.droiddrone.common.MissionUpload before = uploads.current();
+        uploads.ownRally(want, android.os.SystemClock.elapsedRealtime());
+        if (uploads.current() != before && uploads.currentBlock() == de.droiddrone.common.MissionBlockQueue.OWN) {
+            setParam("RALLY_INCL_HOME", 0); // RTL goes to the rally point, not home
         }
-        startUpload(-1, de.droiddrone.common.MissionUpload.TYPE_RALLY, want, false);
-        setParam("RALLY_INCL_HOME", 0); // RTL goes to the rally point, not home
-    }
-
-    private static boolean sameItems(java.util.List<de.droiddrone.common.MissionItem> a, java.util.List<de.droiddrone.common.MissionItem> b) {
-        if (a == null || b == null || a.size() != b.size()) return false;
-        for (int i = 0; i < a.size(); i++) if (!a.get(i).sameAs(b.get(i))) return false;
-        return true;
     }
 
     /** A PARAM_SET of the phone's own (RALLY_INCL_HOME, FENCE_ENABLE). */
@@ -712,12 +695,11 @@ public class Mavlink {
                 config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
 
-    /**  toPc the status goes to the PC (a block of the PC's); the phone's own rally upload says it in the log only */
-    private void startUpload(int block, final int type, java.util.List<de.droiddrone.common.MissionItem> items, boolean toPc) {
-        uploadBlock = block;
-        uploadToPc = toPc;
+    /** An upload (not started) that talks to the FC for one of its lists: every message carries the list's type. */
+    private de.droiddrone.common.MissionUpload makeUpload(final int type, java.util.List<de.droiddrone.common.MissionItem> items) {
         final short mt = (short) type;
-        de.droiddrone.common.MissionUpload u = new de.droiddrone.common.MissionUpload(items, new de.droiddrone.common.MissionUpload.Link() {
+        log((type == 1 ? "Fence" : type == 2 ? "Rally points" : "Route") + ": " + items.size() + " items to the FC");
+        return new de.droiddrone.common.MissionUpload(items, new de.droiddrone.common.MissionUpload.Link() {
             @Override
             public void sendCount(int count) {
                 send(new com.MAVLink.common.msg_mission_count(count, targetSys(), targetComponent, mt, 0L,
@@ -749,52 +731,45 @@ public class Mavlink {
                         config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
             }
         }, type);
-        upload = u;
-        log((type == 1 ? "Fence" : type == 2 ? "Rally points" : "Route") + (toPc ? " from the PC: " : " of the phone's own: ") + items.size() + " items");
-        u.start(android.os.SystemClock.elapsedRealtime());
-        sayUpload(true);
     }
-
-    private volatile boolean uploadToPc = true;
 
     private void send(MAVLinkPacket packet) {
         packet.seq = getSequence();
         serial.writeDataMavlink(packet.encodePacket());
     }
 
-    /** Ten times a second (the phone's ArduPilot thread): the upload's timeouts and its status to the PC. */
+    /** Ten times a second (the phone's ArduPilot thread): the uploads' timeouts and their status to the PC. */
     void tick100(long now) {
-        de.droiddrone.common.MissionUpload u = upload;
-        if (u == null) return;
-        u.tick(now);
-        sayUpload(false);
-        if (u.missionType() == de.droiddrone.common.MissionUpload.TYPE_RALLY && u.done()) rallyOnFc = u.items();
-        java.util.List<de.droiddrone.common.MissionItem> r = rallyWaiting;
-        if (r != null && (u.done() || u.failed())) { // AC-10: the rally point waited for the upload before it
-            rallyWaiting = null;
-            startUpload(-1, de.droiddrone.common.MissionUpload.TYPE_RALLY, r, false);
-            setParam("RALLY_INCL_HOME", 0);
+        de.droiddrone.common.MissionUpload before = uploads.current();
+        uploads.tick(now);
+        int ended = uploads.lastEnded();
+        if (ended != de.droiddrone.common.MissionBlockQueue.OWN) say(ended);
+        if (uploads.current() != before && uploads.currentBlock() == de.droiddrone.common.MissionBlockQueue.OWN) {
+            setParam("RALLY_INCL_HOME", 0); // the own rally points waited for the upload before them
         }
+        int cur = uploads.currentBlock();
+        if (cur == de.droiddrone.common.MissionBlockQueue.OWN) return; // the phone's own: its log only
+        int[] s = uploads.status(cur);
+        if (s != null && (cur != saidBlock || s[0] != saidState || now - saidAt >= 1000)) say(cur);
     }
 
-    private void sayUpload(boolean now) {
-        de.droiddrone.common.MissionUpload u = upload;
-        if (u == null) return;
-        long t = android.os.SystemClock.elapsedRealtime();
-        int state = u.state();
-        boolean over = u.done() || u.failed();
-        if (!now && state == uploadSaidState && (over || t - uploadSaidAt < 1000)) return;
-        if (state != uploadSaidState && over) log("Upload: " + (u.done() ? "done, read back" : "FAILED - " + u.reason()));
-        uploadSaidState = state;
-        uploadSaidAt = t;
-        if (!uploadToPc) return; // the phone's own (rally points): its log only
+    /** A PC block's status to the PC (MissionBlock.STATUS_RECORD); its end in the log. */
+    private void say(int block) {
+        int[] s = uploads.status(block);
+        if (s == null) return;
+        String reason = uploads.reason(block);
+        if ((block != saidBlock || s[0] != saidState) && (s[0] == de.droiddrone.common.MissionUpload.DONE || s[0] == de.droiddrone.common.MissionUpload.FAILED)) {
+            log("Upload " + block + ": " + (s[0] == de.droiddrone.common.MissionUpload.DONE ? "done, read back" : "FAILED - " + reason));
+        }
+        saidBlock = block;
+        saidState = s[0];
+        saidAt = android.os.SystemClock.elapsedRealtime();
         telemetryOutputBuffer.offer(new TelemetryData(de.droiddrone.common.MissionBlock.STATUS_RECORD,
-                de.droiddrone.common.MissionBlock.status(uploadBlock, state, u.percent(), u.failed() ? u.reason() : null)));
+                de.droiddrone.common.MissionBlock.status(block, s[0], s[1], s[0] == de.droiddrone.common.MissionUpload.FAILED ? reason : null)));
     }
-
     /** The FC's mission talk, to the upload under way. */
     private void missionFromFc(MAVLinkPacket packet) {
-        de.droiddrone.common.MissionUpload u = upload;
+        de.droiddrone.common.MissionUpload u = uploads.current();
         if (u == null) return;
         long now = android.os.SystemClock.elapsedRealtime();
         int t = u.missionType(); // fleet: only the answers of the list being uploaded
