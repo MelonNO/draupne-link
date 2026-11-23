@@ -95,6 +95,8 @@ final class PreviousFlightsDialog extends JDialog {
     private final JButton onMapButton = Theme.secondaryButton("On map");
     private final JButton export = Theme.secondaryButton("Export");
     final JButton delete = Theme.secondaryButton("Delete");
+    /** Fleet AP-10: the ArduPilot drone's own log of this flight (downloaded after landing), shown in its folder. */
+    private final JButton fcLog = Theme.secondaryButton("FC log");
     final JButton report = Theme.secondaryButton("Report");
     final JButton bookmark = Theme.secondaryButton("Bookmark");
     final JButton speedButton = Theme.secondaryButton(speedText(1));
@@ -393,6 +395,8 @@ final class PreviousFlightsDialog extends JDialog {
         actions.add(report);
         actions.add(export);
         actions.add(delete);
+        actions.add(fcLog);
+        fcLog.addActionListener(e -> showFcLog());
         JPanel buttons = new JPanel(new TwoEnds(playRow, actions, 10, 8)) {
             @Override
             public Dimension getPreferredSize() { // asked anew each time: one line or two goes by the card's width now
@@ -654,6 +658,30 @@ final class PreviousFlightsDialog extends JDialog {
         delete.setEnabled(have && !flownNow);
         delete.setToolTipText(flownNow ? "Flying now" : null);
         onMapButton.setEnabled(have && data.flight.track() != null && onMap != null);
+        java.util.List<java.nio.file.Path> logs = have ? fcLogs(data.flight) : java.util.List.of();
+        fcLog.setEnabled(!logs.isEmpty());
+        fcLog.setToolTipText(logs.isEmpty() ? "No ArduPilot log of this flight (SETUP > ArduPilot flight logs, after landing)"
+                : logs.get(0).getFileName() + ", " + Math.max(1, logs.get(0).toFile().length() / 1024) + " kB");
+    }
+
+    /** The ArduPilot logs kept for this flight's drone and time (newest first). */
+    static java.util.List<java.nio.file.Path> fcLogs(de.droiddrone.pc.flights.FlightLibrary.Flight f) {
+        try {
+            return de.droiddrone.pc.setup.ardu.ArduLogs.forFlight(de.droiddrone.pc.AppPaths.arduPilotLogsDir(), f.drone(), f.startMs(), f.endMs());
+        } catch (java.io.IOException e) {
+            return java.util.List.of();
+        }
+    }
+
+    private void showFcLog() {
+        if (data == null) return;
+        java.util.List<java.nio.file.Path> logs = fcLogs(data.flight);
+        if (logs.isEmpty()) return;
+        try {
+            new ProcessBuilder("explorer.exe", "/select," + logs.get(0).toAbsolutePath()).start();
+        } catch (java.io.IOException ignored) {
+            // the tooltip names it
+        }
     }
 
     // ------------------------------------------------------------------ the debrief: figures, note, marks

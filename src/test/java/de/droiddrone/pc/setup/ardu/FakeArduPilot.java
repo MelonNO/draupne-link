@@ -33,6 +33,11 @@ final class FakeArduPilot implements MavSession.Wire {
     volatile int dropEvery;
     /** A parameter that stays at its value whatever is set (reads back the old one). */
     volatile String stuck;
+    /** AP-10: the logs on its card (id 1, 2 ...) and every n-th LOG_DATA dropped on the way (0: none). */
+    final java.util.List<byte[]> logs = new java.util.ArrayList<>();
+    volatile int dropLogEvery;
+    private int logSent;
+
     /** Answers to COMMAND_LONG by command (default 0 = accepted). */
     final Map<Integer, Integer> results = new java.util.HashMap<>();
     private final BlockingQueue<byte[]> out = new LinkedBlockingQueue<>();
@@ -141,6 +146,25 @@ final class FakeArduPilot implements MavSession.Wire {
                 if (c.command == ArduTools.MAV_CMD_PREFLIGHT_CALIBRATION && Math.round(c.param5) == 1 && result == 0) {
                     accelStep = 0;
                     askPosition(1);
+                }
+            }
+            case com.MAVLink.common.msg_log_request_list.MAVLINK_MSG_ID_LOG_REQUEST_LIST -> {
+                if (logs.isEmpty()) emit(new com.MAVLink.common.msg_log_entry(0, 0, 0, 0, 0, sysId, 1, true).pack());
+                for (int i = 0; i < logs.size(); i++) {
+                    emit(new com.MAVLink.common.msg_log_entry(1_800_000_000L + i * 600, logs.get(i).length, i + 1, logs.size(), logs.size(), sysId, 1, true).pack());
+                }
+            }
+            case com.MAVLink.common.msg_log_request_data.MAVLINK_MSG_ID_LOG_REQUEST_DATA -> {
+                com.MAVLink.common.msg_log_request_data r = new com.MAVLink.common.msg_log_request_data(p);
+                if (r.id < 1 || r.id > logs.size()) return;
+                byte[] log = logs.get(r.id - 1);
+                long end = Math.min(log.length, r.ofs + r.count);
+                for (long o = r.ofs; o < end; o += 90) {
+                    if (dropLogEvery > 0 && ++logSent % dropLogEvery == 0) continue;
+                    short[] d = new short[90];
+                    int n = (int) Math.min(90, end - o);
+                    for (int i = 0; i < n; i++) d[i] = (short) (log[(int) o + i] & 0xff);
+                    emit(new com.MAVLink.common.msg_log_data(o, r.id, (short) n, d, sysId, 1, true).pack());
                 }
             }
             default -> {

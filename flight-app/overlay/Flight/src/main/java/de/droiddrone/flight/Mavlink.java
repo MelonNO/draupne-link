@@ -476,6 +476,8 @@ public class Mavlink {
         if (!isArduPilot()) return;
         tunnelUsedAtMs = android.os.SystemClock.elapsedRealtime();
         de.droiddrone.common.MavTunnel.split(data, 0, data.length, (d, off, len) -> {
+            int id = de.droiddrone.common.MavTunnel.msgId(d, off, len);
+            if (de.droiddrone.common.MavTunnel.isLogRequest(id) && armedNow(android.os.SystemClock.elapsedRealtime())) return; // AP-10: logs on the ground only
             if (de.droiddrone.common.MavTunnel.toFc(d, off, len)) {
                 serial.writeDataMavlink(java.util.Arrays.copyOfRange(d, off, off + len));
             } else if (!tunnelRefusedSaid) {

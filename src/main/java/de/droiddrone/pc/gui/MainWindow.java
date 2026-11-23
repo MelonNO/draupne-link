@@ -926,6 +926,7 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
         // fleet PRD area H: an ArduPilot flight controller on USB (a Betaflight board goes through Drone setup as before)
         addMenuItem(menu, "ArduPilot drone setup", "ArduPilot board on USB", () -> ArduSetupPages.open(this));
+        addMenuItem(menu, "ArduPilot flight logs", "After landing: the drone's own log", () -> ArduLogsDialog.open(this)); // fleet AP-10
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
         }
@@ -5515,6 +5516,11 @@ public class MainWindow extends JFrame {
         MapWindow mw = mapWindowIfOpen(); // fleet G4: the follower group on the map
         if (mw != null) mw.setGroup(fleetOps.picture());
         fleetOps.tickReserves(); // fleet area F: calls waiting for a column, orders sent again until answered
+    }
+
+    /** Fleet: the name of the phone this PC flies (a real one), or null. */
+    String flownPhoneName() {
+        return fcPhone;
     }
 
     /** Fleet AP-12: GO LOOK - the ArduPilot drone this PC flies goes to the alert's ground point and looks at it. */
