@@ -237,9 +237,42 @@ public final class GroupController {
             V2 c = cube.cell(m.place.cell());
             bearings.put(m.id, Math.toDegrees(Math.atan2(c.e(), c.n())));
         }
-        Map<String, V2> rallies = RallyPoints.assign(bearings, centre, rallySite, p);
+        Map<String, V2> rallies = RallyPoints.assign(bearings, centre, rallySite, p, outsideRallies.values());
         for (Member m : members.values()) m.rally = rallies.get(m.id);
         changed = true;
+    }
+
+    /** The rally points this PC gave drones on their own (RallyPlan), by drone: the followers' keep clear of them. */
+    private final Map<String, V2> outsideRallies = new HashMap<>();
+
+    /**
+     * AC-10 across the two planners: the rally points of the drones on their own (RallyPlan, by drone). A follower whose
+     * rally point lies within two protection radii of one of them, or of another follower's, gets the next free point
+     * along its site's line - its exit plan is made again with it. A drone in both (a reserve that joined keeps its own
+     * point) is not checked against itself.
+     */
+    public void setOutsideRallies(Map<String, V2> solo) {
+        outsideRallies.clear();
+        for (Map.Entry<String, V2> e : solo.entrySet()) if (!members.containsKey(e.getKey())) outsideRallies.put(e.getKey(), e.getValue());
+        List<V2> taken = new ArrayList<>(outsideRallies.values());
+        List<Member> clash = new ArrayList<>();
+        for (Member m : members.values()) { // first every one already clear keeps its point ...
+            if (m.rally == null) continue;
+            if (RallyPoints.free(m.rally, taken, p)) taken.add(m.rally);
+            else clash.add(m);
+        }
+        for (Member m : clash) { // ... then those in the way get the next free one along the line home
+            m.rally = RallyPoints.firstFree(rallySite == null ? m.rally : rallySite, centre, taken, p);
+            taken.add(m.rally);
+            changed = true;
+        }
+    }
+
+    /** Every follower's rally point now (what its exit plan carries), by drone. */
+    public Map<String, V2> rallies() {
+        Map<String, V2> out = new LinkedHashMap<>();
+        for (Member m : members.values()) if (m.rally != null) out.put(m.id, m.rally);
+        return out;
     }
 
     /** CALL RESERVE's drone (AL-8, AC-5), up in its approach layer at (pos): it joins at the top. rally: its own. */

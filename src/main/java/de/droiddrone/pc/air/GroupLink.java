@@ -222,6 +222,24 @@ public final class GroupLink implements AutoCloseable {
         params = p == null ? AirParams.defaults() : p;
     }
 
+    /** AC-10: the solo drones' rally points ({lat, lon} by drone) not yet taken by the tick; null: none new. */
+    private volatile Map<String, double[]> soloRalliesAsked;
+    /** The followers' rally points ({lat, lon} by drone) as of the last tick. */
+    private volatile Map<String, double[]> followerRallies = Map.of();
+
+    /**
+     * AC-10: the rally points of the drones on their own (RallyPlan, by drone: {lat, lon}). Taken at the next tick, on
+     * its thread: the followers' exit-plan rally points keep two protection radii from them (setOutsideRallies).
+     */
+    public void setSoloRallies(Map<String, double[]> solo) {
+        soloRalliesAsked = Map.copyOf(solo);
+    }
+
+    /** The followers' rally points as of the last tick ({lat, lon} by drone): RallyPlan keeps the solo drones' clear of them. */
+    public Map<String, double[]> followerRallies() {
+        return followerRallies;
+    }
+
     /** A floor asked for and not yet taken by the tick (NaN: none). */
     private volatile double floorAsked = Double.NaN;
 
@@ -234,6 +252,7 @@ public final class GroupLink implements AutoCloseable {
     public synchronized void disband() {
         GroupController g = group;
         group = null;
+        followerRallies = Map.of();
         if (g == null) return;
         refreshView();
         for (String d : phones.keySet()) send(d, FleetCmd.disband());
@@ -301,6 +320,16 @@ public final class GroupLink implements AutoCloseable {
             floorAsked = Double.NaN;
             g.setFloor(floor);
         }
+        Map<String, double[]> solo = soloRalliesAsked;
+        if (solo != null) { // AC-10: the followers' rally points clear of the solo drones'
+            soloRalliesAsked = null;
+            Map<String, V2> local = new HashMap<>();
+            for (Map.Entry<String, double[]> e : solo.entrySet()) local.put(e.getKey(), local(e.getValue()[0], e.getValue()[1]));
+            g.setOutsideRallies(local);
+        }
+        Map<String, double[]> fr = new LinkedHashMap<>();
+        for (Map.Entry<String, V2> e : g.rallies().entrySet()) fr.put(e.getKey(), GeoLocal.offset(lat0, lon0, e.getValue().e(), e.getValue().n()));
+        followerRallies = fr;
         if (now - trackedAt > 5000) { // the reports keep coming (each command does that too)
             trackedAt = now;
             track(new ArrayList<>(phones.keySet()));
@@ -334,7 +363,8 @@ public final class GroupLink implements AutoCloseable {
         for (Map.Entry<String, V2> c : out.clear().entrySet()) {
             double[] ll = GeoLocal.offset(lat0, lon0, c.getValue().e(), c.getValue().n());
             FleetStatus s = last.get(c.getKey());
-            if (s != null) send(c.getKey(), FleetCmd.clear(ll[0], ll[1], s.altAmsl));
+            // AC-12: one without GNSS is never moved sideways (it couldn't fly GUIDED anyway: its FC holds its height)
+            if (s != null && s.has(FleetStatus.GNSS)) send(c.getKey(), FleetCmd.clear(ll[0], ll[1], s.altAmsl));
         }
         if (now - trafficAt >= TRAFFIC_EVERY_MS) { // FD-8 / AC-11: each FC gets the others as ADS-B targets
             trafficAt = now;

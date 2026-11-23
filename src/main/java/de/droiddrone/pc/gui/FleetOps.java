@@ -510,6 +510,10 @@ final class FleetOps {
         for (java.util.Map.Entry<String, Rally> e : rallies.entrySet()) {
             if (!e.getKey().equals(drone)) taken.add(new double[]{e.getValue().lat, e.getValue().lon});
         }
+        GroupLink gl = link; // AC-10 across both: the followers' exit-plan rally points are taken too (and they keep clear of these)
+        if (gl != null) {
+            for (java.util.Map.Entry<String, double[]> e : gl.followerRallies().entrySet()) if (!e.getKey().equals(drone)) taken.add(e.getValue());
+        }
         if (had != null && de.droiddrone.pc.launch.RallyPlan.free(had.lat, had.lon, taken)
                 && de.droiddrone.common.group.GeoLocal.distance(had.fromLat, had.fromLon, lat, lon) < RALLY_MOVED_M) return had;
         double[] p = de.droiddrone.pc.launch.RallyPlan.place(lat, lon, taken);
@@ -571,6 +575,9 @@ final class FleetOps {
     private void tickRallies(long now) {
         GroupLink l = link;
         if (l == null) return;
+        java.util.Map<String, double[]> solo = new java.util.LinkedHashMap<>(); // AC-10: the group's rally points keep clear of these
+        for (java.util.Map.Entry<String, Rally> e : rallies.entrySet()) solo.put(e.getKey(), new double[]{e.getValue().lat, e.getValue().lon});
+        l.setSoloRallies(solo);
         java.util.Set<String> drones = new LinkedHashSet<>(marked.keySet());
         drones.addAll(dispatched.keySet());
         for (String d : drones) {
