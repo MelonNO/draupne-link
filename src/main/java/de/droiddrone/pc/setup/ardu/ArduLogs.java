@@ -63,24 +63,24 @@ public final class ArduLogs {
             synchronized (got) {
                 total[0] = e.num_logs;
                 last[0] = e.last_log_num;
-                heard[0] = System.currentTimeMillis();
+                heard[0] = de.droiddrone.pc.MonoClock.ms();
                 if (e.num_logs > 0) out.putIfAbsent(e.id, new Entry(e.id, e.size, e.time_utc));
                 got.notifyAll();
             }
         };
         fc.onPacket(l);
         try {
-            long end = System.currentTimeMillis() + timeoutMs;
+            long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
             fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
-            long asked = System.currentTimeMillis();
+            long asked = de.droiddrone.pc.MonoClock.ms();
             while (true) {
                 List<Integer> missing = new ArrayList<>();
                 synchronized (got) {
                     // a burst under way: let it come while entries keep arriving
-                    while (System.currentTimeMillis() < end && (total[0] < 0 || out.size() < total[0])
-                            && System.currentTimeMillis() - Math.max(heard[0], asked) < LIST_QUIET_MS) got.wait(100);
+                    while (de.droiddrone.pc.MonoClock.ms() < end && (total[0] < 0 || out.size() < total[0])
+                            && de.droiddrone.pc.MonoClock.ms() - Math.max(heard[0], asked) < LIST_QUIET_MS) got.wait(100);
                     if (total[0] >= 0 && out.size() >= total[0]) return new ArrayList<>(out.values());
-                    if (System.currentTimeMillis() >= end) {
+                    if (de.droiddrone.pc.MonoClock.ms() >= end) {
                         if (total[0] < 0) throw new IOException("no answer to the log list");
                         return new ArrayList<>(out.values()); // what came; the rest didn't, asked as it was
                     }
@@ -96,7 +96,7 @@ public final class ArduLogs {
                         fc.send(new msg_log_request_list(id, id, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
                     }
                 }
-                asked = System.currentTimeMillis();
+                asked = de.droiddrone.pc.MonoClock.ms();
             }
         } finally {
             fc.removePacketListener(l);
@@ -121,7 +121,7 @@ public final class ArduLogs {
         int chunks = (int) ((e.size() + CHUNK - 1) / CHUNK);
         BitSet have = new BitSet(chunks);
         Object got = new Object();
-        long[] heard = {System.currentTimeMillis()};
+        long[] heard = {de.droiddrone.pc.MonoClock.ms()};
         Consumer<MAVLinkPacket> l = p -> {
             if (p.msgid != msg_log_data.MAVLINK_MSG_ID_LOG_DATA) return;
             msg_log_data d = new msg_log_data(p);
@@ -130,13 +130,13 @@ public final class ArduLogs {
             synchronized (got) {
                 for (int i = 0; i < n; i++) data[(int) d.ofs + i] = (byte) d.data[i];
                 have.set((int) (d.ofs / CHUNK));
-                heard[0] = System.currentTimeMillis();
+                heard[0] = de.droiddrone.pc.MonoClock.ms();
                 got.notifyAll();
             }
         };
         fc.onPacket(l);
         try {
-            long end = System.currentTimeMillis() + timeoutMs;
+            long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
             int lastPct = -1;
             while (true) {
                 int missing;
@@ -144,10 +144,10 @@ public final class ArduLogs {
                     missing = have.nextClearBit(0);
                 }
                 if (missing >= chunks) break;
-                if (System.currentTimeMillis() > end) throw new IOException("log " + e.id() + ": " + have.cardinality() + " of " + chunks + " parts");
+                if (de.droiddrone.pc.MonoClock.ms() > end) throw new IOException("log " + e.id() + ": " + have.cardinality() + " of " + chunks + " parts");
                 long quiet;
                 synchronized (got) {
-                    quiet = System.currentTimeMillis() - heard[0];
+                    quiet = de.droiddrone.pc.MonoClock.ms() - heard[0];
                 }
                 if (quiet > silentMs) throw new IOException("no answer from the drone for " + quiet / 1000 + " s (" + have.cardinality() + " of " + chunks + " parts)");
                 // ask for the first stretch that is missing, at most ASK_BYTES
@@ -160,10 +160,10 @@ public final class ArduLogs {
                 long count = Math.min(ASK_BYTES, upTo - from);
                 fc.send(new msg_log_request_data(from, count, e.id(), target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
                 synchronized (got) {
-                    long until = System.currentTimeMillis() + 1500;
-                    while (System.currentTimeMillis() < until && have.get(missing) == false) got.wait(200);
+                    long until = de.droiddrone.pc.MonoClock.ms() + 1500;
+                    while (de.droiddrone.pc.MonoClock.ms() < until && have.get(missing) == false) got.wait(200);
                     // a stream under way: let it run while parts keep coming
-                    while (System.currentTimeMillis() - heard[0] < 400 && have.nextClearBit(missing) < Math.min(chunks, (from + count + CHUNK - 1) / CHUNK)) got.wait(200);
+                    while (de.droiddrone.pc.MonoClock.ms() - heard[0] < 400 && have.nextClearBit(missing) < Math.min(chunks, (from + count + CHUNK - 1) / CHUNK)) got.wait(200);
                     int pct = (int) (have.cardinality() * 100L / chunks);
                     if (pct != lastPct && progress != null) progress.accept(lastPct = pct);
                 }

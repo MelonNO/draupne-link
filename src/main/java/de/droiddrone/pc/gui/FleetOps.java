@@ -128,7 +128,7 @@ final class FleetOps {
     }
 
     private final java.util.Map<String, Sent> dispatched = new java.util.LinkedHashMap<>();
-    private int nextBlock = (int) (System.nanoTime() & 0x7fff) + 1;
+    private int nextBlock = de.droiddrone.pc.route.RouteSender.randomId(); // new at every start: the phone keeps old block ids
     static final double DISPATCH_HEIGHT_M = 60;
 
     /** The map's right-click on a place: DISPATCH every drone marked SAFE TO AUTOLAUNCH there (FD-3). */
@@ -198,7 +198,7 @@ final class FleetOps {
     }
 
     private void begin(List<de.droiddrone.pc.route.Dispatch.Leg> legs, java.util.Map<String, double[]> starts) {
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         for (de.droiddrone.pc.route.Dispatch.Leg leg : legs) {
             Sent s = new Sent(leg, nextBlock++ & 0xffff, now + Math.round(leg.launchAfterS() * 1000));
             double[] from = starts.get(leg.name());
@@ -217,17 +217,17 @@ final class FleetOps {
         GroupLink l = link;
         InetSocketAddress a = host.addressOf(drone);
         if (l == null || a == null) return;
-        if (!rallyReady(drone, System.currentTimeMillis())) return; // AC-10: its rally point first (tickRallies sends it)
+        if (!rallyReady(drone, de.droiddrone.pc.MonoClock.ms())) return; // AC-10: its rally point first (tickRallies sends it)
         l.phone(drone, a);
         l.command(drone, de.droiddrone.common.MissionBlock.packet(s.block, s.leg.mission().items()));
-        s.sentAt = System.currentTimeMillis();
+        s.sentAt = de.droiddrone.pc.MonoClock.ms();
     }
 
     /** Once a second: each dispatch on to its next step. */
     private void tickDispatch() {
         GroupLink l = link;
         if (l == null) return;
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         for (java.util.Map.Entry<String, Sent> e : dispatched.entrySet()) {
             String d = e.getKey();
             Sent s = e.getValue();
@@ -330,7 +330,7 @@ final class FleetOps {
             public void newLead(String drone) {
                 Runnable r = () -> { // FL-6: the sticks first, the word after
                     GroupLink l = link;
-                    host.handOver(drone, l != null && l.reportsFlying(drone, System.currentTimeMillis()));
+                    host.handOver(drone, l != null && l.reportsFlying(drone, de.droiddrone.pc.MonoClock.ms()));
                     host.alert("NEW LEAD: " + drone);
                 };
                 if (SwingUtilities.isEventDispatchThread()) r.run(); // DISCARD LEAD: here already
@@ -365,7 +365,7 @@ final class FleetOps {
             l.command(phone, de.droiddrone.common.FleetCmd.mark(id, floorM));
             l.track(List.of(phone));
             FleetStatus s = l.status(phone);
-            marked.put(phone, new Marked(id, s == null ? Double.NaN : s.lat, s == null ? Double.NaN : s.lon, System.currentTimeMillis()));
+            marked.put(phone, new Marked(id, s == null ? Double.NaN : s.lat, s == null ? Double.NaN : s.lon, de.droiddrone.pc.MonoClock.ms()));
             host.log("SAFE TO AUTOLAUNCH: " + phone + " marked (its phone checks it is level, landed, with a fix).");
         } catch (java.io.IOException e) {
             host.alert("SAFE TO AUTOLAUNCH: " + e.getMessage());
@@ -439,7 +439,7 @@ final class FleetOps {
                     de.droiddrone.pc.launch.ReserveChoice.Pace.DEFAULT), new ColumnsFree());
         }
         reserves.setFloor(floorM);
-        handle(reserves.press(System.currentTimeMillis(), reserveList(), p.lat(), p.lon()));
+        handle(reserves.press(de.droiddrone.pc.MonoClock.ms(), reserveList(), p.lat(), p.lon()));
     }
 
     /** The orders to their phones (woken at their check-in first, AL-7), the events to the log. */
@@ -596,7 +596,7 @@ final class FleetOps {
 
     /** Once a second (the window's refresh): calls waiting for their column, orders sent again until answered. */
     void tickReserves() {
-        tickRallies(System.currentTimeMillis());
+        tickRallies(de.droiddrone.pc.MonoClock.ms());
         tickDispatch();
         dropRefusedMarks();
         noteSettled();
@@ -606,14 +606,14 @@ final class FleetOps {
         if (reserves == null) {
             for (String d : new ArrayList<>(pending.keySet())) {
                 Long at = orderSentAt.get(d);
-                if (at == null || System.currentTimeMillis() - at >= 2000) sendOrder(d);
+                if (at == null || de.droiddrone.pc.MonoClock.ms() - at >= 2000) sendOrder(d);
             }
             return;
         }
-        handle(reserves.tick(System.currentTimeMillis()));
+        handle(reserves.tick(de.droiddrone.pc.MonoClock.ms()));
         for (String d : new ArrayList<>(pending.keySet())) {
             Long at = orderSentAt.get(d);
-            if (at == null || System.currentTimeMillis() - at >= 2000) sendOrder(d);
+            if (at == null || de.droiddrone.pc.MonoClock.ms() - at >= 2000) sendOrder(d);
         }
     }
 
@@ -621,7 +621,7 @@ final class FleetOps {
     private void dropRefusedMarks() {
         GroupLink l = link;
         if (l == null) return;
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         for (java.util.Map.Entry<String, Marked> e : new ArrayList<>(marked.entrySet())) {
             FleetStatus s = l.status(e.getKey());
             if (s == null || now - e.getValue().at() > MARK_ANSWER_MS || s.has(FleetStatus.GNSS)) continue;
@@ -635,10 +635,10 @@ final class FleetOps {
         GroupLink l = link;
         InetSocketAddress a = host.addressOf(drone);
         if (o == null || l == null || a == null) return;
-        if (!rallyReady(drone, System.currentTimeMillis())) return; // AC-10: not off the ground before its rally point is on it
+        if (!rallyReady(drone, de.droiddrone.pc.MonoClock.ms())) return; // AC-10: not off the ground before its rally point is on it
         l.phone(drone, a);
         l.command(drone, de.droiddrone.common.FleetCmd.launch(de.droiddrone.common.launch.LaunchWire.encode(o)));
-        orderSentAt.put(drone, System.currentTimeMillis());
+        orderSentAt.put(drone, de.droiddrone.pc.MonoClock.ms());
     }
 
     private void onLaunchStatus(String drone, de.droiddrone.common.launch.LaunchWire.Status s) {
@@ -651,7 +651,7 @@ final class FleetOps {
         }
         if (reserves == null) return;
         GroupLink.Picture p = picture();
-        handle(reserves.onStatus(System.currentTimeMillis(), drone, s, reserveList(), p == null ? 0 : p.lat(), p == null ? 0 : p.lon()));
+        handle(reserves.onStatus(de.droiddrone.pc.MonoClock.ms(), drone, s, reserveList(), p == null ? 0 : p.lat(), p == null ? 0 : p.lon()));
         if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED || s.state == de.droiddrone.common.launch.LaunchSequence.NOT_LAUNCHED) {
             marked.remove(drone);
             if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
@@ -684,7 +684,7 @@ final class FleetOps {
                 joinedTo.put(drone, g);
                 holdSaid.remove(drone);
                 marked.remove(drone);
-                l.addReserve(drone, st.battery == 255 ? 50 : st.battery, l.nextApproachAlt(), System.currentTimeMillis()); // GU-9: under the group's lock
+                l.addReserve(drone, st.battery == 255 ? 50 : st.battery, l.nextApproachAlt(), de.droiddrone.pc.MonoClock.ms()); // GU-9: under the group's lock
                 host.log(again ? drone + " joins " + d.lead() + "'s group." : drone + " joins the group.");
             }
             case NEW_GROUP -> {
@@ -781,7 +781,7 @@ final class FleetOps {
                 host.log("DISCARD LEAD: no follower group.");
                 return;
             }
-            String next = l.discardLead(System.currentTimeMillis());
+            String next = l.discardLead(de.droiddrone.pc.MonoClock.ms());
             if (next == null) host.alert("DISCARD LEAD: no follower in the bottom row to take over.");
         });
     }
@@ -933,8 +933,8 @@ final class FleetOps {
         host.log("FOLLOW GROUP: asking " + all.size() + " drones where they are ...");
         GroupLink l = link;
         Thread t = new Thread(() -> {
-            long until = System.currentTimeMillis() + 4000;
-            while (System.currentTimeMillis() < until && all.stream().anyMatch(d -> l.status(d) == null)) {
+            long until = de.droiddrone.pc.MonoClock.ms() + 4000;
+            while (de.droiddrone.pc.MonoClock.ms() < until && all.stream().anyMatch(d -> l.status(d) == null)) {
                 try {
                     Thread.sleep(100);
                 } catch (InterruptedException e) {

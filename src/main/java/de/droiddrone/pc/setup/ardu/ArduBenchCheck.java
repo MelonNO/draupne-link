@@ -62,17 +62,17 @@ public final class ArduBenchCheck {
     }
 
     private static void send(MavSession fc, int[] ch, long forMs) throws IOException, InterruptedException {
-        long end = System.currentTimeMillis() + forMs;
+        long end = de.droiddrone.pc.MonoClock.ms() + forMs;
         do {
             one(fc, ch);
             Thread.sleep(100);
-        } while (System.currentTimeMillis() < end);
+        } while (de.droiddrone.pc.MonoClock.ms() < end);
     }
 
     /** Overrides until the heartbeat's armed flag is as wanted (a fresh heartbeat), or the time is up. */
     private static boolean sendUntil(MavSession fc, int[] ch, long forMs, boolean wantArmed) throws IOException, InterruptedException {
-        long end = System.currentTimeMillis() + forMs;
-        while (System.currentTimeMillis() < end) {
+        long end = de.droiddrone.pc.MonoClock.ms() + forMs;
+        while (de.droiddrone.pc.MonoClock.ms() < end) {
             one(fc, ch);
             Thread.sleep(100);
             boolean a = fc.armed();

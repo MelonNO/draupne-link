@@ -68,8 +68,8 @@ public final class ArduUsb {
     static boolean heartbeatOn(MavSession.Wire wire) throws InterruptedException {
         MavlinkSniff sniff = new MavlinkSniff();
         byte[] buf = new byte[512];
-        long end = System.currentTimeMillis() + LISTEN_MS;
-        while (System.currentTimeMillis() < end) {
+        long end = de.droiddrone.pc.MonoClock.ms() + LISTEN_MS;
+        while (de.droiddrone.pc.MonoClock.ms() < end) {
             if (Thread.interrupted()) throw new InterruptedException();
             int n;
             try {

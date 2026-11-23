@@ -281,7 +281,7 @@ public final class GroupLink implements AutoCloseable {
         while (open) {
             try {
                 Thread.sleep(TICK_MS);
-                tick(System.currentTimeMillis());
+                tick(de.droiddrone.pc.MonoClock.ms());
             } catch (InterruptedException e) {
                 return;
             } catch (RuntimeException e) {
@@ -382,7 +382,7 @@ public final class GroupLink implements AutoCloseable {
             FleetStatus s = FleetStatus.decode(p.getData(), p.getLength());
             if (s == null) continue;
             last.put(drone, s);
-            heardAt.put(drone, System.currentTimeMillis());
+            heardAt.put(drone, de.droiddrone.pc.MonoClock.ms());
         }
     }
 
