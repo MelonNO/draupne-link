@@ -109,6 +109,15 @@ public final class ArduTools {
         }
     }
 
+    /**
+     * AS-5, the quick way: ArduPilot's simple accelerometer calibration (PREFLIGHT_CALIBRATION, accelerometer 4) - the
+     * drone level on the bench, one command, no six positions; enough to arm. The six-position one is the better.
+     */
+    public int simpleAccelCal() throws IOException, InterruptedException {
+        bench();
+        return fc.command(MAV_CMD_PREFLIGHT_CALIBRATION, 0, 0, 0, 0, 4, 0, 0, 10_000);
+    }
+
     /** AS-4: the level trim (the drone level on the bench): PREFLIGHT_CALIBRATION, accelerometer "level" (5 = 2). */
     public int levelTrim() throws IOException, InterruptedException {
         bench();

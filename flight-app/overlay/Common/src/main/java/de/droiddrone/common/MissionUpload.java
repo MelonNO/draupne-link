@@ -133,7 +133,7 @@ public final class MissionUpload {
         heard(now);
         MissionItem sent = items.get(item.seq);
         if (item.seq > 0 && !sent.sameAs(item)) {
-            fail("item " + item.seq + " reads back other than sent: " + item + " (sent " + sent + ")", now);
+            fail("item " + item.seq + " reads back other than sent: " + sent.diff(item), now);
             return;
         }
         readBack.add(item);
