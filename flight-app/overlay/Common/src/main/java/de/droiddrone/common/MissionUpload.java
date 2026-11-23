@@ -50,6 +50,8 @@ public final class MissionUpload {
     }
 
     public static final int UPLOADING = 1, READING_BACK = 2, DONE = 3, FAILED = 4;
+    /** MAV_MISSION_TYPE: the route (0), the geofence (1, AP-9), the rally points (2, AC-10). */
+    public static final int TYPE_MISSION = 0, TYPE_FENCE = 1, TYPE_RALLY = 2;
     /** MAV_MISSION_ACCEPTED. */
     public static final int ACK_ACCEPTED = 0;
     /** No word from the FC for this long: the last message is sent again. */
@@ -59,6 +61,7 @@ public final class MissionUpload {
 
     private final List<MissionItem> items;
     private final Link link;
+    private final int missionType;
     private int state;
     private String reason = "";
     private long lastHeard;
@@ -71,7 +74,17 @@ public final class MissionUpload {
     private long endedAt;
 
     public MissionUpload(List<MissionItem> items, Link link) {
-        if (items == null || items.isEmpty()) throw new IllegalArgumentException("no mission items");
+        this(items, link, TYPE_MISSION);
+    }
+
+    /**
+     * @param missionType which of the FC's lists: TYPE_MISSION, TYPE_FENCE or TYPE_RALLY - the Link sends it in every
+     *                    message; only a mission's item 0 is the FC's own home (not compared), a fence's and the rally
+     *                    points' items are all compared
+     */
+    public MissionUpload(List<MissionItem> items, Link link, int missionType) {
+        if (items == null || items.isEmpty() && missionType == TYPE_MISSION) throw new IllegalArgumentException("no mission items");
+        this.missionType = missionType;
         List<MissionItem> numbered = new ArrayList<>(items.size());
         for (int i = 0; i < items.size(); i++) numbered.add(items.get(i).withSeq(i));
         this.items = numbered;
@@ -124,6 +137,12 @@ public final class MissionUpload {
         }
         readCount = count;
         readNext = 0;
+        if (count == 0) { // an empty fence or rally list (cleared): nothing to read back
+            link.sendAck(ACK_ACCEPTED);
+            state = DONE;
+            endedAt = now;
+            return;
+        }
         link.sendRequest(0);
     }
 
@@ -132,7 +151,7 @@ public final class MissionUpload {
         if (state != READING_BACK || readCount < 0 || item == null || item.seq != readNext) return;
         heard(now);
         MissionItem sent = items.get(item.seq);
-        if (item.seq > 0 && !sent.sameAs(item)) {
+        if ((item.seq > 0 || missionType != TYPE_MISSION) && !sent.sameAs(item)) {
             fail("item " + item.seq + " reads back other than sent: " + item + " (sent " + sent + ")", now);
             return;
         }
@@ -210,6 +229,11 @@ public final class MissionUpload {
 
     public List<MissionItem> items() {
         return items;
+    }
+
+    /** Which of the FC's lists this upload is: TYPE_MISSION, TYPE_FENCE or TYPE_RALLY. */
+    public int missionType() {
+        return missionType;
     }
 
     /** MAV_MISSION_RESULT's names. */

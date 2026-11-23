@@ -69,6 +69,6 @@ public final class RouteSender {
     }
 
     private static int itemsOf(byte[] packet) {
-        return packet.length >= 5 ? ((packet[3] & 0xff) << 8 | (packet[4] & 0xff)) : 0;
+        return packet.length >= 6 ? ((packet[4] & 0xff) << 8 | (packet[5] & 0xff)) : 0; // after [0x33][block u16][type u8]
     }
 }

@@ -20,7 +20,7 @@ package de.droiddrone.common;
 /**
  * DRAUPNE Flight (fleet PRD RT-8): a whole route from the PC to the phone in one datagram, so the mission protocol's
  * item-by-item talk runs over the phone's USB (milliseconds) and not over 4G (100 items at 50 ms round trips miss the
- * 5 s gate). [0x33][block id u16][MissionItem.pack]. Unnumbered: the PC sends it again every second until the phone's
+ * 5 s gate). [0x33][block id u16][mission type u8 (MissionUpload's TYPE_: 0 route, 1 fence, 2 rally points)][MissionItem.pack]. Unnumbered: the PC sends it again every second until the phone's
  * status record names its block id. The phone answers with telemetry record {@link #STATUS_RECORD}:
  * [block id u16][state u8 (MissionUpload's 1 uploading, 2 reading back, 3 done, 4 failed)][percent u8][reason length u8]
  * [reason ASCII]. Java 11.
@@ -34,29 +34,39 @@ public final class MissionBlock {
 
     public final int blockId;
     public final java.util.List<MissionItem> items;
+    /** MissionUpload.TYPE_MISSION, TYPE_FENCE or TYPE_RALLY. */
+    public final int missionType;
 
-    private MissionBlock(int blockId, java.util.List<MissionItem> items) {
+    private MissionBlock(int blockId, int missionType, java.util.List<MissionItem> items) {
         this.blockId = blockId;
+        this.missionType = missionType;
         this.items = items;
     }
 
     public static byte[] packet(int blockId, java.util.List<MissionItem> items) {
+        return packet(blockId, MissionUpload.TYPE_MISSION, items);
+    }
+
+    public static byte[] packet(int blockId, int missionType, java.util.List<MissionItem> items) {
         byte[] body = MissionItem.pack(items);
-        byte[] p = new byte[3 + body.length];
+        byte[] p = new byte[4 + body.length];
         p[0] = PACKET;
         p[1] = (byte) (blockId >>> 8);
         p[2] = (byte) blockId;
-        System.arraycopy(body, 0, p, 3, body.length);
+        p[3] = (byte) missionType;
+        System.arraycopy(body, 0, p, 4, body.length);
         return p;
     }
 
     /** The block in a payload after the packet byte, or null: cut short, empty, or too long. */
     public static MissionBlock read(byte[] d, int off, int len) {
-        if (d == null || len < 4) return null;
+        if (d == null || len < 5) return null;
         int id = (d[off] & 0xff) << 8 | (d[off + 1] & 0xff);
-        java.util.List<MissionItem> items = MissionItem.unpack(d, off + 2, len - 2);
-        if (items == null || items.isEmpty()) return null;
-        return new MissionBlock(id, items);
+        int type = d[off + 2] & 0xff;
+        if (type > MissionUpload.TYPE_RALLY) return null;
+        java.util.List<MissionItem> items = MissionItem.unpack(d, off + 3, len - 3);
+        if (items == null || items.isEmpty() && type == MissionUpload.TYPE_MISSION) return null;
+        return new MissionBlock(id, type, items);
     }
 
     /** The status record's payload (after its code). */
