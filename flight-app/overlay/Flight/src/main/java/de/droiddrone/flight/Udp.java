@@ -2379,7 +2379,7 @@ public class Udp {
     /** A raw MAVLink packet was dropped (MavlinkRaw): said once (the buffer thread's own). */
     private boolean mavlinkRawRefusedSaid;
 
-    /** Fleet: an FC frame for the PC's tunnel (numbered, resent like any other). */
+    /** Fleet: an FC frame for the PC's tunnel (unnumbered: 0x32 is not a numbered packet; the PC's protocols ask again). */
     void sendTunnel(byte[] frame) {
         if (socket == null || socket.isClosed() || frame == null || udpSender == null) return;
         try {

@@ -16,7 +16,7 @@ final class SitlMission {
         return link(fc, MissionUpload.TYPE_MISSION);
     }
 
-    /** The upload of one of the FC's lists (MissionUpload.TYPE_: route, fence, rally points), as the phone sends it. */
+    /** The link for one of the FC's lists (route, fence, rally points): every message carries its type, as the phone's. */
     static MissionUpload.Link link(MavSession fc, int missionType) {
         short gcs = (short) MavSession.GCS_SYSID;
         short mt = (short) missionType;
@@ -58,34 +58,48 @@ final class SitlMission {
 
     /** The FC's mission answers to the upload under way (the phone's Mavlink.missionFromFc). */
     static void feed(MavSession fc, Supplier<MissionUpload> upload) {
-        fc.onPacket(p -> {
+        feed(fc, upload, -1, null);
+    }
+
+    /**
+     * As the phone: only the answers of the list being uploaded (their mission type); a test's drop may lose some.
+     * @param missionType -1: the upload's own
+     * @return the listener (to remove)
+     */
+    static java.util.function.Consumer<com.MAVLink.MAVLinkPacket> feed(MavSession fc, Supplier<MissionUpload> upload, int missionType,
+                                                                     java.util.function.Predicate<com.MAVLink.MAVLinkPacket> drop) {
+        java.util.function.Consumer<com.MAVLink.MAVLinkPacket> l = p -> {
             MissionUpload u = upload.get();
-            if (u == null) return;
-            long now = System.currentTimeMillis();
+            if (u == null || drop != null && drop.test(p)) return;
+            int t = missionType >= 0 ? missionType : u.missionType();
+            long now = System.currentTimeMillis(); // the clock the SITL phones drive their uploads with
             switch (p.msgid) {
                 case com.MAVLink.common.msg_mission_request_int.MAVLINK_MSG_ID_MISSION_REQUEST_INT -> {
-                    com.MAVLink.common.msg_mission_request_int m = new com.MAVLink.common.msg_mission_request_int(p);
-                    if (m.mission_type == u.missionType()) u.onRequest(m.seq, now);
+                    com.MAVLink.common.msg_mission_request_int q = new com.MAVLink.common.msg_mission_request_int(p);
+                    if (q.mission_type == t) u.onRequest(q.seq, now);
                 }
-                case com.MAVLink.common.msg_mission_request.MAVLINK_MSG_ID_MISSION_REQUEST ->
-                        u.onRequest(new com.MAVLink.common.msg_mission_request(p).seq, now);
+                case com.MAVLink.common.msg_mission_request.MAVLINK_MSG_ID_MISSION_REQUEST -> {
+                    com.MAVLink.common.msg_mission_request q = new com.MAVLink.common.msg_mission_request(p);
+                    if (q.mission_type == t) u.onRequest(q.seq, now);
+                }
                 case com.MAVLink.common.msg_mission_ack.MAVLINK_MSG_ID_MISSION_ACK -> {
-                    com.MAVLink.common.msg_mission_ack m = new com.MAVLink.common.msg_mission_ack(p);
-                    if (m.mission_type == u.missionType()) u.onAck(m.type, now);
+                    com.MAVLink.common.msg_mission_ack a = new com.MAVLink.common.msg_mission_ack(p);
+                    if (a.mission_type == t) u.onAck(a.type, now);
                 }
                 case com.MAVLink.common.msg_mission_count.MAVLINK_MSG_ID_MISSION_COUNT -> {
-                    com.MAVLink.common.msg_mission_count m = new com.MAVLink.common.msg_mission_count(p);
-                    if (m.mission_type == u.missionType()) u.onCount(m.count, now);
+                    com.MAVLink.common.msg_mission_count c = new com.MAVLink.common.msg_mission_count(p);
+                    if (c.mission_type == t) u.onCount(c.count, now);
                 }
                 case com.MAVLink.common.msg_mission_item_int.MAVLINK_MSG_ID_MISSION_ITEM_INT -> {
                     com.MAVLink.common.msg_mission_item_int m = new com.MAVLink.common.msg_mission_item_int(p);
-                    if (m.mission_type != u.missionType()) return;
-                    u.onItem(new MissionItem(m.seq, m.frame, m.command, m.autocontinue != 0, m.param1, m.param2, m.param3, m.param4,
-                            m.x, m.y, m.z), now);
+                    if (m.mission_type == t) u.onItem(new MissionItem(m.seq, m.frame, m.command, m.autocontinue != 0, m.param1, m.param2,
+                            m.param3, m.param4, m.x, m.y, m.z), now);
                 }
                 default -> {
                 }
             }
-        });
+        };
+        fc.onPacket(l);
+        return l;
     }
 }

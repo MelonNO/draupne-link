@@ -27,7 +27,8 @@ import java.util.List;
  * item asked for and compared with what was sent, a MISSION_ACK to end it.
  * <p>
  * Pure: the messages go out through {@link Link} and come in by the on- methods; time is the caller's (monotonic ms),
- * {@link #tick} once in a while for the timeouts. Not thread-safe: one thread drives it. Meant to run on the phone,
+ * {@link #tick} once in a while for the timeouts. Thread-safe (each call under its lock): on the phone the FC's answers come on its reader thread, the timeouts on
+ * the 10 Hz thread and the blocks on the receive thread - they raced on the state and the retries before. Meant to run on the phone,
  * next to the flight controller: over USB an item's round trip is a few ms, over 4G 50 ms or more - 100 items there
  * would take 5 s each way (the phase 2 gate is under 5 s for all of it). The PC sends the phone the whole mission at
  * once ({@link MissionItem#pack}). Java 11.
@@ -54,6 +55,11 @@ public final class MissionUpload {
     public static final int TYPE_MISSION = 0, TYPE_FENCE = 1, TYPE_RALLY = 2;
     /** MAV_MISSION_ACCEPTED. */
     public static final int ACK_ACCEPTED = 0;
+    /**
+     * MAV_MISSION_INVALID_SEQUENCE: ArduPilot's answer to an item it didn't ask for (a resend after a silence, an answer to its
+     * own repeated request) - it goes on with the upload, so this is no end of it.
+     */
+    public static final int ACK_INVALID_SEQUENCE = 13;
     /** No word from the FC for this long: the last message is sent again. */
     public static final long TIMEOUT_MS = 1000;
     /** Sent again this many times without an answer: failed. */
@@ -91,7 +97,7 @@ public final class MissionUpload {
         this.link = link;
     }
 
-    public void start(long now) {
+    public synchronized void start(long now) {
         state = UPLOADING;
         startedAt = now;
         lastHeard = now;
@@ -99,7 +105,9 @@ public final class MissionUpload {
     }
 
     /** MISSION_REQUEST_INT (or the old MISSION_REQUEST) from the FC: it wants this item. */
-    public void onRequest(int seq, long now) {
+    public synchronized void onRequest(int seq, long now) {
+        // the read-back began on a silence after the last item, but the FC still asks: it hadn't got it (see tick)
+        if (state == READING_BACK && readCount < 0 && seq >= 0 && seq < items.size()) state = UPLOADING;
         if (state != UPLOADING) return;
         if (seq < 0 || seq >= items.size()) {
             fail("the flight controller asked for item " + seq + " of " + items.size(), now);
@@ -111,8 +119,9 @@ public final class MissionUpload {
     }
 
     /** MISSION_ACK from the FC. */
-    public void onAck(int type, long now) {
+    public synchronized void onAck(int type, long now) {
         if (state != UPLOADING) return;
+        if (type == ACK_INVALID_SEQUENCE) return; // not the end: the FC asks again for what it wants (or times out: CANCELLED)
         heard(now);
         if (type != ACK_ACCEPTED) {
             fail("the flight controller refused the mission (" + ackName(type) + ")", now);
@@ -128,7 +137,7 @@ public final class MissionUpload {
     }
 
     /** MISSION_COUNT from the FC, the read-back's first answer. */
-    public void onCount(int count, long now) {
+    public synchronized void onCount(int count, long now) {
         if (state != READING_BACK || readCount >= 0) return;
         heard(now);
         if (count != items.size()) {
@@ -147,7 +156,7 @@ public final class MissionUpload {
     }
 
     /** MISSION_ITEM_INT from the FC during the read-back. */
-    public void onItem(MissionItem item, long now) {
+    public synchronized void onItem(MissionItem item, long now) {
         if (state != READING_BACK || readCount < 0 || item == null || item.seq != readNext) return;
         heard(now);
         MissionItem sent = items.get(item.seq);
@@ -167,7 +176,7 @@ public final class MissionUpload {
     }
 
     /** Now and then (every 100 ms or so): a silent FC gets the last message again, up to {@link #MAX_RETRIES}. */
-    public void tick(long now) {
+    public synchronized void tick(long now) {
         if (state != UPLOADING && state != READING_BACK) return;
         if (now - lastHeard < TIMEOUT_MS) return;
         if (++retries > MAX_RETRIES) {
@@ -177,8 +186,17 @@ public final class MissionUpload {
         }
         lastHeard = now;
         if (state == UPLOADING) {
-            if (highestSent < 0) link.sendCount(items.size());
-            else link.sendItem(items.get(highestSent)); // the FC asks again for what it lost; this wakes a lost answer
+            if (highestSent < 0) {
+                link.sendCount(items.size());
+            } else if (highestSent == items.size() - 1) {
+                // every item was asked for and sent: the FC's last MISSION_ACK was lost (or it still waits for the last
+                // item). The read-back tells which - the route is there whole, or the count or an item differs
+                state = READING_BACK;
+                retries = 0;
+                link.sendRequestList();
+            } else {
+                link.sendItem(items.get(highestSent)); // the FC asks again for what it lost; this wakes a lost answer
+            }
         } else if (readCount < 0) {
             link.sendRequestList();
         } else {
@@ -197,33 +215,34 @@ public final class MissionUpload {
         endedAt = now;
     }
 
-    public int state() {
+    public synchronized int state() {
         return state;
     }
 
-    public boolean done() {
+    public synchronized boolean done() {
         return state == DONE;
     }
 
-    public boolean failed() {
+    public synchronized boolean failed() {
         return state == FAILED;
     }
 
     /** Why it failed ("" otherwise). */
-    public String reason() {
+    public synchronized String reason() {
         return reason;
     }
 
     /** 0-100: items sent, then items read back, as one figure. */
-    public int percent() {
+    public synchronized int percent() {
         if (state == DONE) return 100;
         int n = items.size();
+        if (n == 0) return 0; // an empty fence or rally list: nothing counted until it is done
         int done = (highestSent + 1) + (state == READING_BACK ? readNext : 0);
         return Math.min(99, done * 100 / (2 * n));
     }
 
     /** From start to done or failed, ms (-1 while it runs). */
-    public long elapsedMs() {
+    public synchronized long elapsedMs() {
         return state == DONE || state == FAILED ? endedAt - startedAt : -1;
     }
 

@@ -86,7 +86,7 @@ public final class MissionItem {
      * centimetre (the FC stores a float), the parameters as floats (NaN equals NaN: "unchanged" in MAVLink).
      */
     public boolean sameAs(MissionItem o) {
-        return o != null && seq == o.seq && frame == o.frame && command == o.command && x == o.x && y == o.y
+        return o != null && seq == o.seq && sameFrame(frame, o.frame) && command == o.command && x == o.x && y == o.y
                 && Math.abs(z - o.z) < 0.01f && same(param1, o.param1) && same(param2, o.param2)
                 && same(param3, o.param3) && same(param4, o.param4);
     }
@@ -96,7 +96,7 @@ public final class MissionItem {
         if (o == null) return "nothing read back";
         StringBuilder s = new StringBuilder();
         if (seq != o.seq) s.append("seq ").append(seq).append(" / ").append(o.seq).append(", ");
-        if (frame != o.frame) s.append("frame ").append(frame).append(" / ").append(o.frame).append(", ");
+        if (!sameFrame(frame, o.frame)) s.append("frame ").append(frame).append(" / ").append(o.frame).append(", ");
         if (command != o.command) s.append("command ").append(command).append(" / ").append(o.command).append(", ");
         if (x != o.x || y != o.y) s.append("place ").append(latDeg()).append(",").append(lonDeg()).append(" / ").append(o.latDeg()).append(",").append(o.lonDeg()).append(", ");
         if (Math.abs(z - o.z) >= 0.01f) s.append("height ").append(z).append(" / ").append(o.z).append(", ");
@@ -106,11 +106,37 @@ public final class MissionItem {
     }
 
     /**
-     * A parameter as sent against as read back. NaN sent means "as it is" in MAVLink; ArduPilot stores it and reads it
-     * back as 0 (seen in ArduPilot SITL 4.7.3, 2026-11-23: every route failed its read-back on the yaw before).
+     * A frame as sent against as read back. ArduPilot 4.7.3 (SITL, 2026-11-23) answers in the frames it stores: a rally
+     * point sent as GLOBAL_RELATIVE_ALT_INT (6) reads back as GLOBAL_RELATIVE_ALT (3) - every follower's own rally
+     * upload failed its read-back - and an item without a place sent as MISSION (2) reads back as GLOBAL (0). The
+     * _INT frames and their plain twins mean the same place with MISSION_ITEM_INT; MISSION and GLOBAL the same for an
+     * item without one.
+     */
+    static boolean sameFrame(int a, int b) {
+        return plain(a) == plain(b);
+    }
+
+    private static int plain(int frame) {
+        switch (frame) {
+            case 2: // MAV_FRAME_MISSION
+            case 5: // GLOBAL_INT
+                return 0;
+            case 6: // GLOBAL_RELATIVE_ALT_INT
+                return 3;
+            case 11: // GLOBAL_TERRAIN_ALT_INT
+                return 10;
+            default:
+                return frame;
+        }
+    }
+
+    /**
+     * A parameter as sent against as read back. NaN sent means "as it is" (its default) in MAVLink: ArduPilot stores its
+     * own value and reads that back - 0 for a waypoint's yaw, 1 for NAV_LAND's param4 (both seen in ArduPilot SITL
+     * 4.7.3, 2026-11-23: every route MissionBuilder ends with a LAND failed its read-back). Anything matches it.
      */
     private static boolean same(float a, float b) {
-        if (Float.isNaN(a)) return Float.isNaN(b) || b == 0f;
+        if (Float.isNaN(a)) return true;
         return !Float.isNaN(b) && Math.abs(a - b) < 1e-4f;
     }
 
@@ -145,12 +171,15 @@ public final class MissionItem {
         }
     }
 
-    /** {@link #pack}'s block read back, items numbered from 0 in order; null when it is cut short or too long. */
+    /** {@link #pack}'s block read back, items numbered from 0 in order; null when it is cut short, has bytes past its last item (the
+     * count and the length disagree), or claims more than {@link #MAX_ITEMS}. */
     public static List<MissionItem> unpack(byte[] data, int offset, int length) {
+        if (data == null || offset < 0 || length < 2 || offset > data.length) return null;
+        length = Math.min(length, data.length - offset); // a length that claims more than the array holds
         try {
             DataInputStream in = new DataInputStream(new ByteArrayInputStream(data, offset, length));
             int n = in.readUnsignedShort();
-            if (n > MAX_ITEMS || length < 2 + n * PACKED_SIZE) return null;
+            if (n > MAX_ITEMS || length != 2 + n * PACKED_SIZE) return null; // exactly: a count lower than the items sent would fly a cut route
             List<MissionItem> out = new ArrayList<>(n);
             for (int i = 0; i < n; i++) {
                 int frame = in.readUnsignedByte();

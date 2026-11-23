@@ -43,11 +43,11 @@ public final class FleetStatus {
     public byte[] encode() {
         java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(WITH_RTL_BYTES);
         b.put(PACKET).put((byte) VERSION)
-                .putInt((int) Math.round(lat * 1e7)).putInt((int) Math.round(lon * 1e7)).putInt((int) Math.round(altAmsl * 10))
+                .putInt(i(lat * 1e7)).putInt(i(lon * 1e7)).putInt(i(altAmsl * 10))
                 .putShort(s(velE * 100)).putShort(s(velN * 100)).putShort(s(velU * 100))
                 .put((byte) battery).put((byte) flags).put((byte) mode).put((byte) phase)
                 .putShort((short) Math.max(0, Math.min(65535, Math.round(errM * 10))))
-                .putInt((int) Math.round(homeAmsl * 10))
+                .putInt(i(homeAmsl * 10))
                 .putShort((short) routeBlock).put((byte) routeState).put((byte) routePercent);
 
         b.putShort((short) (rtlAltDm < 0 ? 65535 : Math.min(65534, rtlAltDm)));
@@ -56,7 +56,7 @@ public final class FleetStatus {
 
     /** A report, or null: not one, cut short, another version. */
     public static FleetStatus decode(byte[] d, int len) {
-        if (d == null || len < BYTES || d[0] != PACKET || d[1] != VERSION) return null;
+        if (d == null || len < BYTES || d.length < BYTES || d[0] != PACKET || d[1] != VERSION) return null;
         java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(d, 2, BYTES - 2);
         FleetStatus s = new FleetStatus();
         s.lat = b.getInt() / 1e7;
@@ -80,6 +80,11 @@ public final class FleetStatus {
             s.rtlAltDm = r == 65535 ? -1 : r;
         }
         return s;
+    }
+
+    /** Saturated, NaN 0: a cast of a larger number wrapped it round to the other sign (or another real place). */
+    private static int i(double v) {
+        return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, Math.round(v)));
     }
 
     private static short s(double v) {
