@@ -2271,6 +2271,14 @@ public class Udp {
                 videoStarter.execute(() -> checkConfigUpdate(oldCamera));
                 break;
             }
+            case de.droiddrone.common.MissionBlock.PACKET:
+            {
+                // fleet RT-8: a whole route, uploaded to the FC over USB here (the pilot's session only)
+                int dataSize = buffer.getRemaining();
+                byte[] buf = new byte[dataSize];
+                if (buffer.read(buf, 0, dataSize) == dataSize) mavlink.missionBlock(de.droiddrone.common.MissionBlock.read(buf, 0, dataSize));
+                break;
+            }
             case MavTunnel.PACKET:
             {
                 // fleet: the PC's routes, parameters and targets for an ArduPilot FC - listed frames only (MavTunnel)

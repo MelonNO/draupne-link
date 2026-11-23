@@ -288,7 +288,49 @@ class MapView extends JComponent {
     private java.util.function.Supplier<Coordinates.Format> coordinateFormat = () -> Coordinates.Format.MGRS;
 
     // ---- MAP TOOLS (1.0.35): what the pilot draws
-    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX, ERASER, HORIZON, SEARCH }
+    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX, ERASER, HORIZON, SEARCH, ROUTE }
+
+    // ---- fleet PRD RT-1: the route being made (the ROUTE window owns it; the map draws it and takes its edits)
+
+    /** What the route window wants to hear from the map. */
+    interface RouteHost {
+        /** ROUTE drawn: its points (two or more). */
+        void drawn(List<MapGraphics.LatLon> points);
+
+        /** A point dragged, inserted or deleted, or one given its own height. */
+        void edited();
+
+        /** A point picked (its own height in the window), -1 none. */
+        void selected(int index);
+
+        /** Right-click "Fly to here": a one-point route from the drone. */
+        void flyToHere(double lat, double lon);
+
+        /** Right-click on a point: its own height asked for. */
+        void askHeight(int index);
+    }
+
+    private volatile RouteHost routeHost;
+    private de.droiddrone.pc.route.Route route;
+    private List<double[]> routePlanned;
+    private int routeSelected = -1, routeDrag = -1;
+
+    void setRouteHost(RouteHost host) {
+        routeHost = host;
+    }
+
+    /** The route to draw (null: none) and the planned line over the terrain ({lat, lon} each, or null). */
+    void setRoute(de.droiddrone.pc.route.Route r, List<double[]> planned) {
+        route = r;
+        routePlanned = planned;
+        if (r == null || routeSelected >= r.size()) routeSelected = -1;
+        repaint();
+    }
+
+    void selectRoutePoint(int index) {
+        routeSelected = index;
+        repaint();
+    }
 
     /**
      * RADIO HORIZON (1.0.39): the one mast placed with the tool, what it reaches (null while loading), and a status line.
@@ -395,6 +437,17 @@ class MapView extends JComponent {
                     return;
                 }
                 dragged = false;
+                // fleet RT-1: a route point pressed is dragged, not the map
+                if (tool == Tool.NONE && route != null && routeHost != null && SwingUtilities.isLeftMouseButton(e)) {
+                    int at = MapRouteLayer.pointAt(route, projection(), e.getX(), e.getY());
+                    if (at >= 0) {
+                        routeDrag = at;
+                        routeSelected = at;
+                        routeHost.selected(at);
+                        repaint();
+                        return;
+                    }
+                }
                 if ((tool == Tool.AREA || tool == Tool.EXPORT_BOX || tool == Tool.SEARCH) && SwingUtilities.isLeftMouseButton(e)) {
                     selectStart = selectEnd = e.getPoint(); // the rectangle to draw, or the box to export
                     return;
@@ -411,6 +464,13 @@ class MapView extends JComponent {
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (routeDrag >= 0 && route != null && routeDrag < route.size()) {
+                    double[] ll = toLatLon(e.getX(), e.getY());
+                    route.move(routeDrag, ll[0], ll[1]);
+                    dragged = true;
+                    repaint();
+                    return;
+                }
                 if (selectStart != null) {
                     selectEnd = e.getPoint();
                     dragged = true;
@@ -430,6 +490,12 @@ class MapView extends JComponent {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (routeDrag >= 0) { // fleet RT-1: the point stays where it was dropped; the route is planned again
+                    routeDrag = -1;
+                    RouteHost h = routeHost;
+                    if (h != null && dragged) h.edited();
+                    return;
+                }
                 if (crossPressed || heldPressed) return;
                 dragStart = null;
                 if (selectStart == null) return;
@@ -481,7 +547,7 @@ class MapView extends JComponent {
                     if (onHorizonMast != null) onHorizonMast.accept(horizonMast);
                     return;
                 }
-                if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.SYMBOL) {
+                if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.SYMBOL || tool == Tool.ROUTE) {
                     toolClick(e);
                     return;
                 }
@@ -1038,6 +1104,45 @@ class MapView extends JComponent {
     private JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
+        RouteHost rh = routeHost;
+        if (rh != null) { // fleet RT-1: the route's points and legs, and "fly to here"
+            int point = MapRouteLayer.pointAt(route, projection(), x, y);
+            int leg = point < 0 ? MapRouteLayer.legAt(route, projection(), x, y) : -1;
+            double[] ll = toLatLon(x, y);
+            if (point >= 0) {
+                JMenuItem height = new JMenuItem("Route point " + (point + 1) + ": its own height...");
+                height.addActionListener(e -> rh.askHeight(point));
+                menu.add(height);
+                JMenuItem delete = new JMenuItem("Route point " + (point + 1) + ": delete");
+                delete.addActionListener(e -> {
+                    route.delete(point);
+                    routeSelected = -1;
+                    rh.edited();
+                });
+                menu.add(delete);
+                menu.addSeparator();
+            } else if (leg >= 0) {
+                JMenuItem insert = new JMenuItem("Route: a point here");
+                insert.addActionListener(e -> {
+                    route.insert(leg + 1, ll[0], ll[1]);
+                    rh.edited();
+                });
+                menu.add(insert);
+                menu.addSeparator();
+            }
+            JMenuItem fly = new JMenuItem("Fly to here");
+            fly.addActionListener(e -> rh.flyToHere(ll[0], ll[1]));
+            menu.add(fly);
+            if (route != null && route.size() > 0) {
+                JMenuItem add = new JMenuItem("Route: add a point here");
+                add.addActionListener(e -> {
+                    route.add(ll[0], ll[1]);
+                    rh.edited();
+                });
+                menu.add(add);
+            }
+            menu.addSeparator();
+        }
         NetDrone drone = netDroneAt(x, y);
         OverwatchMark watching = overwatchAt(x, y);
         String clipsOf = watching != null ? watching.drone() : drone != null ? drone.name() : null;
@@ -1200,7 +1305,7 @@ class MapView extends JComponent {
 
     /** Enter: the line, arrow or measurement ends at its last point. */
     void finishTool() {
-        if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW) finishDrawing(false);
+        if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.ROUTE) finishDrawing(false);
         else cancelTool();
     }
 
@@ -1449,6 +1554,10 @@ class MapView extends JComponent {
             case ARROW -> {
                 if (graphics != null) graphics.add(MapGraphics.Item.arrow(graphics.nextName(MapGraphics.Kind.ARROW, null), pts, drawColor, drawWidth));
             }
+            case ROUTE -> { // fleet RT-1: the route is the route window's (MapWindow)
+                RouteHost h = routeHost;
+                if (h != null) h.drawn(pts);
+            }
             default -> {
             }
         }
@@ -1607,7 +1716,7 @@ class MapView extends JComponent {
      */
     void placeAt(double lat, double lon) {
         MapGraphics.LatLon at = new MapGraphics.LatLon(lat, lon);
-        if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW) {
+        if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.ROUTE) {
             drawing.add(at);
         } else if (graphics != null) {
             graphics.add(MapGraphics.Item.symbol(graphics.nextName(MapGraphics.Kind.SYMBOL, symbolUnit), at, symbolUnit, symbolAffiliation, symbolEchelon));
@@ -1681,6 +1790,7 @@ class MapView extends JComponent {
             if (home != null) MapPlaceLayer.paintRings(g, home, proj);
             if (oldTrack != null) MapTrackLayer.paintOldTrack(g, oldTrackPath, oldTrackName, proj);
             MapTrackLayer.paintKept(g, kept, keptPaths, proj);
+            if (route != null) MapRouteLayer.paint(g, route, routePlanned, routeSelected, proj); // fleet RT-1
             MapTrackLayer.paintTrack(g, trackPath, proj);
             if (home != null) MapPlaceLayer.paintHome(g, home, proj);
             FlightTrack.Point last = track == null ? null : track.last();

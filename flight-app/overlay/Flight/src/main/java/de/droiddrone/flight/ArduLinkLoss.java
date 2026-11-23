@@ -81,6 +81,7 @@ final class ArduLinkLoss {
         Mavlink mavlink = u.mavlinkOfRule();
         if (mavlink == null || !mavlink.isArduPilot()) return;
         long now = android.os.SystemClock.elapsedRealtime();
+        mavlink.tick100(now); // fleet RT-8: a route's upload under way (this is the phone's 10 Hz ArduPilot thread)
         int action = rule.tick(now, u.pcHeardAt(), mavlink.armedNow(now), mavlink.customModeNow(), mavlink.gnssOk(), lead);
         if (action != ArduLinkLossRule.NONE) {
             log("The PC is silent: " + ArduLinkLossRule.name(action) + (lead ? " (lead)" : ""));

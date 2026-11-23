@@ -484,6 +484,119 @@ public class Mavlink {
         if (u != null) u.sendTunnel(packet.encodePacket());
     }
 
+    // ---- fleet RT-8: a route from the PC (MissionBlock), uploaded and read back over USB here
+
+    private volatile de.droiddrone.common.MissionUpload upload;
+    private volatile int uploadBlock = -1;
+    private long uploadSaidAt;
+    private int uploadSaidState = -1;
+
+    /** A route block from the PC (the buffer thread): a new one starts its upload; the same one again is answered. */
+    public void missionBlock(de.droiddrone.common.MissionBlock b) {
+        if (b == null || !isArduPilot()) return;
+        if (b.blockId == uploadBlock && upload != null) {
+            sayUpload(true);
+            return;
+        }
+        uploadBlock = b.blockId;
+        de.droiddrone.common.MissionUpload u = new de.droiddrone.common.MissionUpload(b.items, new de.droiddrone.common.MissionUpload.Link() {
+            @Override
+            public void sendCount(int count) {
+                send(new com.MAVLink.common.msg_mission_count(count, targetSys(), targetComponent, (short) 0, 0L,
+                        config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+            }
+
+            @Override
+            public void sendItem(de.droiddrone.common.MissionItem m) {
+                send(new com.MAVLink.common.msg_mission_item_int(m.param1, m.param2, m.param3, m.param4, m.x, m.y, m.z, m.seq, m.command,
+                        targetSys(), targetComponent, (short) m.frame, (short) 0, (short) (m.autocontinue ? 1 : 0), (short) 0,
+                        config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+            }
+
+            @Override
+            public void sendRequestList() {
+                send(new com.MAVLink.common.msg_mission_request_list(targetSys(), targetComponent, (short) 0,
+                        config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+            }
+
+            @Override
+            public void sendRequest(int seq) {
+                send(new com.MAVLink.common.msg_mission_request_int(seq, targetSys(), targetComponent, (short) 0,
+                        config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+            }
+
+            @Override
+            public void sendAck(int type) {
+                send(new com.MAVLink.common.msg_mission_ack(targetSys(), targetComponent, (short) type, (short) 0, 0L,
+                        config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+            }
+        });
+        upload = u;
+        log("Route from the PC: " + b.items.size() + " items, block " + b.blockId);
+        u.start(android.os.SystemClock.elapsedRealtime());
+        sayUpload(true);
+    }
+
+    private void send(MAVLinkPacket packet) {
+        packet.seq = getSequence();
+        serial.writeDataMavlink(packet.encodePacket());
+    }
+
+    /** Ten times a second (the phone's ArduPilot thread): the upload's timeouts and its status to the PC. */
+    void tick100(long now) {
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u == null) return;
+        u.tick(now);
+        sayUpload(false);
+    }
+
+    private void sayUpload(boolean now) {
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u == null) return;
+        long t = android.os.SystemClock.elapsedRealtime();
+        int state = u.state();
+        boolean over = u.done() || u.failed();
+        if (!now && state == uploadSaidState && (over || t - uploadSaidAt < 1000)) return;
+        if (state != uploadSaidState && over) log("Route upload: " + (u.done() ? "done, read back" : "FAILED - " + u.reason()));
+        uploadSaidState = state;
+        uploadSaidAt = t;
+        telemetryOutputBuffer.offer(new TelemetryData(de.droiddrone.common.MissionBlock.STATUS_RECORD,
+                de.droiddrone.common.MissionBlock.status(uploadBlock, state, u.percent(), u.failed() ? u.reason() : null)));
+    }
+
+    /** The FC's mission talk, to the upload under way. */
+    private void missionFromFc(MAVLinkPacket packet) {
+        de.droiddrone.common.MissionUpload u = upload;
+        if (u == null) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        switch (packet.msgid) {
+            case com.MAVLink.common.msg_mission_request_int.MAVLINK_MSG_ID_MISSION_REQUEST_INT:
+                u.onRequest(new com.MAVLink.common.msg_mission_request_int(packet).seq, now);
+                break;
+            case com.MAVLink.common.msg_mission_request.MAVLINK_MSG_ID_MISSION_REQUEST:
+                u.onRequest(new com.MAVLink.common.msg_mission_request(packet).seq, now);
+                break;
+            case com.MAVLink.common.msg_mission_ack.MAVLINK_MSG_ID_MISSION_ACK: {
+                com.MAVLink.common.msg_mission_ack a = new com.MAVLink.common.msg_mission_ack(packet);
+                if (a.mission_type == 0) u.onAck(a.type, now);
+                break;
+            }
+            case com.MAVLink.common.msg_mission_count.MAVLINK_MSG_ID_MISSION_COUNT: {
+                com.MAVLink.common.msg_mission_count c = new com.MAVLink.common.msg_mission_count(packet);
+                if (c.mission_type == 0) u.onCount(c.count, now);
+                break;
+            }
+            case com.MAVLink.common.msg_mission_item_int.MAVLINK_MSG_ID_MISSION_ITEM_INT: {
+                com.MAVLink.common.msg_mission_item_int m = new com.MAVLink.common.msg_mission_item_int(packet);
+                if (m.mission_type == 0) u.onItem(new de.droiddrone.common.MissionItem(m.seq, m.frame, m.command, m.autocontinue != 0,
+                        m.param1, m.param2, m.param3, m.param4, m.x, m.y, m.z), now);
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
     /** The FC's answer to a command of the pilot's: to the PC as FcCommand.ACK_RECORD. */
     private void commandAck(int command, int result) {
         if (!awaitingAck.remove(command)) return; // the telemetry's own SET_MESSAGE_INTERVAL and the like
@@ -566,6 +679,11 @@ public class Mavlink {
         sendUdpPackets(packets);
         for (MAVLinkPacket packet : packets) {
             tunnelToPc(packet); // DRAUPNE Link (fleet): the PC's tunnel, while open
+            try {
+                missionFromFc(packet); // DRAUPNE Link (fleet RT-8): a route's upload under way
+            } catch (Exception e) {
+                log("Route upload: an FC message not read: " + e);
+            }
             try {
                 switch (packet.msgid) {
                     case msg_heartbeat.MAVLINK_MSG_ID_HEARTBEAT: {

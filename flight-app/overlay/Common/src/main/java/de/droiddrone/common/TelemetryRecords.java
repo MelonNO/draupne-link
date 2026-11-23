@@ -327,6 +327,7 @@ public final class TelemetryRecords {
             case FcCommon.DD_AP_VTX_POWER:
             case FcCommon.DD_MAVLINK_VFR_HUD:
             case FcCommon.DD_MAVLINK_ATTITUDE:
+            case MissionBlock.STATUS_RECORD: // fleet: a route's upload on the phone (variable length, copied whole)
             case FcCommand.ACK_RECORD: { // fleet: [command u16][result u8]
                 out.write(buffer.getData());
                 break;

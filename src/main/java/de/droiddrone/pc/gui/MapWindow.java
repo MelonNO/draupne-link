@@ -58,6 +58,16 @@ final class MapWindow extends JFrame {
     private final MapView map;
     private final TileCache cache;
     private final Elevation elevation;
+    /** Fleet PRD area B: the ROUTE window, made at its first use. */
+    private RouteWindow routeWindow;
+
+    RouteWindow routes() {
+        if (routeWindow == null) {
+            MainWindow main = getOwner() instanceof MainWindow m ? m : null;
+            routeWindow = new RouteWindow(this, map, elevation, () -> main == null ? null : main.flownLink(), () -> track);
+        }
+        return routeWindow;
+    }
     private final MapGraphics graphics;
     private final Pins pins;
     /** MAP TOOLS (1.0.35): the slide-out beside the map, and the elevation profile card under it. */
@@ -167,6 +177,11 @@ final class MapWindow extends JFrame {
         tools.download.setToolTipText("Save the map offline: this view or a box (Alt + drag)");
         tools.download.addActionListener(e -> downloadArea(map.visibleArea()));
         tools.ruler.addActionListener(e -> map.setTool(MapView.Tool.RULER));
+        // fleet PRD RT-1: the ROUTE window opens, the map draws the route's points
+        tools.route.addActionListener(e -> {
+            routes().open();
+            map.setTool(MapView.Tool.ROUTE);
+        });
         tools.line.addActionListener(e -> map.setTool(MapView.Tool.LINE));
         tools.rectangle.addActionListener(e -> map.setTool(MapView.Tool.AREA));
         tools.arrow.addActionListener(e -> map.setTool(MapView.Tool.ARROW));

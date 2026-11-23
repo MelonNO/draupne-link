@@ -69,6 +69,8 @@ final class MapToolsPanel extends JPanel {
     final JButton keep = Theme.secondaryButton("Keep");
     final JButton clearMeasure = Theme.secondaryButton("Clear");
     final JButton horizon = Theme.secondaryButton("Radio horizon");
+    /** Fleet PRD RT-1: a terrain-following route for an ArduPilot drone (the ROUTE window). */
+    final JButton route = Theme.secondaryButton("Route");
     final JButton gcsSearch = Theme.secondaryButton("GCS search");
     /** 4G COVERAGE (1.0.44): on / off, and its fields (the network, the drone's height, the OpenCelliD key, the country file). */
     final JButton coverage = Theme.secondaryButton("Coverage");
@@ -297,6 +299,11 @@ final class MapToolsPanel extends JPanel {
     }
 
     private void buildTools(JPanel body) {
+        section(body, "ROUTE");
+        route.setToolTipText("Click points; double-click/Enter ends. Drag a point to move it, right-click for the rest. "
+                + "Flies the set height above the ground");
+        row(body, route);
+        gap(body);
         section(body, "MEASURE");
         ruler.setToolTipText("Click points; double-click/Enter ends, Esc cancels, right-click undoes. Click the first point to close (shows area)");
         row(body, ruler);

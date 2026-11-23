@@ -5441,6 +5441,14 @@ public class MainWindow extends JFrame {
         if (fleets != null) fleets.refresh();
     }
 
+    /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */
+    de.droiddrone.pc.ControlLink flownLink() {
+        Connection c = connection;
+        if (c == null) return null;
+        de.droiddrone.pc.ControlLink l = c.getLink();
+        return l.isSpectator() || l.isWatchOnly() ? null : l;
+    }
+
     /** The fleet's way back into the window. */
     private final class FleetHost implements FleetController.Host {
         @Override

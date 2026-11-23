@@ -2094,6 +2094,27 @@ public class ControlLink {
         }
     }
 
+    /**
+     * Fleet RT-8: a whole route for the phone to upload to its ArduPilot FC (MissionBlock), this PC's own pilot session
+     * only. One datagram (IP fragments it over 4G); the caller sends it again until the phone's status names the block.
+     */
+    public boolean sendMissionBlock(byte[] packet) {
+        return sendTunnelLike(packet);
+    }
+
+    private boolean sendTunnelLike(byte[] packet) {
+        if (packet == null || spectator != null || watchOnly || !isConnected()) return false;
+        if (telemetry.getPhonePcBuild() < FC_COMMAND_MIN_PC_BUILD) return false;
+        FcInfo fc = fcInfo;
+        if (fc == null || fc.getFcVariant() != FcInfo.FC_VARIANT_ARDUPILOT) return false;
+        try {
+            socket.send(new DatagramPacket(packet, packet.length, remoteIp, remotePort));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     /** Fleet AP-6: the first phone app that takes FcCommand (2.3.0-pc.58-fleet). */
     public static final int FC_COMMAND_MIN_PC_BUILD = 58;
 

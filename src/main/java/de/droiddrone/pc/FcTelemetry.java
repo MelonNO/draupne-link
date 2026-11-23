@@ -428,6 +428,14 @@ public class FcTelemetry {
         boolean inav = fc != null && fc.getFcVariant() == FcInfo.FC_VARIANT_INAV;
         switch (code) {
             case FcCommon.DD_MAVLINK_MODE -> mavlinkMode(b.readInt(), b.readBoolean(), fc);
+            case de.droiddrone.common.MissionBlock.STATUS_RECORD -> {
+                int block = (b.readUnsignedByteAsInt() << 8) | b.readUnsignedByteAsInt();
+                int state = b.readUnsignedByteAsInt();
+                int percent = b.readUnsignedByteAsInt();
+                byte[] reason = new byte[b.readUnsignedByteAsInt()];
+                b.read(reason, 0, reason.length);
+                routeUpload = new RouteUpload(block, state, percent, new String(reason, StandardCharsets.US_ASCII), MonoClock.ms());
+            }
             case de.droiddrone.common.FcCommand.ACK_RECORD -> {
                 int command = (b.readUnsignedByteAsInt() << 8) | b.readUnsignedByteAsInt();
                 lastCommandAck = new CommandAck(command, b.readUnsignedByteAsInt(), MonoClock.ms());
@@ -810,6 +818,26 @@ public class FcTelemetry {
     }
 
     private volatile CommandAck lastCommandAck;
+
+    /**
+     * Fleet RT-8: a route's upload on the phone (MissionBlock): its block, MissionUpload's state (1 uploading, 2 reading
+     * back, 3 done, 4 failed), percent, and why it failed.
+     */
+    public record RouteUpload(int block, int state, int percent, String reason, long receivedAt) {
+        public boolean done() {
+            return state == de.droiddrone.common.MissionUpload.DONE;
+        }
+
+        public boolean failed() {
+            return state == de.droiddrone.common.MissionUpload.FAILED;
+        }
+    }
+
+    private volatile RouteUpload routeUpload;
+
+    public RouteUpload getRouteUpload() {
+        return routeUpload;
+    }
 
     public CommandAck getLastCommandAck() {
         return lastCommandAck;
