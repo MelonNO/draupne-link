@@ -153,13 +153,13 @@ public final class ArduDfuFlow {
 
     /** Waits for exactly one DFU device that wasn't there before. */
     static String newDevice(DfuDevice.Bus bus, List<String> before, StmDfu.Sleeper sleeper, long waitMs) throws IOException, InterruptedException {
-        long end = System.currentTimeMillis() + waitMs;
+        long end = de.droiddrone.pc.MonoClock.ms() + waitMs;
         while (true) {
             List<String> now = new ArrayList<>(bus.present());
             now.removeAll(before);
             if (now.size() == 1) return now.get(0);
             if (now.size() > 1) throw new IOException("several boards came up in DFU: unplug the others, nothing written");
-            if (System.currentTimeMillis() > end) {
+            if (de.droiddrone.pc.MonoClock.ms() > end) {
                 throw new IOException("the board didn't come up in DFU: its USB driver (Betaflight's driver tool or Zadig), or hold its boot button");
             }
             sleeper.sleep(250);

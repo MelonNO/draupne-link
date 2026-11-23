@@ -72,8 +72,8 @@ public final class LaunchWire {
         at = putShort(b, at, o.callId);
         at = putShort(b, at, dm(o.approachHeightM));
         at = putShort(b, at, dm(o.floorM));
-        at = putInt(b, at, (int) Math.round(o.columnLat * 1e7));
-        at = putInt(b, at, (int) Math.round(o.columnLon * 1e7));
+        at = putInt(b, at, deg7(o.columnLat, 90));
+        at = putInt(b, at, deg7(o.columnLon, 180));
         b[at++] = (byte) o.leadSysId;
         b[at++] = (byte) o.joinLayer;
         b[at++] = (byte) o.joinCell;
@@ -99,9 +99,9 @@ public final class LaunchWire {
         at += 2;
         o.floorM = getShort(b, at) / 10.0;
         at += 2;
-        o.columnLat = getInt(b, at) / 1e7;
+        o.columnLat = fromDeg7(getInt(b, at));
         at += 4;
-        o.columnLon = getInt(b, at) / 1e7;
+        o.columnLon = fromDeg7(getInt(b, at));
         at += 4;
         o.leadSysId = b[at++] & 0xff;
         o.joinLayer = b[at++] & 0xff;
@@ -110,7 +110,7 @@ public final class LaunchWire {
         if (o.kind == KIND_LAUNCH) {
             if (o.markId == 0) return null;
             if (o.floorM <= 0 || o.approachHeightM < o.floorM) return null; // never a climb that ends under the floor
-            if (Math.abs(o.columnLat) > 90 || Math.abs(o.columnLon) > 180) return null;
+            if (Math.abs(o.columnLat) > 90 || Math.abs(o.columnLon) > 180) return null; // NaN (not known) passes: the phone doesn't fly by it
             if (o.minBatteryPercent > 100) return null;
         }
         return o;
@@ -158,6 +158,18 @@ public final class LaunchWire {
         s.armed = (flags & 8) != 0;
         return s;
     }
+
+    /** Degrees * 1e7; NaN or off the globe as {@link #NO_PLACE} (the int cast wrapped lon 400 round to -29.5, a real place). */
+    private static int deg7(double deg, double max) {
+        return Math.abs(deg) <= max ? (int) Math.round(deg * 1e7) : NO_PLACE;
+    }
+
+    private static double fromDeg7(int v) {
+        return v == NO_PLACE ? Double.NaN : v / 1e7;
+    }
+
+    /** A column place not known. */
+    static final int NO_PLACE = Integer.MIN_VALUE;
 
     private static int dm(double m) {
         return (int) Math.max(0, Math.min(65535, Math.round(m * 10)));

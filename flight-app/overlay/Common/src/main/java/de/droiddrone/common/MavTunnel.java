@@ -20,7 +20,8 @@ package de.droiddrone.common;
 /**
  * DRAUPNE Flight (fleet PRD RT-8, AC-10, AC-25, AC-41, FD-8, AP-11): the PC's way to an ArduPilot flight controller's
  * own protocols over the link - routes (the mission protocol), parameters (RTL_ALT, rally points), guided targets and
- * the other drones as traffic - as whole MAVLink frames in a numbered (resent) packet [0x32][frames]. Only what is
+ * the other drones as traffic - as whole MAVLink frames in an unnumbered packet [0x32][frames] (the mission and parameter protocols ask again
+ * themselves). Only what is
  * listed here passes, each way:
  * <ul>
  *   <li>PC to FC: parameters, missions, a guided position target, ADS-B traffic, and COMMAND_LONG / COMMAND_INT with
@@ -92,6 +93,15 @@ public final class MavTunnel {
         }
     }
 
+    /**
+     * What the phone writes to the FC: {@link #toFc}, and a log request (AP-10) only while the FC is known DISARMED - its
+     * fresh heartbeat says so. Not known (no heartbeat for 3 s) counts as armed: a log read slows an FC in the air.
+     */
+    public static boolean toFc(byte[] f, int off, int len, boolean fcKnownDisarmed) {
+        if (!toFc(f, off, len)) return false;
+        return fcKnownDisarmed || !isLogRequest(msgId(f, off, len));
+    }
+
     /** AP-10: a log request - the phone writes it to the FC only while it is disarmed (a log read slows the FC). */
     public static boolean isLogRequest(int msgId) {
         return msgId == LOG_REQUEST_LIST || msgId == LOG_REQUEST_DATA || msgId == LOG_REQUEST_END;
@@ -127,6 +137,8 @@ public final class MavTunnel {
 
     /** Splits a payload into whole MAVLink 1 / 2 frames (lengths by their headers); a broken tail is dropped. */
     public static int split(byte[] d, int off, int len, FrameSink sink) {
+        if (d == null || off < 0 || off > d.length) return 0;
+        len = Math.min(len, d.length - off); // a length that claims more than the array holds
         int i = off, end = off + len, n = 0;
         while (i < end) {
             int stx = d[i] & 0xff;
@@ -150,6 +162,8 @@ public final class MavTunnel {
 
     /** A frame's message id, -1 if it isn't a whole frame. */
     public static int msgId(byte[] f, int off, int len) {
+        if (f == null || off < 0 || off >= f.length) return -1;
+        len = Math.min(len, f.length - off); // a length that claims more than the array holds
         if (len < 8) return -1;
         int stx = f[off] & 0xff;
         if (stx == 0xFE) return f[off + 5] & 0xff;
@@ -157,12 +171,21 @@ public final class MavTunnel {
         return -1;
     }
 
-    /** COMMAND_LONG / COMMAND_INT's command (bytes 28-29 of the payload, little-endian), -1 if cut short. */
+    /**
+     * COMMAND_LONG / COMMAND_INT's command (bytes 28-29 of the payload, little-endian), -1 if cut short. MAVLink 2 leaves
+     * a payload's trailing zero bytes out: a broadcast DO_SET_MODE (targets 0, command 176 < 256) comes as 29 bytes, its
+     * command's high byte not sent - a byte not sent reads as 0, as MAVLink says (it was refused as cut short).
+     */
     static int command(byte[] f, int off, int len) {
-        int header = (f[off] & 0xff) == 0xFE ? 6 : 10;
+        if (f == null || off < 0 || off + 1 >= f.length) return -1;
+        len = Math.min(len, f.length - off);
+        boolean v2 = (f[off] & 0xff) == 0xFD;
+        int header = v2 ? 10 : 6;
         int payload = f[off + 1] & 0xff;
-        if (payload < 30 || len < header + 30) return -1;
+        if (len < header + payload) return -1; // not the whole payload
+        if (!v2 && payload < 30) return -1; // MAVLink 1 sends every byte
         int at = off + header + 28;
-        return (f[at] & 0xff) | (f[at + 1] & 0xff) << 8;
+        int lo = payload > 28 ? f[at] & 0xff : 0, hi = payload > 29 ? f[at + 1] & 0xff : 0;
+        return lo | hi << 8;
     }
 }

@@ -113,8 +113,8 @@ public final class ArduFirmwareFlow {
      * after the restart (others present before, another drone's board among them, are left alone).
      */
     public static SerialWire findBootloader(long timeoutMs, String ownPort, java.util.Set<String> before) throws IOException, InterruptedException {
-        long end = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < end) {
+        long end = de.droiddrone.pc.MonoClock.ms() + timeoutMs;
+        while (de.droiddrone.pc.MonoClock.ms() < end) {
             for (BetaflightUsb.Port p : BetaflightUsb.findFlightControllers()) {
                 if (!p.systemName().equals(ownPort) && before.contains(p.systemName())) continue;
                 SerialWire w;

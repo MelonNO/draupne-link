@@ -78,6 +78,12 @@ class RouteWindowTest {
         public RouteUpload getRouteUpload() {
             return upload;
         }
+
+        @Override
+        public RouteUpload getRouteUpload(int block) { // RouteSender asks for its own block's
+            RouteUpload u = upload;
+            return u != null && u.block() == block ? u : null;
+        }
     }
 
     /** This PC's link to an ArduPilot drone; its phone answers a route block as the real one does (never started: no socket). */

@@ -166,6 +166,13 @@ final class LaunchRunner {
      * A launch is under way - from the call until the drone is in the group (or the launch has ended): the lead / solo
      * link-loss rule stands aside meanwhile (a reserve has no pilot session; an old session's silence must not brake it).
      */
+    /** The launch's state now (LaunchSequence's). */
+    int state() {
+        synchronized (seqLock) {
+            return seq.state();
+        }
+    }
+
     boolean underWay() {
         synchronized (seqLock) {
             int s = seq.state();
@@ -176,10 +183,12 @@ final class LaunchRunner {
     /** The phone's 10 Hz ArduPilot thread. */
     void tick(Udp udp, Mavlink m, long now) {
         int state;
-        synchronized (seqLock) {
+        boolean finished;
+        synchronized (seqLock) { // both under the lock: an order on the receive thread changes them together
             state = seq.state();
+            finished = seq.finished();
         }
-        boolean running = state != LaunchSequence.IDLE && !seq.finished();
+        boolean running = state != LaunchSequence.IDLE && !finished;
         sensors(udp.context(), running);
         if (!running) return;
         reading.rollDeg = m.rollDeg();
@@ -193,6 +202,8 @@ final class LaunchRunner {
         reading.imuHealthy = m.imuHealthy();
         reading.compassHealthy = m.compassHealthy();
         reading.fcHealthy = m.isArduPilot() && m.preArmOk(); // ArduPilot's own pre-arm checks too
+        long age = m.fcDataAgeMs(now); // an FC rebooting mid-launch sends nothing: its last words are no reading
+        reading.fcAgeMs = age > Integer.MAX_VALUE ? -1 : age;
         ClimbWatchdog.Sample s = null;
         if (state == LaunchSequence.CLIMBING) {
             s = sample;
@@ -210,7 +221,7 @@ final class LaunchRunner {
         List<LaunchIntent> todo;
         synchronized (seqLock) {
             seq.fcReady(m.isArduPilot());
-            todo = seq.tick(now, reading, m.armedNow(now), s);
+            todo = seq.tick(now, reading, m.armedNow(now), m.armedKnown(now), s); // a heartbeat gap is no disarm in the climb
         }
         act(udp, m, todo);
     }
