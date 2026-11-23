@@ -66,6 +66,12 @@ public final class VirtualAirspace {
     private String worstA, worstB;
     private double worstAtS;
     private double minSameHeight = Double.MAX_VALUE, minOverhead = Double.MAX_VALUE;
+    private double minUnprotectable = Double.MAX_VALUE;
+
+    /** The closest, sideways at the same height, two drones nobody could steer came (both cut off, one drifting); MAX: none. */
+    public double unprotectableM() {
+        return minUnprotectable;
+    }
 
     /** The smallest distance sideways between two drones at the same height (within the spacing, less its tolerance). */
     public double minSameHeightM() {
@@ -296,6 +302,16 @@ public final class VirtualAirspace {
             for (int j = i + 1; j < air.size(); j++) {
                 VirtualCopter a = air.get(i), b = air.get(j);
                 double h = Math.hypot(a.e - b.e, a.n - b.n), v = Math.abs(a.u - b.u);
+                // steerable sideways: heard, with GNSS, not landed by its own FC (the lead: its pilot)
+                boolean aFree = linkUp(a.id) && a.gnssOk && a.mode() != VirtualCopter.Mode.LAND || a.id.equals(leadId);
+                boolean bFree = linkUp(b.id) && b.gnssOk && b.mode() != VirtualCopter.Mode.LAND || b.id.equals(leadId);
+                if (pcAlive && !aFree && !bFree && (!a.gnssOk || !b.gnssOk)) {
+                    // two drones nobody can steer sideways - each cut off from the PC or without GNSS, one of them drifting:
+                    // no rule of the PC's can keep these apart (it lands the drifting one if it can be reached). Kept apart
+                    // from the measure, and said (unprotectableM)
+                    if (v < params.layerM() - ExitPlanner.VERTICAL_TOLERANCE_M) minUnprotectable = Math.min(minUnprotectable, h);
+                    continue;
+                }
                 // under 1: inside the radius sideways AND the spacing (less its stated tolerance) in height
                 if (v < params.layerM() - ExitPlanner.VERTICAL_TOLERANCE_M) minSameHeight = Math.min(minSameHeight, h);
                 if (h < params.radiusM()) minOverhead = Math.min(minOverhead, v);

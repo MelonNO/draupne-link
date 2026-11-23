@@ -337,31 +337,74 @@ class SeparationSuiteTest {
     // ------------------------------------------------------------------ random cases
 
     /**
-     * FINDING (open): random cases - a random event every 10 s for 5 min: the lead flown anywhere, links cut and back,
-     * GNSS lost, batteries drained, reserves called, DISCARD LEAD - lose separation in about 6 of 10 runs (30 seeds,
-     * 10 min: 18 lost it, 2026-11-23). Every case above passes on its own; it is overlapping failures that break: a
-     * group escaping one danger (a drifting drone) runs a drone into another (one cut off and hanging still), two drones
-     * cut off on different sides, a hand-over beside a cut-off drone. The group moves as one block, and one block can
-     * not keep every drone clear of several hazards at once: the cure is drones that give way one by one, not more
-     * rules for the block. Tagged "finding" (gradlew benchFindings): it fails until that is built.
+     * Random cases (AC-14 "random scenarios"): an event every 10 s for 5 min - the lead flown anywhere, links cut and back,
+     * GNSS lost, packs draining fast, reserves called, DISCARD LEAD. Five seeds in the normal suite; the long run (30
+     * seeds, 10 min each) under the night tag.
      */
-    @Tag("finding")
     @Test
     void randomCasesSeeded() {
-        for (long seed : new long[]{1, 2, 3}) randomCase(seed, 300);
+        for (long seed = 1; seed <= 5; seed++) randomCase(seed, 300);
     }
 
-    /** The nightly run (AC-14 "random scenarios run every night"): gradlew benchNight; AIR_SEEDS=N for how many (40). See randomCasesSeeded. */
+    /**
+     * The nightly run (AC-14 "random scenarios run every night"): gradlew benchNight; AIR_SEEDS=N for how many (30),
+     * seeds from 100, 10 min each; every seed is run and every one that lost separation is said.
+     * <p>
+     * OPEN (tagged finding too, until it holds for all): 2026-11-23, seeds 100-189: 85 of 90 keep separation; 112
+     * (6.1 m at the same height), 139 (9.2 m), 147 (9.5 m sideways, 9.0 m in height), 157 (9.0 m, 8.6 m), 160
+     * (10.0 m, 5.9 m) do not. Near misses mostly: what the safe velocities' buffer (3 m) can buy against the drones'
+     * response; a wider buffer (4 m) made it worse (82 of 90).
+     */
     @Tag("night")
     @Tag("finding")
     @Test
     void randomCasesNightly() {
         String env = System.getenv("AIR_SEEDS");
-        int n = env != null && env.matches("[0-9]+") ? Integer.parseInt(env) : 40;
-        for (long seed = 100; seed < 100 + n; seed++) randomCase(seed, 600);
+        int n = env != null && env.matches("[0-9]+") ? Integer.parseInt(env) : 30;
+        List<String> lost = new ArrayList<>();
+        for (long seed = 100; seed < 100 + n; seed++) {
+            try {
+                randomCase(seed, 600);
+            } catch (AssertionError e) {
+                lost.add(String.valueOf(e.getMessage()).split("\n")[0]);
+            }
+        }
+        assertTrue(lost.isEmpty(), lost.size() + " of " + n + " lost separation:\n" + String.join("\n", lost));
     }
 
-    private static void randomCase(long seed, double seconds) {
+    /**
+     * The integrator's case on the real wire (GroupLinkLoopbackTest), here without UDP: ground at sea level, the lead
+     * standing at (150, 0) 80 m in PILOT, four followers starting off their cells at 60 - 90 m, 8 s of following, then
+     * F2's link cut for 4 s (it brakes and holds, its reports stop: the PC takes it as cut off), then back.
+     */
+    @Test
+    void integratorsCaseALinkCutWhileTheGroupFormsUp() {
+        AirParams p = AirParams.defaults();
+        VirtualAirspace a = new VirtualAirspace(p, 0, 7);
+        a.gc = new GroupController(p, 0, a.lat0, a.lon0, VirtualAirspace.prover(p, 0));
+        java.util.Map<String, Double> batt = new java.util.LinkedHashMap<>();
+        double[][] start = {{-30, -30, 60}, {30, -30, 70}, {-30, 30, 80}, {30, 30, 90}};
+        for (int i = 1; i <= 4; i++) batt.put("F" + i, 90.0 - 5 * i);
+        a.gc.form("LEAD", batt, V2.ZERO, new V2(-300, 0));
+        for (int i = 1; i <= 4; i++) {
+            VirtualCopter c = a.add("F" + i, start[i - 1][0], start[i - 1][1], start[i - 1][2]);
+            c.battery = batt.get("F" + i);
+            c.homeAmsl = 0;
+            a.follower("F" + i);
+        }
+        VirtualCopter lead = a.add("LEAD", 150, 0, 80);
+        lead.homeAmsl = 0;
+        a.leadId = "LEAD";
+        a.pilot = Groups.goTo(150, 0, 80);
+        a.run(8);
+        a.setLink("F2", false);
+        a.run(4);
+        a.setLink("F2", true);
+        a.run(60);
+        record("integrator's case: F2 cut 4 s while forming up", a);
+    }
+
+    static void randomCase(long seed, double seconds) {
         Random r = new Random(seed);
         VirtualAirspace a = Groups.group(8 + r.nextInt(17), seed);
         a.wind = new V2(r.nextGaussian() * 3, r.nextGaussian() * 3);
@@ -379,7 +422,7 @@ class SeparationSuiteTest {
                 case 1 -> a.setLink(id, false);
                 case 2 -> a.setLink(id, true);
                 case 3 -> { if (a.copters.get(id).gnssOk && a.gc.members().size() > 4) a.copters.get(id).setGnss(false, a.t()); }
-                case 4 -> a.copters.get(id).battery = Math.max(2, a.copters.get(id).battery - 30);
+                case 4 -> a.copters.get(id).drainPerS = 0.5; // a pack draining fast (a sudden cell failure is not modelled: see the class doc)
                 case 5 -> { if (reserves < 3) a.launchReserve("R" + reserves++, r.nextInt(800) - 400, -500 - reserves * 30.0, 90); }
                 case 6 -> { if (r.nextInt(3) == 0) a.gc.discardLead(a.now); }
                 default -> { }

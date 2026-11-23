@@ -34,6 +34,12 @@ public final class FollowerBrain {
     public long holdMs = 120_000;
     /** Battery at or under this: land (the PRD's one battery action, AP-14 / FD-5). */
     public double landPercent = 3;
+    /**
+     * Cut off and above the bottom row, battery at or under this: out along its lane to land at its end (AC-37). Higher
+     * than {@link #landPercent}: ArduPilot's own failsafe lands the drone where it is at 3 % - onto whatever is under
+     * it - so the phone must have it out of the group before then.
+     */
+    public double exitPercent = 6;
     /** Within this of the lane's end: there. */
     public double arriveM = 2;
 
@@ -91,6 +97,7 @@ public final class FollowerBrain {
      */
     public FleetIntent tick(long now, long lastPcAt, double lat, double lon, double batteryPct, boolean gnssOk) {
         boolean low = !Double.isNaN(batteryPct) && batteryPct <= landPercent;
+        boolean leaveLow = !Double.isNaN(batteryPct) && batteryPct <= exitPercent;
         if (phase == LANDING) return FleetIntent.DOWN;
         if (order != null && order.land() && now - lastPcAt < silentMs) { // the PC lands it (AC-20, AC-24), GNSS or not
             phase = LANDING;
@@ -124,13 +131,16 @@ public final class FollowerBrain {
                     silentSince = -1;
                     return order != null ? FollowerRule.target(order, now - orderAt) : FleetIntent.HOLD;
                 }
-                if (low) {
-                    if (plan == null || plan.bottomRow() || order != null && order.bottomRow()) {
+                if (leaveLow) {
+                    boolean bottom = plan == null || plan.bottomRow() || order != null && order.bottomRow();
+                    if (!bottom) { // out of the group before its FC's own 3 % landing
+                        landAtLaneEnd = true;
+                        return startExit(lat, lon);
+                    }
+                    if (low) { // the bottom row (or no plan to fly): straight down, nothing is under it
                         phase = LANDING;
                         return FleetIntent.DOWN;
                     }
-                    landAtLaneEnd = true;
-                    return startExit(lat, lon);
                 }
                 if (plan != null && now - silentSince >= holdMs + Math.round(plan.startDelayS * 1000)) {
                     landAtLaneEnd = false;

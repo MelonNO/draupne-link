@@ -50,6 +50,11 @@ import java.util.Set;
  * <li>Battery order (AC-30): at every enter or exit, or every 5 min; moves through the transit areas at low
  *   priority. 3 %: a bottom-row drone lands straight down; one above leaves for a shaft in time and lands down it
  *   (AC-24, AC-33, K10).</li>
+ * <li>One by one (AC-8, "followers always give way"): every follower the PC flies gets, each tick, the velocity closest
+ *   to the one that takes it to its place that keeps it clear of every drone near its height ({@link Orca}): half and
+ *   half between two it flies, wholly against the lead, a drone cut off (where its plan has it; still, where its brake
+ *   may have stopped it, and in wind its drift corridor), one without GNSS, one landing or near 3 % ({@link #nearCritical}),
+ *   other groups'. Only sideways. Its order carries its place now and that velocity.</li>
  * <li>Every move is granted stage by stage ({@link TransitScheduler}); a mover predicted to lose separation with
  *   anyone ({@link ConflictPredictor}) holds where it is. While any move goes on the group is no faster than
  *   {@link AirParams#moveCapMs} (AC-39).</li>
@@ -63,6 +68,15 @@ public final class GroupController {
     /** A follower above the bottom row at or under this goes to a shaft to land (3 % plus the way there, AC-24). */
     public static final double LOW_ABOVE_BOTTOM_PCT = 7;
     public static final double LAND_PCT = 3;
+    /** How long out to a shaft and down it may take: a drone above the bottom row leaves its cell this long before 3 %. */
+    public static final double SHAFT_LANDING_S = 90;
+    /** Its battery reaches 3 % within {@link #LANDING_WARN_S} at the rate it drains: its FC may land it where it is soon. */
+    private boolean nearCritical(Member m) {
+        return m.battery < 50 && (m.battery - LAND_PCT) / Math.max(m.drainPerS, 1e-6) < LANDING_WARN_S;
+    }
+
+    /** Within this of 3 % a drone is taken as about to come down where it is: the drones under it move out first. */
+    public static final double LANDING_WARN_S = 40;
     /** Within these of a point of a move: there. */
     public static final double REACHED_H_M = 2.0, REACHED_V_M = 1.5;
     /** Exit plans proven at most this often (a burst of changes is one proof). */
@@ -99,12 +113,19 @@ public final class GroupController {
         int dir;
         long lostAt = -1, gnssAt = -1, goneBy = -1;
         int lostColumn = -1;
+        /** How fast its pack drains, % a second (smoothed); and when its battery was last read. */
+        double drainPerS;
+        long batteryAt = -1;
         HollowCube.Face joinFace;
         /** The last exit plan it was sent: what it flies if it is cut off. */
         ExitPlan plan;
         boolean shifted;
         double approachAlt = Double.NaN;
         V2 lastPos = V2.ZERO, lastVel = V2.ZERO, lostCentre;
+        /** Where a cut-off drone was last heard (lastPos is then where its brake will have stopped it, at the most). */
+        V2 heardPos;
+        /** The offset from the centre its last order carried (its phone's exit lane runs that way); kept at its loss. */
+        V2 sentOff, lostOff;
         double lastAlt, battery = 100, homeAmsl, errM;
         V2 rally;
         State before;
@@ -333,6 +354,11 @@ public final class GroupController {
         boolean moving = members.values().stream().anyMatch(m -> m.state == State.MOVING || m.state == State.LEAVING
                 || m.state == State.APPROACH && m.stage >= 0 || m.state == State.LANDING);
         if (moving && !landMode) want = want.capped(p.moveCapMs());
+        // a drone in the group that may stop or come down any moment (near 3 %, landing, not flying as told, cut off): the
+        // group no faster than during a move, so the others have time to get round it
+        boolean frail = members.values().stream().anyMatch(m -> m.state == State.LOST || m.state == State.LANDING
+                || m.state != State.GONE && (nearCritical(m) || !followingNow.getOrDefault(m.id, true)));
+        if (frail) want = want.capped(p.moveCapMs());
         if (!landMode && behind(reports) && !traffic) want = want.times(0.5);
         V2 dv = want.minus(vel).capped((emergency ? p.brakeMs2() : p.accelMs2()) * dt);
         vel = vel.plus(dv);
@@ -353,7 +379,8 @@ public final class GroupController {
         if (!landMode && !leaving && (changed || lastOrderCheck < 0 || now - lastOrderCheck >= p.orderCheckMs())) orderCheck(now);
         // orders
         leadTraffic(now, lead, reports, others, events);
-        Map<String, GroupOrder> orders = orders(now, lead, leadFresh, events);
+        forceLanding(reports, others, wind, events);
+        Map<String, GroupOrder> orders = orders(now, lead, leadFresh, events, reports, others, wind);
         // exit plans
         Map<String, ExitPlan> sent = null;
         if ((changed || lastPlansAt < 0 || now - lastPlansAt >= p.refreshMs()) && (lastProofAt < 0 || now - lastProofAt >= PROOF_MIN_GAP_MS)) {
@@ -374,6 +401,11 @@ public final class GroupController {
                 m.lastPos = r.pos();
                 m.lastVel = r.vel();
                 m.lastAlt = r.altAmsl();
+                if (m.batteryAt > 0 && now > m.batteryAt) { // how fast its pack drains, smoothed (AC-24's "in time")
+                    double rate = Math.max(0, (m.battery - r.battery()) / ((now - m.batteryAt) / 1000.0));
+                    m.drainPerS = 0.8 * m.drainPerS + 0.2 * rate;
+                }
+                m.batteryAt = now;
                 m.battery = r.battery();
                 m.homeAmsl = r.homeAmsl();
                 m.errM = r.errM();
@@ -428,8 +460,11 @@ public final class GroupController {
                         m.before = m.state == State.LANDING ? State.LANDING : m.state;
                         m.state = State.LOST;
                         // its phone brakes it into LOITER: it comes to rest a braking distance on from where it was last heard
+                        // (its phone flies on for its silence threshold before it brakes)
+                        m.heardPos = m.lastPos;
+                        m.lostOff = m.sentOff;
                         double sp = m.lastVel.length();
-                        m.lastPos = m.lastPos.plus(m.lastVel.unit().times(sp * sp / (2 * p.brakeMs2())));
+                        m.lastPos = m.lastPos.plus(m.lastVel.times(SILENT_MS / 1000.0)).plus(m.lastVel.unit().times(sp * sp / (2 * p.brakeMs2())));
                         m.lastVel = V2.ZERO;
                         m.lostAt = now - (r == null ? 0 : Math.min(now - r.heardAt(), SILENT_MS));
                         m.lostCentre = centre;
@@ -450,7 +485,8 @@ public final class GroupController {
                         if (m.place.layer() == 0 && m.battery <= LAND_PCT) {
                             startLanding(m, true);
                             events.add("LAND 3% " + m.id);
-                        } else if (m.place.layer() > 0 && m.battery <= LOW_ABOVE_BOTTOM_PCT) {
+                        } else if (m.place.layer() > 0 && (m.battery <= LOW_ABOVE_BOTTOM_PCT
+                                || m.battery - m.drainPerS * SHAFT_LANDING_S <= LAND_PCT + 1)) { // AC-24: in time, at its drain rate
                             startLanding(m, false);
                             events.add("LAND 3% " + m.id);
                         }
@@ -613,7 +649,7 @@ public final class GroupController {
             V2 rel = new V2(k[0], k[1]).minus(centre);
             V2 to = rel.unit();
             double closing = Math.max(0, vel.dot(to));
-            double margin = 15 + closing * closing / (2 * p.brakeMs2()) + closing * 0.5;
+            double margin = 20 + closing * closing / (2 * p.brakeMs2()) + closing * 0.5;
             double gap = cube.outsideEdge(rel) - k[2];
             if (gap < margin) {
                 double comp = want.dot(to);
@@ -630,9 +666,19 @@ public final class GroupController {
      * The group moves off and leaves a cut-off drone where it hangs: its cell is free, the airspace round it and its lane
      * is held for it until it has gone, and if its link comes back it joins again like a reserve (AC-37, AC-38).
      */
+    /** When a cut-off drone's plan has it down at its rally point (and a minute more); MAX without a plan. */
+    private long landedBy(Member m) {
+        if (m.plan == null) return Long.MAX_VALUE;
+        for (long t = m.lostAt; t < m.lostAt + 3_600_000; t += 5000) {
+            double[] at = predicted(m.id, t);
+            if (at != null && at[2] <= m.homeAmsl + 0.5 && t > m.lostAt + p.holdMs()) return t + 60_000;
+        }
+        return Long.MAX_VALUE;
+    }
+
     private void leaveBehind(Member lost, List<String> events) {
         lost.shifted = true;
-        lost.goneBy = lost.lostAt + p.holdMs() + 60_000 + 60_000; // hold, delay allowance, lane and climb
+        lost.goneBy = landedBy(lost); // by its plan; without one it holds where it is and is never taken as gone
         if (lost.place != null) scheduler.release(lost.id, Set.of(HollowCube.cellRes(lost.place.layer(), lost.place.cell())));
         blocked.put(lost.id, lost.lastPos);
         events.add("MOVE AWAY FROM " + lost.id);
@@ -702,6 +748,10 @@ public final class GroupController {
         double worst = Double.MAX_VALUE;
         List<Member> hazards = new ArrayList<>(drifting);
         for (Member m : members.values()) if (m.state == State.LOST && !hazards.contains(m)) hazards.add(m);
+        for (Member m : members.values()) { // and one its own FC is landing where it is: it will not move aside
+            if (!hazards.contains(m) && m.state != State.GONE && m.state != State.LOST && (!followingNow.getOrDefault(m.id, true)
+                    || m.state == State.LANDING || nearCritical(m))) hazards.add(m); // or about to: it may stop and come down any moment
+        }
         for (Member d : hazards) {
             boolean drifts = drifting.contains(d);
             List<V2> mates = new ArrayList<>();
@@ -760,6 +810,11 @@ public final class GroupController {
                 case MOVING, APPROACH -> TransitScheduler.PRIO_TRANSIT;
                 default -> TransitScheduler.PRIO_LEAD;
             };
+            if (m.state == State.LOST) { // not heard: where its brake stopped it, still (the PC knows no more)
+                V2 v = vel.times(-1);
+                tracks.add(new ConflictPredictor.Track(m.id, m.lastPos.e() - centre.e(), m.lastPos.n() - centre.n(), m.lastAlt, v.e(), v.n(), 0, prio));
+                continue;
+            }
             // in-cell drones move with the group: predicted relative to it, they stand still
             V2 v = r.vel().minus(vel);
             tracks.add(new ConflictPredictor.Track(m.id, r.pos().e() - centre.e(), r.pos().n() - centre.n(), r.altAmsl(), v.e(), v.n(), r.vu(), prio));
@@ -931,9 +986,18 @@ public final class GroupController {
         // first up in its own column to its approach layer, the airspace round it held (a rejoin from inside the edge)
         double climbTo = m.approachAlt - groundAmsl;
         if (m.lastAlt < m.approachAlt - 1) {
-            Set<String> near = new HashSet<>(resourcesNear(rel));
+            // inside the group's edge (a rejoin: it hung where its cell was): first out sideways in its own layer, past
+            // the edge, and only there up - a height change never over or under anyone (AC-4)
+            V2 up = rel;
+            if (cube.outsideEdge(rel) < p.radiusM() + 3) {
+                up = (rel.length() < 0.5 ? new V2(0, 1) : rel.unit()).times(p.edgeM() * Math.sqrt(2) + 2 * p.radiusM());
+                Set<String> out = new HashSet<>(resourcesNear(rel));
+                out.add("out:" + m.id);
+                s.add(new HollowCube.Stage(out, List.of(new HollowCube.Point(up, m.lastAlt - groundAmsl)), false, false));
+            }
+            Set<String> near = new HashSet<>(resourcesNear(up));
             near.add("climb:" + m.id);
-            s.add(new HollowCube.Stage(near, List.of(new HollowCube.Point(rel, climbTo)), false, false));
+            s.add(new HollowCube.Stage(near, List.of(new HollowCube.Point(up, climbTo)), false, false));
         }
         s.addAll(cube.join(best, climbTo, m.target.layer(), m.target.cell()));
         m.stages = s;
@@ -995,6 +1059,7 @@ public final class GroupController {
 
     private void landColumns(Map<String, Report> reports) {
         landing.clear();
+        landingSoon.clear();
         // first the drones without GNSS (they drift - the sooner down the better): each once nothing is below it, so it
         // comes down onto nobody; the group is moved out of their drift lines meanwhile
         boolean drifting = false;
@@ -1016,21 +1081,25 @@ public final class GroupController {
                 if (m.state == State.GONE || m.place == null || m.place.cell() != c) continue;
                 if (bottom == null || m.place.layer() < bottom.place.layer()) bottom = m;
             }
-            if (bottom != null) {
-                landing.add(bottom.id);
+            if (bottom != null) { // once nothing is under it (a drone of another column may have stepped aside under it)
+                landingSoon.add(bottom.id);
+                if (clearBelow(bottom, reports)) landing.add(bottom.id);
                 return;
             }
         }
         // last, any caught on the lane or in a shaft when GNSS went: one at a time
         for (Member m : members.values()) {
             if (m.state != State.GONE) {
-                landing.add(m.id);
+                landingSoon.add(m.id);
+                if (clearBelow(m, reports)) landing.add(m.id);
                 return;
             }
         }
     }
 
     private final Set<String> landing = new HashSet<>();
+    /** Whose turn to land it is, landed or not yet (shown to the safe velocities as coming down, so those under it clear out). */
+    private final Set<String> landingSoon = new HashSet<>();
 
     private Integer columnOf(Member m) {
         if (m.place != null) return m.place.cell();
@@ -1104,8 +1173,13 @@ public final class GroupController {
 
     // ------------------------------------------------------------------ orders
 
-    private Map<String, GroupOrder> orders(long now, Report lead, boolean leadFresh, List<String> events) {
+    /** One follower's order as wanted, before the safe velocities. */
+    private record Want(Member m, int flags, V2 off, double alt, double cap) {}
+
+    private Map<String, GroupOrder> orders(long now, Report lead, boolean leadFresh, List<String> events, Map<String, Report> reports,
+                                           List<Other> others, V2 wind) {
         Map<String, GroupOrder> out = new LinkedHashMap<>();
+        List<Want> wants = new ArrayList<>();
         double[] c = GeoLocal.offset(lat0, lon0, centre.e(), centre.n());
         double[] l = lead == null ? new double[]{0, 0} : GeoLocal.offset(lat0, lon0, lead.pos().e(), lead.pos().n());
         boolean stopped = vel.length() < 0.05;
@@ -1152,7 +1226,8 @@ public final class GroupController {
                     if (landMode && landing.contains(m.id)) flags |= GroupOrder.FLAG_LAND;
                 }
                 case GNSS_LOST -> {
-                    if (!(landMode && landing.contains(m.id))) continue;
+                    boolean forced = forceLand.contains(m.id) && clearBelow(m, reports);
+                    if (!(landMode && landing.contains(m.id)) && !forced) continue;
                     flags |= GroupOrder.FLAG_LAND;
                     off = m.lastPos.minus(centre);
                     alt = m.lastAlt;
@@ -1165,11 +1240,154 @@ public final class GroupController {
                 // drift with the group, hold the layer: nobody else moves (AC-20)
                 flags &= ~GroupOrder.FLAG_LAND;
             }
-            out.put(m.id, new GroupOrder(flags, seq, c[0], c[1], vel.e(), vel.n(), off.e(), off.n(), alt, floorAmsl, cap,
+            wants.add(new Want(m, flags, off, alt, cap));
+        }
+        Map<String, V2> safe = safeVelocities(wants, reports, lead, leadFresh, others, wind);
+        for (Want w : wants) {
+            Member m = w.m();
+            V2 v = safe.get(m.id), off = w.off();
+            int flags = w.flags();
+            if (v != null) { // its own safe velocity: its place now, a moment ahead along it
+                off = reports.get(m.id).pos().minus(centre).plus(v.times(ORDER_LEAD_S));
+                flags = v.length() < 0.05 ? flags | GroupOrder.FLAG_STOPPED : flags & ~GroupOrder.FLAG_STOPPED;
+            } else {
+                v = vel;
+            }
+            m.sentOff = off;
+            out.put(m.id, new GroupOrder(flags, seq, c[0], c[1], v.e(), v.n(), off.e(), off.n(), w.alt(), floorAmsl, w.cap(),
                     l[0], l[1], lead == null ? 0 : lead.altAmsl(), lead == null ? 0 : lead.vel().e(), lead == null ? 0 : lead.vel().n()));
         }
         return out;
     }
+
+    /** An order's place is where the drone is plus this much of its safe velocity (0: there, the velocity the feed-forward). */
+    static final double ORDER_LEAD_S = 0;
+    /** How hard a follower is drawn to its place: its wanted velocity is the group's plus this much per metre off. */
+    static final double PLACE_GAIN = 0.6;
+    /** Kept on top of the protection radius by the safe velocities: what the drones' response (the PC's tick, the phone, their acceleration) may cost. */
+    static final double ORCA_BUFFER_M = 3;
+
+    /**
+     * Every follower the PC flies (in its cell, on a move) gets the velocity closest to the one that takes it to its
+     * place, clear of every drone near its height ({@link Orca}). Followers give way, one by one (AC-8): to each other
+     * half and half; to the lead, to drones cut off (still where their brake stopped them, and - in wind - perhaps
+     * drifting unseen), to drones without GNSS (drifting, their error circle added), to drones landing and to other
+     * groups' drones wholly. Only sideways: no height is changed here.
+     */
+    private Map<String, V2> safeVelocities(List<Want> wants, Map<String, Report> reports, Report lead, boolean leadFresh,
+                                           List<Other> others, V2 wind) {
+        List<Orca.Agent> agents = new ArrayList<>();
+        java.util.Set<String> flown = new HashSet<>();
+        for (Want w : wants) {
+            Report r = reports.get(w.m().id);
+            // landing, or its FC no longer flying as told (its own battery failsafe landing it): it goes where it goes
+            if (r == null || r.landed() || (w.flags() & GroupOrder.FLAG_LAND) != 0 || !r.following()) continue;
+            V2 target = centre.plus(w.off());
+            V2 pref = vel.plus(target.minus(r.pos()).times(PLACE_GAIN)).capped(Math.max(w.cap(), 0.5));
+            // near 3 %: its FC may land it where it is any moment (BATT_FS_CRT_ACT): shown as coming down already, so
+            // nobody stays under it
+            Member mm = w.m();
+            double toCritical = (mm.battery - LAND_PCT) / Math.max(mm.drainPerS, 1e-6);
+            double vu = toCritical < LANDING_WARN_S && mm.battery < 50 || landingSoon.contains(mm.id) ? Math.min(r.vu(), -1.5) : r.vu();
+            boolean firm = nearCritical(mm) || mm.state == State.LANDING || landingSoon.contains(mm.id);
+            agents.add(new Orca.Agent(w.m().id, r.pos(), r.altAmsl(), r.vel(), vu, pref, p.catchUpMs(), true, 0, firm));
+            flown.add(w.m().id);
+        }
+        if (lead != null && leadFresh && !lead.landed()) {
+            agents.add(new Orca.Agent("lead", lead.pos(), lead.altAmsl(), lead.vel(), lead.vu(), lead.vel(), 0, false, 0));
+        }
+        for (Member m : members.values()) {
+            if (flown.contains(m.id) || m.state == State.GONE) continue;
+            Report r = reports.get(m.id);
+            if (m.state == State.LOST) { // where its plan has it: still through its hold, then out along its lane and home
+                double[] at = predicted(m.id, lastTick);
+                V2 pos = at == null ? m.lastPos : new V2(at[0], at[1]), v = at == null ? V2.ZERO : new V2(at[3], at[4]);
+                agents.add(new Orca.Agent(m.id, pos, at == null ? m.lastAlt : at[2], v, at == null ? 0 : at[5], v, 0, false, 1));
+                if (v.length() < 0.01 && m.heardPos != null) { // still: somewhere between where it was heard and its furthest stop
+                    double way = m.heardPos.dist(m.lastPos);
+                    for (double s = 0; s < way; s += 4) {
+                        V2 on = m.heardPos.plus(m.lastPos.minus(m.heardPos).unit().times(s));
+                        agents.add(new Orca.Agent(m.id + "@" + Math.round(s), on, m.lastAlt, V2.ZERO, 0, V2.ZERO, 0, false, 1));
+                    }
+                }
+                if (wind.length() >= 1) { // it may have lost GNSS too and be drifting since: its whole downwind corridor
+                    double since = Math.max(0, (lastTick - m.lostAt) / 1000.0);
+                    double reach = Math.min(600, wind.length() * since);
+                    for (V2 from : m.heardPos == null ? List.of(m.lastPos) : List.of(m.lastPos, m.heardPos)) { // from anywhere it may have stopped
+                        for (double s = 0; s <= reach + 1e-9; s += 8) {
+                            V2 drifted = from.plus(wind.unit().times(s));
+                            agents.add(new Orca.Agent(m.id + "~" + from.hashCode() + ":" + Math.round(s), drifted, m.lastAlt, wind, 0, wind, 0, false, 1));
+                        }
+                    }
+                    agents.add(new Orca.Agent(m.id + "~", m.lastPos.plus(wind.times(since)), m.lastAlt, wind, 0, wind, 0, false, 1));
+                }
+            } else if (r != null && !r.landed()) { // without GNSS, or landing: it goes where it goes
+                double err = m.state == State.GNSS_LOST ? Math.min(m.errM, 10) : 0;
+                double vu = forceLand.contains(m.id) ? Math.min(r.vu(), -1.5) : r.vu(); // about to be landed: shown coming down
+                agents.add(new Orca.Agent(m.id, m.state == State.GNSS_LOST ? m.lastPos : r.pos(), r.altAmsl(), r.vel(), vu, r.vel(), 0, false, err));
+            }
+        }
+        for (Other o : others) agents.add(new Orca.Agent(o.id(), o.pos(), o.altAmsl(), o.vel(), 0, o.vel(), 0, false, 0));
+        return Orca.solve(agents, p.radiusM() + ORCA_BUFFER_M, p.layerM() - ExitPlanner.VERTICAL_TOLERANCE_M);
+    }
+
+    /**
+     * A drone without GNSS drifting into a drone nobody can move (one cut off, hanging; one without GNSS; another
+     * group's) at its height within {@link #FORCE_LAND_LOOK_S} s: it is landed (AC-42 says it holds its height and
+     * waits; this is the safe choice where waiting means hitting something - coming down takes it out of that layer).
+     * Not while anything nobody can move is under it.
+     */
+    private void forceLanding(Map<String, Report> reports, List<Other> others, V2 wind, List<String> events) {
+        for (Member d : members.values()) {
+            if (d.state != State.GNSS_LOST || forceLand.contains(d.id) || landedNow.getOrDefault(d.id, false)) continue;
+            Report r = reports.get(d.id);
+            V2 dv = r != null && r.vel().length() > wind.length() ? r.vel() : wind;
+            List<double[]> stuck = new ArrayList<>(); // e, n, alt
+            for (Member o : members.values()) {
+                if (o == d || o.state == State.GONE || landedNow.getOrDefault(o.id, false)) continue;
+                if (o.state == State.LOST || o.state == State.GNSS_LOST) stuck.add(new double[]{o.lastPos.e(), o.lastPos.n(), o.lastAlt});
+            }
+            for (Other o : others) stuck.add(new double[]{o.pos().e(), o.pos().n(), o.altAmsl()});
+            boolean hits = false, under = false;
+            for (double[] s : stuck) {
+                double dz = d.lastAlt - s[2];
+                V2 sp = new V2(s[0], s[1]);
+                if (dz > 1 && sp.dist(d.lastPos) < 2 * p.radiusM() + d.errM) under = true;
+                if (Math.abs(dz) >= p.layerM() - ExitPlanner.VERTICAL_TOLERANCE_M) continue;
+                for (double t = 0; t <= FORCE_LAND_LOOK_S; t += 0.5) {
+                    if (d.lastPos.plus(dv.times(t)).dist(sp) < p.radiusM() + d.errM + 3) hits = true;
+                }
+            }
+            if (hits && !under) {
+                forceLand.add(d.id);
+                events.add("LAND " + d.id + " (DRIFTING INTO A DRONE NOBODY CAN MOVE)");
+            }
+        }
+    }
+
+    public static final double FORCE_LAND_LOOK_S = 15;
+
+    /** Nothing airborne under this drone within a protection radius (and 3 m, and its error circle): it may come down now. */
+    private boolean clearBelow(Member d, Map<String, Report> reports) {
+        for (Member o : members.values()) {
+            if (o == d || o.state == State.GONE || landedNow.getOrDefault(o.id, false)) continue;
+            if (o.state == State.LOST) { // where its plan takes it in the time it takes this one to come down
+                boolean crosses = false;
+                for (int k = 0; k <= 15 && !crosses; k++) {
+                    double[] at = predicted(o.id, lastTick + k * 2000L);
+                    // (10 m more: where its brake stopped it is known only that well)
+                    if (at != null && at[2] < d.lastAlt - 1 && new V2(at[0], at[1]).dist(d.lastPos) < p.radiusM() + 13 + d.errM) crosses = true;
+                }
+                if (crosses) return false;
+            }
+            Report r = reports.get(o.id);
+            V2 at = r != null && o.state != State.LOST ? r.pos() : o.lastPos;
+            double alt = r != null && o.state != State.LOST ? r.altAmsl() : o.lastAlt;
+            if (alt < d.lastAlt - 1 && at.dist(d.lastPos) < p.radiusM() + 3 + d.errM) return false;
+        }
+        return true;
+    }
+    private final Set<String> forceLand = new HashSet<>();
 
     // ------------------------------------------------------------------ exit plans
 
@@ -1185,6 +1403,9 @@ public final class GroupController {
             top = Math.max(top, m.lastAlt);
         }
         top = Math.max(top, groundAmsl + cube.layerAlt(topLayer));
+        // above every cut-off drone's return height from an earlier set: whoever flies home over it is higher (AC-36,
+        // losses one after another)
+        for (Member m : members.values()) if (m.state == State.LOST && m.plan != null) top = Math.max(top, m.homeAmsl + m.plan.returnAltRelM);
         if (lead != null) top = Math.max(top, lead.altAmsl());
         for (Member m : members.values()) {
             if (m.state == State.GONE || m.state == State.LOST || m.state == State.GNSS_LOST || m.state == State.LEAVING) continue;
@@ -1209,9 +1430,12 @@ public final class GroupController {
         lastPlansAt = now;
         int seq = ++planSeq;
         Map<String, ExitPlan> out = new LinkedHashMap<>();
+        Map<String, ExitPlanner.Input> inputs = new HashMap<>();
+        for (ExitPlanner.Input i : in) inputs.put(i.id(), i);
         for (ExitPlanner.Plan pl : res.plans().values()) {
             double[] rally = GeoLocal.offset(lat0, lon0, pl.rally().e(), pl.rally().n());
-            out.put(pl.id(), new ExitPlan(pl.bottomRow() ? ExitPlan.FLAG_BOTTOM_ROW : 0, seq, pl.laneEndRadiusM(), pl.startDelayS(),
+            double delay = Math.max(pl.startDelayS(), waitForHanging(inputs.get(pl.id()), pl, now));
+            out.put(pl.id(), new ExitPlan(pl.bottomRow() ? ExitPlan.FLAG_BOTTOM_ROW : 0, seq, pl.laneEndRadiusM(), delay,
                     pl.returnAltRelM(), rally[0], rally[1], pl.layerAltAmsl()));
         }
         plans = out;
@@ -1237,7 +1461,7 @@ public final class GroupController {
         double t = (now - m.lostAt) / 1000.0 - (p.holdMs() / 1000.0 + pl.startDelayS);
         V2 from = m.lastPos;
         if (t <= 0) return new double[]{from.e(), from.n(), m.lastAlt, 0, 0, 0};
-        V2 off = m.lastPos.minus(m.lostCentre == null ? centre : m.lostCentre);
+        V2 off = m.lostOff != null ? m.lostOff : m.lastPos.minus(m.lostCentre == null ? centre : m.lostCentre); // as its phone has it
         V2 dir = off.length() < 0.5 ? new V2(0, 1) : off.unit();
         double lane = Math.max(pl.laneEndRadiusM - off.length(), 0), laneS = lane / 8;
         if (t < laneS) {
@@ -1323,6 +1547,26 @@ public final class GroupController {
             }
         }
         return out;
+    }
+
+    /**
+     * A drone cut off earlier hangs where it is until its hold is over: a plan whose lane passes it (within two radii, at
+     * its height) gets a start delay that lets it go first (AC-36 for losses that come one after another - the set's
+     * proof is for everyone cut off at once). Seconds after this drone's own hold; 0: nothing in its way.
+     */
+    private double waitForHanging(ExitPlanner.Input i, ExitPlanner.Plan pl, long now) {
+        if (i == null) return 0;
+        V2 from = centre.plus(i.rel()), dir = i.rel().length() < 0.5 ? new V2(0, 1) : i.rel().unit();
+        V2 to = from.plus(dir.times(Math.max(pl.laneEndRadiusM() - i.rel().length(), 0)));
+        double wait = 0;
+        for (Member l : members.values()) {
+            if (l.state != State.LOST || l.plan == null) continue;
+            if (Math.abs(l.lastAlt - i.altAmsl()) >= p.layerM() - ExitPlanner.VERTICAL_TOLERANCE_M) continue;
+            if (V2.segDist(l.lastPos, from, to) >= 2 * p.radiusM() + 5) continue;
+            double gone = (l.lostAt + p.holdMs() - now) / 1000.0 + l.plan.startDelayS + (2 * p.radiusM() + 5) / 8 + 10;
+            wait = Math.max(wait, gone - p.holdMs() / 1000.0);
+        }
+        return wait;
     }
 
     public Map<String, ExitPlan> plans() {
