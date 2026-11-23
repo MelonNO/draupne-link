@@ -678,7 +678,9 @@ final class PreviousFlightsDialog extends JDialog {
         java.util.List<java.nio.file.Path> logs = fcLogs(data.flight);
         if (logs.isEmpty()) return;
         try {
-            new ProcessBuilder("explorer.exe", "/select," + logs.get(0).toAbsolutePath()).start();
+            // Windows' own Explorer, by its full path
+            de.droiddrone.pc.Outside.start(new ProcessBuilder(de.droiddrone.pc.setup.Shell.withFullPath(
+                    java.util.List.of("explorer.exe", "/select," + logs.get(0).toAbsolutePath()))));
         } catch (java.io.IOException ignored) {
             // the tooltip names it
         }
