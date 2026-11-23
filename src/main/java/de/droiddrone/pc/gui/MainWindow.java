@@ -408,6 +408,14 @@ public class MainWindow extends JFrame {
     private final GlyphButton stillButton = new GlyphButton(GlyphButton.Glyph.STILL, "Still");
     /** MUTE (1.0.45): the phone's live sound on this PC, on or off; per phone (AUDIO_MUTED_KEY). */
     private final GlyphButton muteButton = new GlyphButton(GlyphButton.Glyph.SOUND, "Mute");
+    /** Fleet PRD AP-6: LOITER / RTL / LAND / GO for an ArduPilot drone, the backup to the radio's mode switch. */
+    private final ArduModeBar arduModes = new ArduModeBar(c -> {
+        Connection k = connection;
+        boolean sent = k != null && k.getLink().sendFcCommand(c);
+        if (!sent) logLine("Mode buttons: no ArduPilot drone of this PC's own connected (phone app pc."
+                + ControlLink.FC_COMMAND_MIN_PC_BUILD + " or newer).");
+        return sent;
+    });
     static final String AUDIO_MUTED_KEY = "audio.muted";
     private boolean audioMuted;
     /**
@@ -844,6 +852,8 @@ public class MainWindow extends JFrame {
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
         addMenuItem(menu, "First-time setup", SetupWizard.menuLine(SetupWizard.finishedOnce(config)), () -> SetupWizard.open(this));
         addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
+        // fleet PRD area H: an ArduPilot flight controller on USB (a Betaflight board goes through Drone setup as before)
+        addMenuItem(menu, "ArduPilot drone setup", "ArduPilot board on USB", () -> ArduSetupPages.open(this));
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
         }
@@ -1467,6 +1477,9 @@ public class MainWindow extends JFrame {
         stillButton.setToolTipText("Still (S): the picture as PNG files, with and without the OSD");
         stillButton.addActionListener(e -> stillSaver.save());
         videoBar.add(stillButton);
+        videoBar.add(Box.createVerticalStrut(8));
+        arduModes.setAlignmentX(CENTER_ALIGNMENT);
+        videoBar.add(arduModes); // shown only while an ArduPilot drone is connected
         videoBar.add(Box.createVerticalGlue());
         video.add(videoBar, BorderLayout.EAST);
         videoView.setToolTipText("Double-click: video only    F11: full screen    F2: OSD    M: sound    P: mark    S: still");
@@ -5953,10 +5966,15 @@ public class MainWindow extends JFrame {
             fcValue.setText("-");
             showConnectedName(null);
             refreshPhoneApp(null);
+            arduModes.update(null, -1, null, MonoClock.ms());
             return;
         }
         ControlLink link = connection.getLink();
         ControlLink.State state = link.getState();
+        // fleet AP-6: the mode buttons of this PC's own ArduPilot drone (not a spectator's or a watcher's)
+        FcTelemetry modeT = link.getTelemetry();
+        arduModes.update(link.isSpectator() || link.isWatchOnly() ? null : modeT.getStatus(), modeT.getArduMode(),
+                modeT.getLastCommandAck(), MonoClock.ms());
         String stateText = connection.describe(state);
         if (state != lastState || !Objects.equals(stateText, lastStateText)) {
             // 1.0.64: not "Waiting for the phone... (DRAUPNE Flight open? ...)" while a sleeper is waited for, nor

@@ -326,7 +326,8 @@ public final class TelemetryRecords {
             case FcCommon.DD_MAVLINK_SCALED_PRESSURE:
             case FcCommon.DD_AP_VTX_POWER:
             case FcCommon.DD_MAVLINK_VFR_HUD:
-            case FcCommon.DD_MAVLINK_ATTITUDE: {
+            case FcCommon.DD_MAVLINK_ATTITUDE:
+            case FcCommand.ACK_RECORD: { // fleet: [command u16][result u8]
                 out.write(buffer.getData());
                 break;
             }

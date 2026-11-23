@@ -49,6 +49,11 @@ public final class AppPaths {
         return Files.createDirectories(Path.of(System.getProperty("user.home"), "Videos", "DRAUPNE Link"));
     }
 
+    /** Documents\DRAUPNE Link\ArduPilot backups: an ArduPilot drone's parameters (.param), saved before setup changes them. */
+    public static Path arduPilotBackupsDir() throws IOException {
+        return Files.createDirectories(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "ArduPilot backups"));
+    }
+
     /** Documents\DRAUPNE Link\Betaflight backups: Betaflight's settings, saved before Drone setup changes them. */
     public static Path betaflightBackupsDir() throws IOException {
         return Files.createDirectories(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Betaflight backups"));

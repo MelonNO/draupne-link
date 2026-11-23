@@ -45,6 +45,8 @@ class PacketIdsTest {
         c.put("OverwatchProtocol.PREVIEW", OverwatchProtocol.PREVIEW);
         c.put("OverwatchProtocol.CLIP", OverwatchProtocol.CLIP);
         c.put("OverwatchProtocol.STATUS", OverwatchProtocol.STATUS);
+        c.put("FcCommand.PACKET", de.droiddrone.common.FcCommand.PACKET);
+        c.put("MavTunnel.PACKET", de.droiddrone.common.MavTunnel.PACKET);
         return c;
     }
 

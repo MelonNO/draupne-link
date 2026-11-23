@@ -108,7 +108,11 @@ public class Serial {
     // DRAUPNE Link: volatile - read by the reader, writer and init threads
     private volatile int threadsId;
     private volatile int status;
-    private boolean isMavlink;
+    // DRAUPNE Link (fleet): volatile - the reader thread may switch it (sniff) while others read it
+    private volatile boolean isMavlink;
+    /** Fleet PRD AP-1: with the protocol on AUTO, MAVLink is recognised by the FC's own heartbeat (MavlinkSniff). */
+    private final de.droiddrone.common.MavlinkSniff sniff = new de.droiddrone.common.MavlinkSniff();
+    private volatile boolean sniffing;
     private SerialHelper serialHelper;
     private boolean restart;
     /** DRAUPNE Link: the newest stick packet not written yet (older ones are simply replaced). */
@@ -346,6 +350,36 @@ public class Serial {
                 isMavlink = true;
                 break;
         }
+        // fleet: AUTO and taken for MSP - a board whose USB name isn't ArduPilot's may still speak MAVLink
+        sniff.reset();
+        sniffing = fcPort.inUse().fcProtocol == FcCommon.FC_PROTOCOL_AUTO && !isMavlink;
+    }
+
+    /**
+     * Bytes read from the flight controller, to the protocol's parser (the reader thread, the rig's reader). Fleet PRD
+     * AP-1: while AUTO took the port for MSP and no MSP answer has come, a MAVLink heartbeat from an autopilot switches
+     * the port to MAVLink at once - the same port, no restart; MSP sticks were never written (MSP never answered).
+     */
+    private void route(byte[] buf, int size) {
+        if (isMavlink) {
+            mavlink.addData(buf, size);
+            return;
+        }
+        msp.addData(buf, size);
+        if (!sniffing) return;
+        if (msp.getFcInfo() != null) {
+            sniffing = false; // MSP answered: Betaflight or INAV
+            return;
+        }
+        if (sniff.feed(buf, size)) {
+            sniffing = false;
+            log("MAVLink heartbeat on the FC's port (" + (sniff.autopilot() == de.droiddrone.common.MavlinkSniff.AUTOPILOT_PX4 ? "PX4" : "ArduPilot")
+                    + "): the port is read as MAVLink");
+            msp.close();
+            isMavlink = true;
+            if (!mavlink.isInitialized()) mavlink.initialize();
+            mavlink.addData(buf, size);
+        }
     }
 
     public void restart(){
@@ -405,11 +439,7 @@ public class Serial {
                         if (restart) return;
                         if (size > 0){
                             status = STATUS_SERIAL_PORT_OPENED;
-                            if (isMavlink){
-                                mavlink.addData(buf, size);
-                            } else {
-                                msp.addData(buf, size);
-                            }
+                            route(buf, size); // fleet: was MAVLink or MSP by the flag alone
                         }
                     } catch (Exception e) {
                         log("Native serial reader error: " + e);
@@ -502,11 +532,7 @@ public class Serial {
                 if (size > 0){
                     serialErrors = 0;
                     status = STATUS_SERIAL_PORT_OPENED;
-                    if (isMavlink){
-                        mavlink.addData(buf, size);
-                    } else {
-                        msp.addData(buf, size);
-                    }
+                    route(buf, size); // fleet: was MAVLink or MSP by the flag alone
                 }
             } catch (Exception e) {
                 if (id != threadsId) return; // closed on purpose
@@ -556,11 +582,7 @@ public class Serial {
     void benchData(int id, byte[] buf, int size) {
         if (restart || id != threadsId || size <= 0) return;
         status = STATUS_SERIAL_PORT_OPENED;
-        if (isMavlink){
-            mavlink.addData(buf, size);
-        } else {
-            msp.addData(buf, size);
-        }
+        route(buf, size); // fleet: was MAVLink or MSP by the flag alone
     }
 
     /** The test rig's build only: its link ended or failed - what a flight controller pulled from USB is. */

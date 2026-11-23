@@ -54,11 +54,11 @@ class MavlinkRawTest {
                 assertFalse(text(f).contains("MavlinkRawPacket"), root.relativize(f) + " uses the raw MAVLink packet");
             }
         }
-        // its Config asks for MSP and the bridge off
+        // its Config asks for the protocol by AUTO (fleet AP-1: MSP or MAVLink by what the FC is) and the bridge off
         String link = text(root.resolve("src/main/java/de/droiddrone/pc/ControlLink.java"));
         String config = link.substring(link.indexOf("byte[] buildConfigPacket()"));
         config = config.substring(0, config.indexOf("\n    }"));
-        assertTrue(config.contains("writeByte(FcCommon.FC_PROTOCOL_MSP)"));
+        assertTrue(config.contains("writeByte(FcCommon.FC_PROTOCOL_AUTO)"));
         assertTrue(config.contains("writeByte(SettingsCommon.MavlinkUdpBridge.disabled)"));
     }
 

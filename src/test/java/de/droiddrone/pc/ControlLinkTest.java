@@ -164,7 +164,7 @@ class ControlLinkTest {
         assertNotNull(cfg);
         assertEquals(ControlLink.ANNOUNCED_RC_RATE, cfg.rcRefreshRate, "keeps the Flight app's frame-drop window at 1 ms");
         assertEquals(1280, cfg.cameraWidth);
-        assertEquals(FcCommon.FC_PROTOCOL_MSP, cfg.fcProtocol);
+        assertEquals(FcCommon.FC_PROTOCOL_AUTO, cfg.fcProtocol, "fleet AP-1: the phone tells MSP from MAVLink by the FC");
         assertEquals(0, cfg.trailingBytes, "Config packet must be fully consumed by the Flight parser layout");
 
         waitFor(() -> link.getFcInfo() != null, 3000, "FC info");

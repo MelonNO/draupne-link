@@ -58,12 +58,35 @@ First steps of phase 1, in order:
      covers it until a new record is added. Decide when one is.
    - Tests: `FcTelemetryMavlinkTest` (records made as `Mavlink.java` makes them, through the phone's
      `TelemetryRecords`), `FleetFcTypeTest`.
-2. **AP-3:** armed state, ArduPilot flight-mode names and PreArm texts in RC CHECK.
-3. **AP-4 / AP-6:** sticks as `RC_CHANNELS_OVERRIDE` through the same stick path and guards as MSP; OSD buttons
-   LOITER, RTL, LAND, START/PAUSE.
-4. **AP-5:** link loss: the phone brakes into LOITER, home after 20 s (Smart RTL alone, plain RTL as a lead); the
-   PC heartbeat relayed for ArduPilot's GCS failsafe as the backstop.
-5. **AP-8:** the bench's virtual drones backed by ArduPilot SITL (needs SITL on Windows: WSL or Cygwin build).
-6. **AP-7:** Drone setup over MAVLink parameters (backup, plan, CONFIRM, read-back).
+2. **AP-1 on the phone (done, not tried on a drone):** the PC asks for the protocol by AUTO. The phone takes MAVLink for
+   a board that calls itself ArduPilot / PX4 on USB, and now also for one that sends an autopilot's MAVLink heartbeat
+   while MSP gets no answer (`MavlinkSniff`: many ArduPilot boards carry their maker's USB name). No port restart;
+   Betaflight answers MSP as before. The phone addresses the FC by the system id in its heartbeat (upstream always
+   sent to 1; a fleet has one id per drone). Every heartbeat is the FC's armed word for the phone's guards.
+3. **AP-3 (done):** ArduPilot's "PreArm:" / "Arm:" texts of the last 40 s are RC CHECK's blockers while disarmed.
+4. **AP-6 / G2 (done):** `FcCommand` (0x30, the pilot's session only): a mode, mission START / PAUSE / CONTINUE;
+   the FC's COMMAND_ACK comes back as record 0x40E0. On the video's edge, for an ArduPilot drone only: LOI, RTL, LND,
+   GO (GO pauses a running route, goes on after a pause, else starts it); the mode it is in is lit, a refusal red.
+5. **AP-5 (done on the phone, not tried):** `ArduLinkLossRule` + `ArduLinkLoss`: the PC silent 1 s - LOITER (ALT_HOLD
+   without GNSS); 20 s - Smart RTL alone, RTL as a lead; without GNSS it holds and waits; nothing while ArduPilot is
+   already coming home or landing. **Not as the PRD says:** the brake waits 1 s, not 100 ms (4G gaps of 100-500 ms
+   are routine). While it runs the phone feeds the pilot's last frame with the sticks centred (switches unmoved).
+   The phone heartbeats the FC as its ground station while the PC is heard or the rule runs, so ArduPilot's GCS
+   failsafe (5 s) fires only when the app itself has stopped.
+6. **AP-7 / area H (done as a first version, not tried on a real board):** `setup/ardu` - `MavSession` (MAVLink as a
+   ground station over any wire), `ArduUsb` (a board on USB is taken only when it speaks first: a Betaflight board
+   is never sent a byte), `ArduPlan` (the fleet's parameters with reasons: no radio receiver, overrides held by the
+   phone, GCS failsafe RTL, battery warnings only and LAND at 3 %, TERRAIN_ENABLE 0, crash check, avoidance of the
+   other drones, ARM on AUX1 and the mode switch on AUX2), `ArduSetupWriter` (backup .param first, write, read back
+   each, stop at the first mismatch; RESTORE), `ArduTools` (six-position accelerometer calibration with the 3D
+   drone, level, compass, motor test capped at 15 % / 3 s, reboot), `ArduBenchCheck` (AS-10: arms on the overrides,
+   disarms on the switch). SETUP > ArduPilot drone setup. **Not built:** flashing ArduPilot onto a Betaflight board
+   (STM32 DFU needs a USB driver this app doesn't install) - the FIND page says to flash once with ArduPilot's tools.
+7. **The tunnel (done, not tried):** `MavTunnel` (0x32): whole MAVLink frames PC <-> FC through the phone in the
+   pilot's session - parameters, missions, guided targets, ADS-B traffic and a short list of commands; never sticks,
+   arming, calibration, motor test or reboot. The FC's answers go back only while the PC uses it. `TunnelWire` lets
+   `MavSession` run over it: routes, RTL_ALT and rally points in the air with the bench's code.
+8. **AP-8:** the virtual fleet's ArduPilot drone (a kinematic copter speaking MAVLink) - with the airspace work. Real
+   SITL needs Windows' Linux part (not installed on this PC).
 
 Nothing here has flown. Every step is tried in SITL before the maintainer's hardware.

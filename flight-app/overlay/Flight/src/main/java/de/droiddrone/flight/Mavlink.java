@@ -197,6 +197,10 @@ public class Mavlink {
             log("Start Mavlink thread - OK");
             while (id == threadsId) {
                 try {
+                    // DRAUPNE Link (fleet AP-5): a ground station's heartbeat once a second while the phone's rules are in
+                    // charge (the PC heard, or the phone's own link-loss plan running): ArduPilot's GCS failsafe fires only
+                    // when this app itself has stopped
+                    if (isHeartBeatReceived && gcsAlive.getAsBoolean()) sendGcsHeartbeat();
                     if (!isInitialized()) {
                         if (isHeartBeatReceived) getFcVersion();
                         Thread.sleep(timerDelayMs);
@@ -245,7 +249,7 @@ public class Mavlink {
         if (paramIdStr == null || paramIdStr.isEmpty() || paramIdStr.length() > 16) return;
         byte[] paramId = new byte[16];
         System.arraycopy(paramIdStr.getBytes(StandardCharsets.US_ASCII), 0, paramId, 0, paramIdStr.length());
-        MAVLinkPacket packet = new msg_param_request_read((short)-1, config.getMavlinkTargetSysId(), targetComponent,
+        MAVLinkPacket packet = new msg_param_request_read((short)-1, targetSys(), targetComponent,
                 paramId, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
         packet.seq = getSequence();
         serial.writeDataMavlink(packet.encodePacket());
@@ -253,7 +257,7 @@ public class Mavlink {
 
     private void getFcVersion(){
         MAVLinkPacket packet = new msg_command_long(msg_autopilot_version.MAVLINK_MSG_ID_AUTOPILOT_VERSION, 0, 0, 0, 0, 0, 0,
-                MAV_CMD.MAV_CMD_REQUEST_MESSAGE, config.getMavlinkTargetSysId(), targetComponent, (short)0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
+                MAV_CMD.MAV_CMD_REQUEST_MESSAGE, targetSys(), targetComponent, (short)0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
         packet.seq = getSequence();
         serial.writeDataMavlink(packet.encodePacket());
     }
@@ -315,7 +319,7 @@ public class Mavlink {
 
     private void setMessageInterval(int messageId, int intervalUs){
         MAVLinkPacket packet = new msg_command_long(messageId, intervalUs, 0, 0, 0, 0, 0,
-                MAV_CMD.MAV_CMD_SET_MESSAGE_INTERVAL, config.getMavlinkTargetSysId(), targetComponent,
+                MAV_CMD.MAV_CMD_SET_MESSAGE_INTERVAL, targetSys(), targetComponent,
                 (short)0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
         packet.seq = getSequence();
         serial.writeDataMavlink(packet.encodePacket());
@@ -343,7 +347,7 @@ public class Mavlink {
         MAVLinkPacket packet = new msg_rc_channels_override(channels[0], channels[1], channels[2], channels[3],
                 rcCount > 4 ? channels[4] : Utils.UINT16_MAX, rcCount > 5 ? channels[5] : Utils.UINT16_MAX,
                 rcCount > 6 ? channels[6] : Utils.UINT16_MAX, rcCount > 7 ? channels[7] : Utils.UINT16_MAX,
-                config.getMavlinkTargetSysId(), targetComponent,
+                targetSys(), targetComponent,
                 rcCount > 8 ? channels[8] : 0, rcCount > 9 ? channels[9] : 0,
                 rcCount > 10 ? channels[10] : 0, rcCount > 11 ? channels[11] : 0,
                 rcCount > 12 ? channels[12] : 0, rcCount > 13 ? channels[13] : 0,
@@ -352,6 +356,138 @@ public class Mavlink {
                 config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
         packet.seq = getSequence();
         serial.writeDataMavlink(packet.encodePacket());
+    }
+
+    // ------------------------------------------------------------------ DRAUPNE Link (fleet)
+
+    /** Fleet AP-5: whether this app's rules are in charge now (Udp: the PC heard, or a link-loss plan running). */
+    private volatile java.util.function.BooleanSupplier gcsAlive = () -> false;
+    /** The commands sent for the pilot (FcCommand) whose COMMAND_ACK goes back to the PC as a record. */
+    private final java.util.Set<Integer> awaitingAck = java.util.Collections.synchronizedSet(new java.util.HashSet<Integer>());
+    static final int MAV_TYPE_GCS = 6, MAV_AUTOPILOT_INVALID = 8, MAV_STATE_ACTIVE = 4;
+    /** MAV_MODE_FLAG_CUSTOM_MODE_ENABLED: DO_SET_MODE's first parameter for an autopilot's own mode numbers. */
+    static final int CUSTOM_MODE_ENABLED = 1;
+    /** ArduPilot Copter's mode numbers this class sets itself (the rest come from the PC as numbers). */
+    static final int COPTER_AUTO = 3, COPTER_LOITER = 5;
+
+    private volatile int customModeNow = -1;
+    private volatile long heartbeatAtMs;
+    /** The FC's own system id, from its heartbeat; -1 before the first. */
+    private volatile int fcSysId = -1;
+
+    /**
+     * Fleet AP-7: the system id every message to the FC is addressed to - its own, from its heartbeat. Each drone of a
+     * fleet has a SYSID_THISMAV of its own (follow, ADS-B); upstream always sent to 1, which a drone with another id
+     * ignores. Before the first heartbeat: the Config's (1).
+     */
+    private short targetSys() {
+        int id = fcSysId;
+        return (short) (id > 0 ? id : config.getMavlinkTargetSysId());
+    }
+
+    /** The FC's armed flag from a heartbeat no older than 3 s (elapsedRealtime); false otherwise. */
+    public boolean armedNow(long nowMs) {
+        return isArmed && heartbeatAtMs != 0 && nowMs - heartbeatAtMs <= FcArmedState.MAVLINK_FRESH_MS;
+    }
+
+    /** The FC's flight mode (its heartbeat's custom mode), -1 before the first. */
+    public int customModeNow() {
+        return customModeNow;
+    }
+
+    /** A 3D fix or better (GPS_RAW_INT). */
+    public boolean gnssOk() {
+        return checkGpsFix();
+    }
+
+    /** An ArduPilot flight controller is on the port and known (its version read). */
+    public boolean isArduPilot() {
+        return isInitialized() && fcVariant == FcInfo.FC_VARIANT_ARDUPILOT;
+    }
+
+    public void setGcsAlive(java.util.function.BooleanSupplier alive) {
+        gcsAlive = alive == null ? () -> false : alive;
+    }
+
+    private void sendGcsHeartbeat() {
+        MAVLinkPacket packet = new msg_heartbeat(0, (short) MAV_TYPE_GCS, (short) MAV_AUTOPILOT_INVALID, (short) 0,
+                (short) MAV_STATE_ACTIVE, (short) 3, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
+        packet.seq = getSequence();
+        serial.writeDataMavlink(packet.encodePacket());
+    }
+
+    /** Fleet AP-6: the pilot's command from the PC (FcCommand), on the receive thread. False: no MAVLink FC to give it to. */
+    public boolean command(de.droiddrone.common.FcCommand c) {
+        if (c == null || !isInitialized() || fcVariant != FcInfo.FC_VARIANT_ARDUPILOT) return false;
+        switch (c.kind) {
+            case de.droiddrone.common.FcCommand.MODE:
+                setMode(c.mode);
+                break;
+            case de.droiddrone.common.FcCommand.MISSION_START:
+                setMode(COPTER_AUTO);
+                commandLong(MAV_CMD.MAV_CMD_MISSION_START, 0, 0);
+                break;
+            case de.droiddrone.common.FcCommand.PAUSE:
+                setMode(COPTER_LOITER);
+                break;
+            case de.droiddrone.common.FcCommand.CONTINUE:
+                setMode(COPTER_AUTO);
+                break;
+            default:
+                return false;
+        }
+        log("Command from the PC to the FC: " + c.kind + (c.kind == de.droiddrone.common.FcCommand.MODE ? " mode " + c.mode : ""));
+        return true;
+    }
+
+    /** ArduPilot's mode by its number (MAV_CMD_DO_SET_MODE); the phone's own link-loss rules use it too. */
+    public void setMode(int customMode) {
+        commandLong(MAV_CMD.MAV_CMD_DO_SET_MODE, CUSTOM_MODE_ENABLED, customMode);
+    }
+
+    private void commandLong(int command, float p1, float p2) {
+        awaitingAck.add(command);
+        MAVLinkPacket packet = new msg_command_long(p1, p2, 0, 0, 0, 0, 0, command, targetSys(), targetComponent,
+                (short) 0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack();
+        packet.seq = getSequence();
+        serial.writeDataMavlink(packet.encodePacket());
+    }
+
+    /** Fleet: when the PC last used the tunnel (elapsedRealtime), 0: never - the FC's answers go to it only then. */
+    private volatile long tunnelUsedAtMs;
+    private boolean tunnelRefusedSaid;
+
+    /**
+     * Fleet (MavTunnel): frames from the PC (the pilot's session, the buffer thread) - each one MavTunnel lists is
+     * written to the FC as it came; anything else is dropped and said once.
+     */
+    public void tunnelFromPc(byte[] data) {
+        if (!isArduPilot()) return;
+        tunnelUsedAtMs = android.os.SystemClock.elapsedRealtime();
+        de.droiddrone.common.MavTunnel.split(data, 0, data.length, (d, off, len) -> {
+            if (de.droiddrone.common.MavTunnel.toFc(d, off, len)) {
+                serial.writeDataMavlink(java.util.Arrays.copyOfRange(d, off, off + len));
+            } else if (!tunnelRefusedSaid) {
+                tunnelRefusedSaid = true;
+                log("A MAVLink message from the PC not written to the FC (not one the tunnel carries): id "
+                        + de.droiddrone.common.MavTunnel.msgId(d, off, len));
+            }
+        });
+    }
+
+    /** An FC message the PC's tunnel wants, while it is open. */
+    private void tunnelToPc(MAVLinkPacket packet) {
+        long used = tunnelUsedAtMs;
+        if (used == 0 || android.os.SystemClock.elapsedRealtime() - used > de.droiddrone.common.MavTunnel.OPEN_MS) return;
+        if (!de.droiddrone.common.MavTunnel.toPc(packet.msgid)) return;
+        Udp u = udp;
+        if (u != null) u.sendTunnel(packet.encodePacket());
+    }
+
+    /** The FC's answer to a command of the pilot's: to the PC as FcCommand.ACK_RECORD. */
+    private void commandAck(int command, int result) {
+        if (!awaitingAck.remove(command)) return; // the telemetry's own SET_MESSAGE_INTERVAL and the like
+        telemetryOutputBuffer.offer(new TelemetryData(de.droiddrone.common.FcCommand.ACK_RECORD, de.droiddrone.common.FcCommand.ack(command, result)));
     }
 
     private void checkRcOptionsChannels(short[] channels){
@@ -429,11 +565,19 @@ public class Mavlink {
         if (packets == null || packets.isEmpty()) return;
         sendUdpPackets(packets);
         for (MAVLinkPacket packet : packets) {
+            tunnelToPc(packet); // DRAUPNE Link (fleet): the PC's tunnel, while open
             try {
                 switch (packet.msgid) {
                     case msg_heartbeat.MAVLINK_MSG_ID_HEARTBEAT: {
                         msg_heartbeat message = new msg_heartbeat(packet);
+                        if (message.type == MAV_TYPE_GCS) break; // DRAUPNE Link (fleet): another ground station's, not the FC's
                         isArmed = (message.base_mode & MAV_MODE_FLAG.MAV_MODE_FLAG_SAFETY_ARMED) != 0;
+                        // DRAUPNE Link (fleet): every heartbeat is the FC's word on armed - before, only the mode record
+                        // (sent once the FC's parameters were read) told the guards, so a new board was UNKNOWN for longer
+                        FcArmedState.mavlinkHeartbeat(isArmed);
+                        customModeNow = (int) message.custom_mode;
+                        fcSysId = packet.sysid;
+                        heartbeatAtMs = android.os.SystemClock.elapsedRealtime();
                         if (isArmed) {
                             if (armedTs == 0) armedTs = System.currentTimeMillis();
                         } else {
@@ -458,6 +602,11 @@ public class Mavlink {
                                 break;
                         }
                         isHeartBeatReceived = true;
+                        break;
+                    }
+                    case com.MAVLink.common.msg_command_ack.MAVLINK_MSG_ID_COMMAND_ACK: { // DRAUPNE Link (fleet)
+                        com.MAVLink.common.msg_command_ack message = new com.MAVLink.common.msg_command_ack(packet);
+                        commandAck(message.command, message.result);
                         break;
                     }
                     case msg_autopilot_version.MAVLINK_MSG_ID_AUTOPILOT_VERSION: {

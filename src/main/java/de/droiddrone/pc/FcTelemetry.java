@@ -428,6 +428,10 @@ public class FcTelemetry {
         boolean inav = fc != null && fc.getFcVariant() == FcInfo.FC_VARIANT_INAV;
         switch (code) {
             case FcCommon.DD_MAVLINK_MODE -> mavlinkMode(b.readInt(), b.readBoolean(), fc);
+            case de.droiddrone.common.FcCommand.ACK_RECORD -> {
+                int command = (b.readUnsignedByteAsInt() << 8) | b.readUnsignedByteAsInt();
+                lastCommandAck = new CommandAck(command, b.readUnsignedByteAsInt(), MonoClock.ms());
+            }
             case FcCommon.DD_MAVLINK_BATTERY_STATUS -> {
                 int centiAmps = b.readShort();            // -1: not measured
                 int mah = b.readInt();                    // -1: not measured
@@ -757,7 +761,58 @@ public class FcTelemetry {
         armedStreak = armed ? Math.min(armedStreak + 1, 1000) : 0;
         statusHadNames = true;
         arduMode = customMode;
-        status = new Status(armed, armed ? List.of("ARM", mode) : List.of(mode), List.of(), 0, 0, now, true, mode);
+        status = new Status(armed, armed ? List.of("ARM", mode) : List.of(mode), armed ? List.of() : preArmBlockers(now), 0, 0, now, true, mode);
+    }
+
+    /** ArduPilot repeats its PreArm failures every 30 s while disarmed with a ground station: newer than this counts. */
+    static final long PREARM_FRESH_MS = 40_000;
+
+    /**
+     * Fleet PRD AP-3: why ArduPilot won't arm - its own texts ("PreArm: ..." from the periodic checks, "Arm: ..." from a
+     * refused arming), newest first, each once, as RC CHECK's blockers (as Betaflight's arming flags are).
+     */
+    List<Blocker> preArmBlockers(long now) {
+        List<StatusText> texts = recentStatusTexts();
+        List<Blocker> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int i = texts.size() - 1; i >= 0; i--) {
+            StatusText t = texts.get(i);
+            if (now - t.receivedAt() > PREARM_FRESH_MS) break;
+            String s = t.text();
+            String reason;
+            if (s.regionMatches(true, 0, "PreArm:", 0, 7)) reason = s.substring(7).trim();
+            else if (s.regionMatches(true, 0, "Arm:", 0, 4)) reason = s.substring(4).trim();
+            else continue;
+            if (!reason.isEmpty() && seen.add(reason.toLowerCase(java.util.Locale.ROOT))) out.add(new Blocker("PREARM", reason));
+        }
+        return List.copyOf(out);
+    }
+
+    /** The flight controller's answer to a command of the pilot's (fleet AP-6), or null: none yet. */
+    public record CommandAck(int command, int result, long receivedAt) {
+        /** MAV_RESULT_ACCEPTED. */
+        public boolean accepted() {
+            return result == 0;
+        }
+
+        /** The answer in a word: OK, BUSY, DENIED, UNSUPPORTED, FAILED, NO FC. */
+        public String word() {
+            return switch (result) {
+                case 0 -> "OK";
+                case 1 -> "BUSY";
+                case 2 -> "DENIED";
+                case 3 -> "UNSUPPORTED";
+                case 4 -> "FAILED";
+                case de.droiddrone.common.FcCommand.NO_FC -> "NO FC";
+                default -> "RESULT " + result;
+            };
+        }
+    }
+
+    private volatile CommandAck lastCommandAck;
+
+    public CommandAck getLastCommandAck() {
+        return lastCommandAck;
     }
 
     private void addStatusText(int severity, String text) {

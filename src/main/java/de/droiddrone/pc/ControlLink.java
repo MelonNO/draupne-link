@@ -1200,6 +1200,14 @@ public class ControlLink {
                     if (v != null && spectator == null) v.onRoundTrip(pingMs, clock); // 1.0.70: the picture delay's "link at its best"
                 }
             }
+            case de.droiddrone.common.MavTunnel.PACKET -> { // fleet: the FC's answers through the phone's tunnel
+                java.util.function.Consumer<byte[]> t = tunnelListener;
+                if (t != null && spectator == null) {
+                    byte[] frames = new byte[buffer.getRemaining()];
+                    buffer.read(frames, 0, frames.length);
+                    t.accept(frames);
+                }
+            }
             case UdpCommon.ConfigReceived -> {
                 if (!configReceived) readyAt = MonoClock.ms();
                 configReceived = true;
@@ -1592,7 +1600,10 @@ public class ControlLink {
         packetData.daos.writeByte(SettingsCommon.usbSerialPortIndex);
         packetData.daos.writeBoolean(SettingsCommon.useNativeSerialPort);
         packetData.daos.writeUTF(SettingsCommon.nativeSerialPort);
-        packetData.daos.writeByte(FcCommon.FC_PROTOCOL_MSP);
+        // fleet AP-1: AUTO - the phone takes MAVLink for a board that calls itself ArduPilot / PX4 on USB, or that sends
+        // a MAVLink heartbeat while MSP gets no answer (MavlinkSniff); Betaflight and INAV boards answer MSP as before.
+        // The phone applies a change of it only with its FC known disarmed (F-070a)
+        packetData.daos.writeByte(FcCommon.FC_PROTOCOL_AUTO);
         packetData.daos.writeByte(SettingsCommon.mavlinkTargetSysId);
         packetData.daos.writeByte(SettingsCommon.mavlinkGcsSysId);
         packetData.daos.writeByte(SettingsCommon.MavlinkUdpBridge.disabled);
@@ -2053,6 +2064,70 @@ public class ControlLink {
         } catch (IOException e) {
             return false;
         }
+    }
+
+    /** Fleet: where the FC's answers through the phone's tunnel go (MavTunnel); null: nobody listens. */
+    private volatile java.util.function.Consumer<byte[]> tunnelListener;
+
+    public void setTunnelListener(java.util.function.Consumer<byte[]> listener) {
+        tunnelListener = listener;
+    }
+
+    /**
+     * Fleet (MavTunnel): whole MAVLink frames for an ArduPilot FC, through the phone - this PC's own pilot session only,
+     * the phone app pc.58 on. Unnumbered (sent once): MAVLink's mission and parameter protocols ask again themselves.
+     * @return false: not sent (no such session, not ArduPilot, an older phone app)
+     */
+    public boolean sendTunnel(byte[] frames) {
+        if (frames == null || frames.length == 0 || spectator != null || watchOnly || !isConnected()) return false;
+        if (telemetry.getPhonePcBuild() < FC_COMMAND_MIN_PC_BUILD) return false;
+        FcInfo fc = fcInfo;
+        if (fc == null || fc.getFcVariant() != FcInfo.FC_VARIANT_ARDUPILOT) return false;
+        try {
+            UdpPacketData p = new UdpPacketData(de.droiddrone.common.MavTunnel.PACKET);
+            p.daos.write(frames, 0, frames.length);
+            byte[] data = p.getData();
+            socket.send(new DatagramPacket(data, data.length, remoteIp, remotePort));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /** Fleet AP-6: the first phone app that takes FcCommand (2.3.0-pc.58-fleet). */
+    public static final int FC_COMMAND_MIN_PC_BUILD = 58;
+
+    /**
+     * Fleet AP-6 / G2: the pilot's command to an ArduPilot flight controller (FcCommand: a mode, mission START / PAUSE /
+     * CONTINUE), in this PC's own pilot session only - never as a spectator or watcher. Sent twice (unnumbered: one lost
+     * and the button would do nothing; a mode set twice is the same mode). The FC's answer comes back as
+     * {@link FcTelemetry#getLastCommandAck()}.
+     * @return true if sent
+     */
+    public boolean sendFcCommand(byte[] command) {
+        if (command == null || spectator != null || watchOnly || !isConnected()) return false;
+        if (telemetry.getPhonePcBuild() < FC_COMMAND_MIN_PC_BUILD) return false;
+        FcInfo fc = fcInfo;
+        if (fc == null || fc.getFcVariant() != FcInfo.FC_VARIANT_ARDUPILOT) return false;
+        try {
+            for (int i = 0; i < 2; i++) socket.send(new DatagramPacket(command, command.length, remoteIp, remotePort));
+            log("Command to the FC: " + describe(command));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static String describe(byte[] c) {
+        de.droiddrone.common.FcCommand k = de.droiddrone.common.FcCommand.read(c, c.length);
+        if (k == null) return "?";
+        return switch (k.kind) {
+            case de.droiddrone.common.FcCommand.MODE -> ArduModes.name(k.mode, 0);
+            case de.droiddrone.common.FcCommand.MISSION_START -> "START";
+            case de.droiddrone.common.FcCommand.PAUSE -> "PAUSE";
+            case de.droiddrone.common.FcCommand.CONTINUE -> "CONTINUE";
+            default -> "?";
+        };
     }
 
     static byte[] idleSticksFrame(short[] frame) throws IOException {

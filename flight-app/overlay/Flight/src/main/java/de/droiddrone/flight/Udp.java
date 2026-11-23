@@ -112,6 +112,8 @@ import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.SleepWake;
 import de.droiddrone.common.Takeover;
+import de.droiddrone.common.FcCommand;
+import de.droiddrone.common.MavTunnel;
 import de.droiddrone.common.TelemetryData;
 import de.droiddrone.common.TelemetryRecords;
 import de.droiddrone.common.UdpCommon;
@@ -544,6 +546,13 @@ public class Udp {
         this.cameraManager = cameraManager;
         this.msp = msp;
         this.mavlink = mavlink;
+        // fleet AP-5: the FC hears a ground station while the PC is heard, or while this phone's own link-loss plan
+        // runs - ArduPilot's GCS failsafe is the backstop for this app itself having stopped
+        mavlink.setGcsAlive(() -> {
+            long heard = pcHeardAtMs;
+            return heard != 0 && android.os.SystemClock.elapsedRealtime() - heard <= GCS_FRESH_MS || arduLinkLossRunning();
+        });
+        startArduLinkLoss(this);
         this.fcDisarmed = () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
         this.phoneTelemetry = phoneTelemetry;
         this.config = config;
@@ -765,6 +774,17 @@ public class Udp {
                         }
                         continue;
                     }
+                    // fleet AP-6: the pilot's command to an ArduPilot FC (LOITER, RTL, LAND, START / PAUSE) - this session's only
+                    if (d[0] == FcCommand.PACKET) {
+                        if (buffer.isConnected()) {
+                            FcCommand c = FcCommand.read(d, len);
+                            if (c != null && !mavlink.command(c)) {
+                                mavlink.telemetryOutputBuffer.offer(new de.droiddrone.common.TelemetryData(FcCommand.ACK_RECORD,
+                                        FcCommand.ack(0, FcCommand.NO_FC)));
+                            }
+                        }
+                        continue;
+                    }
                     if (d[0] == UdpCommon.RcFrame) {
                         // pc.21: none in standby or deep sleep - the PC sends none, and a stray one must not fly
                         if (buffer.isConnected() && !PowerMode.dropSticks()) handleRcFrame(d, len);
@@ -824,7 +844,23 @@ public class Udp {
             log(held ? "Stick frames with ARM on held back: this app fed idle sticks (ARM off) before any stick frame came"
                     + " - not to the FC before the pilot's own ARM off" : "Stick frames to the FC again");
         }
-        if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
+        if (mavlink.isInitialized()) {
+            short[] f = java.util.Arrays.copyOf(rcFrame, count);
+            mavlink.setRcChannelsOverride(f);
+            lastPilotFrame = f; // fleet AP-5: the link-loss rule's hold frame keeps this frame's switches (no new array)
+        }
+    }
+
+    /** Fleet AP-5: the pilot's last frame as given to an ArduPilot FC; null before the first. */
+    private volatile short[] lastPilotFrame;
+
+    short[] lastPilotFrame() {
+        return lastPilotFrame;
+    }
+
+    /** Fleet AP-5: when a packet of the pilot's session last came (elapsedRealtime), 0: none yet. */
+    long pcHeardAt() {
+        return pcHeardAtMs;
     }
 
     /** F-066: the last stick frame was held back (RcPath.IdleGuard.holds); the receive thread's own. */
@@ -1335,6 +1371,41 @@ public class Udp {
         // 1080p / 20 Mbit/s recorder encoder (upstream's on-phone recording, made at every start) lived on into
         // overwatch and sleep - 12 min in the pilot's log, its codec thread waking 70 times a second
         mp4Recorder.close();
+    }
+
+    // ---- fleet: ArduPilot
+
+    /** The PC heard this recently: the phone heartbeats the FC as its ground station (fleet AP-5). */
+    static final long GCS_FRESH_MS = 3000;
+
+    /** Fleet AP-5: the phone's own link-loss plan for an ArduPilot drone runs now (ArduLinkLoss). */
+    static boolean arduLinkLossRunning() {
+        ArduLinkLoss r = arduLinkLoss;
+        return r != null && r.running();
+    }
+
+    /**
+     * Fleet AP-5: the phone's own link-loss rule for an ArduPilot drone - one for the app, started with the first Udp,
+     * reading whichever Udp the service has now ({@link #current}: a replaced one's silence must never act).
+     */
+    private static volatile ArduLinkLoss arduLinkLoss;
+    private static volatile Udp current;
+
+    private static synchronized void startArduLinkLoss(Udp udp) {
+        current = udp;
+        if (arduLinkLoss != null) return;
+        arduLinkLoss = new ArduLinkLoss(() -> current);
+        arduLinkLoss.start();
+    }
+
+    /** This drone leads a follower group: its link-loss return is RTL, not Smart RTL (AC-41). */
+    static void setLead(boolean lead) {
+        ArduLinkLoss r = arduLinkLoss;
+        if (r != null) r.setLead(lead);
+    }
+
+    Mavlink mavlinkOfRule() {
+        return mavlink;
     }
 
     // ---- pc.50: the video's dead-man
@@ -2200,6 +2271,14 @@ public class Udp {
                 videoStarter.execute(() -> checkConfigUpdate(oldCamera));
                 break;
             }
+            case MavTunnel.PACKET:
+            {
+                // fleet: the PC's routes, parameters and targets for an ArduPilot FC - listed frames only (MavTunnel)
+                int dataSize = buffer.getRemaining();
+                byte[] buf = new byte[dataSize];
+                if (buffer.read(buf, 0, dataSize) == dataSize) mavlink.tunnelFromPc(buf);
+                break;
+            }
             case UdpCommon.MavlinkRawPacket:
             {
                 // to the flight controller only where the phone is set up to carry MAVLink for it (MavlinkRaw): a MAVLink
@@ -2222,6 +2301,18 @@ public class Udp {
 
     /** A raw MAVLink packet was dropped (MavlinkRaw): said once (the buffer thread's own). */
     private boolean mavlinkRawRefusedSaid;
+
+    /** Fleet: an FC frame for the PC's tunnel (numbered, resent like any other). */
+    void sendTunnel(byte[] frame) {
+        if (socket == null || socket.isClosed() || frame == null || udpSender == null) return;
+        try {
+            UdpPacketData packetData = new UdpPacketData(MavTunnel.PACKET);
+            packetData.daos.write(frame, 0, frame.length);
+            udpSender.sendPacket(packetData.getData());
+        } catch (Exception e) {
+            log("sendTunnel error: " + e);
+        }
+    }
 
     public void sendMavlinkPacket(byte[] buf) {
         if (socket == null || socket.isClosed() || buf == null) return;
