@@ -45,6 +45,8 @@ final class ArduSetupPages {
     static final class State {
         volatile ArduUsb.Found found;
         volatile Map<String, Float> params;
+        /** Fleet AS-11: what was read from the board while it still ran Betaflight (null: nothing read). */
+        volatile de.droiddrone.pc.setup.ardu.FromBetaflight.Carried carried;
 
         MavSession fc() {
             ArduUsb.Found f = found;
@@ -100,6 +102,8 @@ final class ArduSetupPages {
         private final JButton fwFile = Theme.secondaryButton("Firmware file...");
         private final JButton fwNewest = Theme.secondaryButton("Newest Copter");
         private volatile boolean flashing;
+        /** Fleet AS-11: battery, switches, board turn and motor order from a Betaflight board, before it is flashed. */
+        private final JButton fromBf = Theme.secondaryButton("From Betaflight");
 
         FindPage(State state) {
             this.state = state;
@@ -130,6 +134,9 @@ final class ArduSetupPages {
             row.add(fwFile);
             row.add(javax.swing.Box.createHorizontalStrut(8));
             row.add(fwNewest);
+            row.add(javax.swing.Box.createHorizontalStrut(8));
+            row.add(fromBf);
+            fromBf.addActionListener(e -> readBetaflight());
             fwFile.addActionListener(e -> firmwareFromFile());
             fwNewest.addActionListener(e -> firmwareNewest());
             fwFile.setEnabled(state.found != null);
@@ -172,6 +179,38 @@ final class ArduSetupPages {
                     result.setText(failure == null ? "Not found." : failure);
                     result.setForeground(Theme.WARN);
                 }
+            });
+        }
+
+        private void readBetaflight() {
+            if (flashing) return;
+            fromBf.setEnabled(false);
+            say("Reading the Betaflight board ...");
+            background(() -> {
+                try {
+                    java.util.List<de.droiddrone.pc.setup.BetaflightUsb.Port> ports = de.droiddrone.pc.setup.BetaflightUsb.findFlightControllers();
+                    if (ports.isEmpty()) return "No board on USB.";
+                    de.droiddrone.pc.setup.BetaflightUsb bf = de.droiddrone.pc.setup.BetaflightUsb.open(ports.get(0));
+                    try {
+                        state.carried = de.droiddrone.pc.setup.ardu.FromBetaflight.read(bf);
+                    } finally {
+                        bf.close();
+                    }
+                    return null;
+                } catch (Exception e) {
+                    return "Betaflight: " + e.getMessage();
+                }
+            }, failure -> {
+                fromBf.setEnabled(true);
+                de.droiddrone.pc.setup.ardu.FromBetaflight.Carried c = state.carried;
+                if (failure != null || c == null) {
+                    result.setText(failure == null ? "Nothing read." : failure);
+                    result.setForeground(Theme.WARN);
+                    return;
+                }
+                result.setText("<html>From Betaflight: " + c.summary() + (c.notes().isEmpty() ? "" : "<br>" + String.join("<br>", c.notes())) + "</html>");
+                result.setForeground(Theme.OK);
+                log("ArduPilot setup: from Betaflight " + c.summary());
             });
         }
 
@@ -282,6 +321,7 @@ final class ArduSetupPages {
         private final JButton confirm = Theme.primaryButton("CONFIRM");
         private List<ArduPlan.Change> changes = List.of();
         private boolean written;
+        private boolean seeded;
 
         SettingsPage(State state) {
             this.state = state;
@@ -324,12 +364,22 @@ final class ArduSetupPages {
         }
 
         ArduPlan.Choices choices() {
-            return new ArduPlan.Choices((Integer) sysId.getValue(), (Integer) cells.getValue(), (Integer) capacity.getValue(), 1, 2,
+            ArduPlan.Choices c = new ArduPlan.Choices((Integer) sysId.getValue(), (Integer) cells.getValue(), (Integer) capacity.getValue(), 1, 2,
                     ArduPlan.DEFAULT_MODES.clone(), (Integer) rtlAlt.getValue(), 10, 2.5, 1.5, true);
+            de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
+            // the switches from Betaflight; cells and pack went into the boxes (and can be changed there)
+            return bf == null ? c : new ArduPlan.Choices(c.sysId(), c.cells(), c.capacityMah(), bf.armAux() != null ? bf.armAux() : c.armAux(),
+                    bf.modeAux() != null ? bf.modeAux() : c.modeAux(), c.flightModes(), c.rtlAltM(), c.cruiseMs(), c.climbMs(), c.descentMs(), c.avoidance());
         }
 
         @Override
         void onShow() {
+            de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
+            if (bf != null && !seeded) { // fleet AS-11: once, then the pilot's
+                seeded = true;
+                if (bf.cells() != null) cells.setValue(Math.max(1, Math.min(14, bf.cells())));
+                if (bf.capacityMah() != null) capacity.setValue(Math.max(300, Math.min(50_000, bf.capacityMah() / 100 * 100)));
+            }
             MavSession fc = state.fc();
             if (fc == null) return;
             plan.setText("Reading its parameters ...\n");
@@ -350,7 +400,8 @@ final class ArduSetupPages {
             Map<String, Float> now = state.params;
             if (now == null) return;
             Float id = now.get("SYSID_THISMAV");
-            changes = ArduPlan.plan(choices(), now);
+            de.droiddrone.pc.setup.ardu.FromBetaflight.Carried bf = state.carried;
+            changes = ArduPlan.plan(choices(), bf == null ? Map.of() : bf.extra(), now);
             plan.setText("");
             List<String> lines = ArduPlan.lines(changes);
             if (lines.isEmpty()) append(plan, "Nothing to change.");
