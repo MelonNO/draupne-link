@@ -124,7 +124,10 @@ Nothing in this chapter has flown yet. Try each part on the bench, props off, be
 **Follow group and DISCARD LEAD**
 - Fly the lead. Right-click others: **FOLLOW GROUP: add**, then **start**. They keep a block near the lead and don't
   move while you circle near it. They catch up when you fly away.
-- Floor: right-click a drone, **Floor +5 m / -5 m** (40 m to start, never under 10 m; over 120 m you get a warning).
+- Floor: **- / +** on the group's map label (5 m), or click its figure to type one (40 m to start, never under 10 m;
+  over 120 m you get a warning). The right-click menu has it too.
+- Before the start: right-click, **GROUP DESIGN...** - cell size, layers, keep-out, leash, floor, ceiling. It says what
+  doesn't fit and won't take it.
 - **DISCARD LEAD** (radio switch, AUX5): the bottom drone with the least battery drops out under the group and becomes
   the lead. You get its sticks and video. The old lead holds where it is.
 - Lead silent 30 s: the same happens by itself. Lead landed: the group holds and the OSD says **LEAD DOWN**.
@@ -137,6 +140,8 @@ Nothing in this chapter has flown yet. Try each part on the bench, props off, be
 - Before the motors start its phone checks it is level, where it was marked, not moved and healthy, then beeps 2 s.
 - The climb is watched on the phone: tipping, a hit, no climb or drifting stops the motors at once (**LAUNCH FAILED**)
   and the next reserve is called. A small view of its camera shows in your corner until it is above the floor.
+- Each drone sent out (dispatch, reserve, a route's GO) first gets its own landing spot for RTL: where it took off,
+  or the nearest spot 20 m from the others. It goes on the drone before take-off; if it can't in 10 s, you are told.
 - Only a marked drone ever starts by itself, and only when you call. One moved or tipped since it was marked won't
   start (**MOVED**, **TIPPED**). One OUT OF ACTION is never called.
 
