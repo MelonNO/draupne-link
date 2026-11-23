@@ -44,32 +44,59 @@ public final class ArduLogs {
     private ArduLogs() {
     }
 
-    /** Every log the FC has (an empty list when it has none). */
+    /** A list entry's answer is waited for this long after the last one before the missing are asked for again. */
+    static final long LIST_QUIET_MS = 700;
+
+    /**
+     * Every log the FC has (an empty list when it has none), in id order. Entries lost on the way (a busy link drops some
+     * of ArduPilot's burst) are asked for again one by one (LOG_REQUEST_LIST start = end = id) until all are in or the
+     * time is up - before, the list came back short after the whole wait, and a lost log could not be downloaded.
+     */
     public static List<Entry> list(MavSession fc, long timeoutMs) throws IOException, InterruptedException {
-        List<Entry> out = new ArrayList<>();
-        int[] total = {-1};
+        java.util.Map<Integer, Entry> out = new java.util.TreeMap<>();
+        int[] total = {-1}, last = {-1};
+        long[] heard = {0};
         Object got = new Object();
         Consumer<MAVLinkPacket> l = p -> {
             if (p.msgid != msg_log_entry.MAVLINK_MSG_ID_LOG_ENTRY) return;
             msg_log_entry e = new msg_log_entry(p);
             synchronized (got) {
                 total[0] = e.num_logs;
-                if (e.num_logs > 0 && out.stream().noneMatch(x -> x.id() == e.id)) out.add(new Entry(e.id, e.size, e.time_utc));
+                last[0] = e.last_log_num;
+                heard[0] = System.currentTimeMillis();
+                if (e.num_logs > 0) out.putIfAbsent(e.id, new Entry(e.id, e.size, e.time_utc));
                 got.notifyAll();
             }
         };
         fc.onPacket(l);
         try {
-            fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
             long end = System.currentTimeMillis() + timeoutMs;
-            synchronized (got) {
-                while (total[0] < 0 || out.size() < total[0]) {
-                    long left = end - System.currentTimeMillis();
-                    if (left <= 0) break;
-                    got.wait(left);
+            fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+            long asked = System.currentTimeMillis();
+            while (true) {
+                List<Integer> missing = new ArrayList<>();
+                synchronized (got) {
+                    // a burst under way: let it come while entries keep arriving
+                    while (System.currentTimeMillis() < end && (total[0] < 0 || out.size() < total[0])
+                            && System.currentTimeMillis() - Math.max(heard[0], asked) < LIST_QUIET_MS) got.wait(100);
+                    if (total[0] >= 0 && out.size() >= total[0]) return new ArrayList<>(out.values());
+                    if (System.currentTimeMillis() >= end) {
+                        if (total[0] < 0) throw new IOException("no answer to the log list");
+                        return new ArrayList<>(out.values()); // what came; the rest didn't, asked as it was
+                    }
+                    if (total[0] >= 0) {
+                        int top = last[0] > 0 ? last[0] : total[0];
+                        for (int id = Math.max(1, top - total[0] + 1); id <= top; id++) if (!out.containsKey(id)) missing.add(id);
+                    }
                 }
-                if (total[0] < 0) throw new IOException("no answer to the log list");
-                return new ArrayList<>(out);
+                if (missing.isEmpty()) { // nothing at all yet: the whole list again
+                    fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+                } else {
+                    for (int id : missing) {
+                        fc.send(new msg_log_request_list(id, id, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+                    }
+                }
+                asked = System.currentTimeMillis();
             }
         } finally {
             fc.removePacketListener(l);

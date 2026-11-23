@@ -39,6 +39,10 @@ public final class FakeArduPilot implements MavSession.Wire {
     public volatile int armAfterSets = -1;
     /** Never answers a log's data (a link that drops everything). */
     public volatile boolean silentLogData;
+    /** Log list entries lost the first time they are sent (asked again, they come). */
+    public final java.util.Set<Integer> dropEntriesOnce = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Each LOG_REQUEST_LIST as "start-end". */
+    public final java.util.List<String> listAsks = new java.util.concurrent.CopyOnWriteArrayList<>();
     /** The whole list was asked for from Swing's thread (a frozen window while it comes). */
     public volatile boolean listAskedOnSwing;
     /** PARAM_SETs so far. */
@@ -171,9 +175,14 @@ public final class FakeArduPilot implements MavSession.Wire {
                 }
             }
             case com.MAVLink.common.msg_log_request_list.MAVLINK_MSG_ID_LOG_REQUEST_LIST -> {
+                com.MAVLink.common.msg_log_request_list r = new com.MAVLink.common.msg_log_request_list(p);
+                listAsks.add(r.start + "-" + r.end);
                 if (logs.isEmpty()) emit(new com.MAVLink.common.msg_log_entry(0, 0, 0, 0, 0, sysId, 1, true).pack());
                 for (int i = 0; i < logs.size(); i++) {
-                    emit(new com.MAVLink.common.msg_log_entry(1_800_000_000L + i * 600, logs.get(i).length, i + 1, logs.size(), logs.size(), sysId, 1, true).pack());
+                    int id = i + 1;
+                    if (id < r.start || id > r.end) continue;
+                    if (dropEntriesOnce.remove(id)) continue; // lost on the way, this once
+                    emit(new com.MAVLink.common.msg_log_entry(1_800_000_000L + i * 600, logs.get(i).length, id, logs.size(), logs.size(), sysId, 1, true).pack());
                 }
             }
             case com.MAVLink.common.msg_log_request_data.MAVLINK_MSG_ID_LOG_REQUEST_DATA -> {
