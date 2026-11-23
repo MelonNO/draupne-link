@@ -1444,6 +1444,16 @@ public class Udp {
         }
     }
 
+    /** Fleet: a datagram to the fleet commander (the launch's status), if one is known. */
+    void sendToCommander(byte[] data) {
+        sendTo(data, fleet.commander());
+    }
+
+    android.content.Context context() {
+        DDService service = DDService.instance();
+        return service == null ? null : service.getApplicationContext();
+    }
+
     /** The pilot session's PC, or null. */
     java.net.InetSocketAddress pilotAddress() {
         UdpSender s = udpSender;

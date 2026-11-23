@@ -86,7 +86,7 @@ final class ArduLinkLoss {
         boolean inSession = u.inSession();
         if (inSession) Udp.fleet.pilotWas(u.pilotAddress(), now);
         Udp.fleet.tick(u, mavlink, now, inSession);
-        if (Udp.fleet.isFollower() && !inSession) return;
+        if ((Udp.fleet.isFollower() || Udp.fleet.launch.underWay()) && !inSession) return; // their own rules
         int action = rule.tick(now, u.pcHeardAt(), mavlink.armedNow(now), mavlink.customModeNow(), mavlink.gnssOk(), lead);
         if (action != ArduLinkLossRule.NONE) {
             log("The PC is silent: " + ArduLinkLossRule.name(action) + (lead ? " (lead)" : ""));

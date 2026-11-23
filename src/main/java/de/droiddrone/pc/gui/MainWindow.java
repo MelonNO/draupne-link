@@ -192,6 +192,33 @@ public class MainWindow extends JFrame {
         public void flyNow(String phone) {
             if (!connectedTo(phone)) connectFromMap(phone, false);
         }
+
+        @Override
+        public void wake(String phone) {
+            fleetRequest(phone, de.droiddrone.pc.ControlLink.POWER_NORMAL, 0, getRootPane());
+        }
+
+        @Override
+        public long checkInWaitMs(String phone) {
+            if (fleets == null) return -1;
+            for (FleetCards.Card c : fleets.cards()) {
+                if (!c.name().equalsIgnoreCase(phone)) continue;
+                if (c.nextCheckMs() == FleetCards.LISTENING) return 0;
+                return c.nextCheckMs() >= 0 ? c.nextCheckMs() : c.heardAgoMs() >= 0 && c.heardAgoMs() < 30_000 ? 0 : -1;
+            }
+            return -1;
+        }
+
+        @Override
+        public boolean confirm(String question) {
+            return javax.swing.JOptionPane.showConfirmDialog(MainWindow.this, question, "SAFE TO AUTOLAUNCH",
+                    javax.swing.JOptionPane.YES_NO_OPTION) == javax.swing.JOptionPane.YES_OPTION;
+        }
+
+        @Override
+        public boolean outOfAction(String phone) {
+            return isOutOfAction(phone);
+        }
     });
 
     /** Fleet: the FOLLOW GROUP items of the right-click menus (FLEET rows, the map's drones). */
@@ -5482,6 +5509,7 @@ public class MainWindow extends JFrame {
         if (fleets != null) fleets.refresh();
         MapWindow mw = mapWindowIfOpen(); // fleet G4: the follower group on the map
         if (mw != null) mw.setGroup(fleetOps.picture());
+        fleetOps.tickReserves(); // fleet area F: calls waiting for a column, orders sent again until answered
     }
 
     /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */

@@ -47,20 +47,21 @@ class FleetOpsTest {
     void followersAreAddedThenTheGroupStarts() {
         List<String> log = new ArrayList<>();
         FleetOps f = ops("MobileAlpha", log);
-        assertEquals(List.of(), texts(f.items("MobileAlpha")), "the lead itself: nothing to add");
+        assertEquals(List.of(), texts(f.items("MobileAlpha")), "the lead itself: nothing");
         List<JMenuItem> items = f.items("MobileBravo");
-        assertEquals(List.of("FOLLOW GROUP: add MobileBravo"), texts(items));
-        items.get(0).doClick();
-        assertEquals(List.of("FOLLOW GROUP: leave out MobileBravo", "FOLLOW GROUP: start (1 follow MobileAlpha)"), texts(f.items("MobileBravo")));
-        assertEquals(List.of(), texts(ops(null, log).items("MobileBravo")), "no ArduPilot drone flown: no group");
+        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo", "FOLLOW GROUP: add MobileBravo"), texts(items));
+        items.get(1).doClick();
+        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo", "FOLLOW GROUP: leave out MobileBravo", "FOLLOW GROUP: start (1 follow MobileAlpha)"),
+                texts(f.items("MobileBravo")));
+        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo"), texts(ops(null, log).items("MobileBravo")), "no ArduPilot drone flown: no group");
     }
 
     @Test
     void startingWithoutAddressesSaysWhy() {
         List<String> log = new ArrayList<>();
         FleetOps f = ops("MobileAlpha", log);
-        f.items("MobileBravo").get(0).doClick();
         f.items("MobileBravo").get(1).doClick();
+        f.items("MobileBravo").get(2).doClick();
         assertTrue(log.stream().anyMatch(l -> l.contains("isn't reachable")), log.toString());
         f.close();
     }

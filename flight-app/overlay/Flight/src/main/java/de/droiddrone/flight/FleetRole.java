@@ -139,6 +139,12 @@ final class FleetRole {
                 brain = null;
                 lastIntent = FleetIntent.NOTHING;
                 break;
+            case FleetCmd.MARK: // fleet AL-1: SAFE TO AUTOLAUNCH (only on the ground: LaunchRunner checks)
+                launch.mark(udp, m, c.data, c.at, c.length);
+                break;
+            case FleetCmd.LAUNCH: // fleet AL-5 - AL-8: the pilot's call
+                if (!inSession) launch.order(udp, m, c.data, c.at, c.length);
+                break;
             case FleetCmd.TRACK:
                 if (c.length >= 2) reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 break;
@@ -148,8 +154,16 @@ final class FleetRole {
         return true;
     }
 
+    /** Fleet area F: this phone's own safe autolaunch. */
+    final LaunchRunner launch = new LaunchRunner();
+
+    InetSocketAddress commander() {
+        return commander;
+    }
+
     /** The phone's 10 Hz ArduPilot thread. */
     void tick(Udp udp, Mavlink m, long now, boolean inSession) {
+        launch.tick(udp, m, now);
         if (now < reportUntil && now - reportedAt >= REPORT_EVERY_MS) {
             reportedAt = now;
             InetSocketAddress to = commander;

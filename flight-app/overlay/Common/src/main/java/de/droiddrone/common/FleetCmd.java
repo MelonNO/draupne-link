@@ -30,6 +30,18 @@ package de.droiddrone.common;
 public final class FleetCmd {
     public static final byte PACKET = 0x34;
     public static final byte GROUP = 0x35, EXIT = 0x36, LAUNCH = 0x37, TRACK = 0x39, LEAD = 0x3A, CLEAR = 0x3B, DISBAND = 0x3C;
+    /**
+     * Fleet AL-1: SAFE TO AUTOLAUNCH [0x3D][mark id i32][the floor dm u16] - the phone marks where it is and which way it
+     * points; mark id 0 clears it.
+     */
+    public static final byte MARK = 0x3D;
+    /** The launch's status, phone to commander: [0x3E][LaunchWire status]. Not a FleetCmd: a datagram of its own. */
+    public static final byte LAUNCH_STATUS = 0x3E;
+
+    public static byte[] mark(int id, double floorM) {
+        int dm = (int) Math.max(0, Math.min(65535, Math.round(floorM * 10)));
+        return new byte[]{MARK, (byte) (id >>> 24), (byte) (id >>> 16), (byte) (id >>> 8), (byte) id, (byte) (dm >>> 8), (byte) dm};
+    }
 
     public final String key;
     /** The inner packet: its bytes from {@link #at}, {@link #length} long; data[at] is its id. */

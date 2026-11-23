@@ -35,6 +35,10 @@ public final class GroupLink implements AutoCloseable {
 
         /** A new lead: the pilot's sticks go to it (DISCARD LEAD, or the lead silent 30 s). */
         void newLead(String drone);
+
+        /** Fleet area F: a reserve's launch status (LaunchWire), from its phone. */
+        default void launchStatus(String drone, de.droiddrone.common.launch.LaunchWire.Status s) {
+        }
     }
 
     private final DatagramSocket socket;
@@ -255,6 +259,11 @@ public final class GroupLink implements AutoCloseable {
 
     // ------------------------------------------------------------------ the wire
 
+    /** A fleet command to one drone (its phone must be known: phone()). */
+    public void command(String drone, byte[] inner) {
+        send(drone, inner);
+    }
+
     void send(String drone, byte[] inner) {
         InetSocketAddress to = phones.get(drone);
         if (to == null || !open) return;
@@ -276,10 +285,15 @@ public final class GroupLink implements AutoCloseable {
                 if (!open) return;
                 continue;
             }
-            FleetStatus s = FleetStatus.decode(p.getData(), p.getLength());
-            if (s == null) continue;
             String drone = byAddress.get(new InetSocketAddress(p.getAddress(), p.getPort()));
             if (drone == null) continue; // a phone this group doesn't know
+            if (p.getLength() > 1 && p.getData()[0] == FleetCmd.LAUNCH_STATUS) {
+                de.droiddrone.common.launch.LaunchWire.Status ls = de.droiddrone.common.launch.LaunchWire.decodeStatus(p.getData(), 1, p.getLength() - 1);
+                if (ls != null) listener.launchStatus(drone, ls);
+                continue;
+            }
+            FleetStatus s = FleetStatus.decode(p.getData(), p.getLength());
+            if (s == null) continue;
             last.put(drone, s);
             heardAt.put(drone, System.currentTimeMillis());
         }

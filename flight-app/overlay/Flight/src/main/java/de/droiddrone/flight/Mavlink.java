@@ -549,6 +549,68 @@ public class Mavlink {
                 config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
 
+    // ---- fleet area F: what the launch reads and does
+
+    private volatile double rollNow = Double.NaN, pitchNow = Double.NaN, yawNow = Double.NaN, relAltM = Double.NaN;
+    private volatile long sensorsPresent, sensorsHealth;
+    /** MAV_SYS_STATUS_SENSOR bits: gyro, accelerometer, magnetometer. */
+    static final long SENSOR_GYRO = 1, SENSOR_ACCEL = 2, SENSOR_MAG = 4;
+    static final int MAV_CMD_ARM_DISARM = 400, MAV_CMD_NAV_TAKEOFF = 22;
+    /** COMPONENT_ARM_DISARM's param2 that disarms whatever the FC thinks (FA16: motors off at once, always). */
+    static final float FORCE_DISARM = 21196f;
+
+    double rollDeg() {
+        return rollNow;
+    }
+
+    double pitchDeg() {
+        return pitchNow;
+    }
+
+    double headingDeg() {
+        return yawNow;
+    }
+
+    double heightAboveTakeoffM() {
+        return relAltM;
+    }
+
+    double velUp() {
+        return velU;
+    }
+
+    int throttlePercent() {
+        return throttle;
+    }
+
+    /** The IMU (gyro and accelerometer) present and healthy (SYS_STATUS). */
+    boolean imuHealthy() {
+        long need = SENSOR_GYRO | SENSOR_ACCEL;
+        return (sensorsPresent & need) == need && (sensorsHealth & need) == need;
+    }
+
+    /** A compass: present and healthy, or none at all (counted healthy: the GPS puck's is the drone's, D3). */
+    boolean compassHealthy() {
+        return (sensorsPresent & SENSOR_MAG) == 0 || (sensorsHealth & SENSOR_MAG) != 0;
+    }
+
+    /** Fleet AL-12: arm - only the launch sequence asks it, after its checks. */
+    void arm() {
+        commandLong(MAV_CMD_ARM_DISARM, 1, 0);
+    }
+
+    /** Fleet FA16: motors off at once, whatever the FC thinks. */
+    void forceDisarm() {
+        commandLong(MAV_CMD_ARM_DISARM, 0, FORCE_DISARM);
+    }
+
+    /** Fleet AL-8: straight up to heightM above the take-off point (GUIDED). */
+    void takeoff(double heightM) {
+        awaitingAck.add(MAV_CMD_NAV_TAKEOFF);
+        send(new msg_command_long(0, 0, 0, 0, 0, 0, (float) heightM, MAV_CMD_NAV_TAKEOFF, targetSys(), targetComponent,
+                (short) 0, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+    }
+
     // ---- fleet RT-8: a route from the PC (MissionBlock), uploaded and read back over USB here
 
     private volatile de.droiddrone.common.MissionUpload upload;
@@ -809,6 +871,9 @@ public class Mavlink {
                     case msg_attitude.MAVLINK_MSG_ID_ATTITUDE: {
                         msg_attitude message = new msg_attitude(packet);
                         lastAttitudeTs = System.currentTimeMillis();
+                        rollNow = Math.toDegrees(message.roll); // DRAUPNE Link (fleet): the launch's checks (AL-13, AL-14)
+                        pitchNow = Math.toDegrees(message.pitch);
+                        yawNow = (Math.toDegrees(message.yaw) + 360) % 360;
                         DataWriter buffer = new DataWriter(true);
                         buffer.writeShort((short) (Math.toDegrees(message.roll) * 10));
                         buffer.writeShort((short) (Math.toDegrees(message.pitch) * -10));
@@ -831,6 +896,8 @@ public class Mavlink {
                         msg_sys_status message = new msg_sys_status(packet);
                         lastSysStatusTs = System.currentTimeMillis();
                         batteryPercent = message.battery_remaining < 0 ? 255 : message.battery_remaining; // DRAUPNE Link (fleet)
+                        sensorsPresent = message.onboard_control_sensors_present;
+                        sensorsHealth = message.onboard_control_sensors_health;
                         DataWriter buffer = new DataWriter(true);
                         if (message.voltage_battery != Utils.UINT16_MAX) {
                             int cellCountDetected = Math.round(message.voltage_battery / 4100f);
@@ -875,6 +942,7 @@ public class Mavlink {
                         lastGlobalPositionIntTs = System.currentTimeMillis();
                         latExact = message.lat / 1e7; // DRAUPNE Link (fleet): doubles - a float is half a metre off here
                         lonExact = message.lon / 1e7;
+                        relAltM = message.relative_alt / 1000.0;
                         altAmslM = message.alt / 1000.0; // DRAUPNE Link (fleet): for the PC's fleet report
                         velN = message.vx / 100.0;
                         velE = message.vy / 100.0;

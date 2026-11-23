@@ -97,6 +97,13 @@ public final class VirtualFleetPhone implements AutoCloseable {
                     FollowerBrain b = brain;
                     if (plan != null && b != null) b.plan(plan);
                 }
+                case FleetCmd.MARK -> launchMark(c.data, c.at, c.length, now);
+                case FleetCmd.LAUNCH -> {
+                    de.droiddrone.common.launch.LaunchWire.Order o = de.droiddrone.common.launch.LaunchWire.decodeOrder(c.data, c.at + 1, c.length - 1);
+                    if (o != null) synchronized (copter) {
+                        act(seq.order(o, now));
+                    }
+                }
                 case FleetCmd.DISBAND -> brain = null;
                 case FleetCmd.TRACK -> reportUntil = now + (c.data[c.at + 1] & 0xff) * 1000L;
                 default -> {
@@ -115,6 +122,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             }
             long now = System.currentTimeMillis();
             synchronized (copter) {
+                launchTick(now);
                 FollowerBrain b = brain;
                 if (b != null && now - lastBrain >= 100) {
                     lastBrain = now;
@@ -156,6 +164,110 @@ public final class VirtualFleetPhone implements AutoCloseable {
             socket.send(new DatagramPacket(d, d.length, to.getAddress(), to.getPort()));
         } catch (IOException ignored) {
             // the next report
+        }
+    }
+
+    // ---- fleet area F: the safe autolaunch as the phone runs it (LaunchSequence, the shared rules)
+
+    private final de.droiddrone.common.launch.PreArmCheck check = new de.droiddrone.common.launch.PreArmCheck(0);
+    private final de.droiddrone.common.launch.LaunchSequence seq = new de.droiddrone.common.launch.LaunchSequence(check);
+    /** Every ARM this phone gave, with whether it held a mark then (the AL-12 invariant, for the tests). */
+    public final java.util.List<String> arms = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /** On the ground, disarmed: a reserve (call before the PC marks it). */
+    public void landed() {
+        synchronized (copter) {
+            copter.u = groundAmsl;
+            copter.landed = true;
+            armed = false;
+        }
+    }
+
+    /** As an FC says it: armed from the arming on, on the ground too. */
+    public boolean armed() {
+        return armed;
+    }
+
+    public int launchState() {
+        return seq.state();
+    }
+
+    public String launchReason() {
+        return de.droiddrone.common.launch.LaunchSequence.reasonWord(seq.reason());
+    }
+
+    private void launchMark(byte[] d, int at, int len, long now) {
+        if (len < 7) return;
+        int id = (d[at + 1] & 0xff) << 24 | (d[at + 2] & 0xff) << 16 | (d[at + 3] & 0xff) << 8 | (d[at + 4] & 0xff);
+        double floor = ((d[at + 5] & 0xff) << 8 | (d[at + 6] & 0xff)) / 10.0;
+        synchronized (copter) {
+            if (id == 0) {
+                seq.setMark(null);
+                return;
+            }
+            if (armed()) return;
+            double[] ll = latLon();
+            seq.setMark(new de.droiddrone.common.launch.LaunchMark(id, ll[0], ll[1], 0, now, floor));
+        }
+    }
+
+    private void launchTick(long now) {
+        if (seq.state() == de.droiddrone.common.launch.LaunchSequence.IDLE) return;
+        check.motion(now, 1.0, 0.0); // at rest on the ground, or flying smoothly
+        de.droiddrone.common.launch.PreArmCheck.Reading r = new de.droiddrone.common.launch.PreArmCheck.Reading();
+        double[] ll = latLon();
+        r.rollDeg = 0;
+        r.pitchDeg = 0;
+        r.headingDeg = 0;
+        r.lat = ll[0];
+        r.lon = ll[1];
+        r.gpsFix3d = copter.gnssOk;
+        r.batteryPercent = (int) Math.round(copter.battery);
+        r.imuHealthy = r.compassHealthy = r.fcHealthy = true;
+        de.droiddrone.common.launch.ClimbWatchdog.Sample s = null;
+        if (seq.state() == de.droiddrone.common.launch.LaunchSequence.CLIMBING) {
+            s = new de.droiddrone.common.launch.ClimbWatchdog.Sample();
+            s.atMs = now;
+            s.tiltDeg = 2;
+            s.accelG = 1.0;
+            s.climbMps = copter.vu;
+            s.throttlePercent = 55;
+            de.droiddrone.common.launch.LaunchMark m = seq.mark();
+            s.driftM = m == null ? 0 : GeoLocal.distance(m.lat, m.lon, ll[0], ll[1]);
+            s.heightM = copter.u - groundAmsl;
+        }
+        seq.fcReady(true);
+        act(seq.tick(now, r, armed(), s));
+    }
+
+    private void act(java.util.List<de.droiddrone.common.launch.LaunchIntent> todo) {
+        for (de.droiddrone.common.launch.LaunchIntent i : todo) {
+            switch (i.type) {
+                case de.droiddrone.common.launch.LaunchIntent.ARM -> {
+                    arms.add(copter.id + (seq.mark() != null || seq.order() != null ? " marked" : " UNMARKED"));
+                    armed = true;
+                }
+                case de.droiddrone.common.launch.LaunchIntent.TAKEOFF -> copter.climbTo(groundAmsl + i.heightM);
+                case de.droiddrone.common.launch.LaunchIntent.MOTORS_OFF -> {
+                    armed = false;
+                    copter.landed = true;
+                }
+                case de.droiddrone.common.launch.LaunchIntent.REPORT -> {
+                    InetSocketAddress to = commander;
+                    if (to == null || !linkUp) break;
+                    byte[] st = de.droiddrone.common.launch.LaunchWire.encode(i.status);
+                    byte[] p = new byte[1 + st.length];
+                    p[0] = FleetCmd.LAUNCH_STATUS;
+                    System.arraycopy(st, 0, p, 1, st.length);
+                    try {
+                        socket.send(new DatagramPacket(p, p.length, to.getAddress(), to.getPort()));
+                    } catch (IOException ignored) {
+                        // the next report
+                    }
+                }
+                default -> {
+                }
+            }
         }
     }
 
