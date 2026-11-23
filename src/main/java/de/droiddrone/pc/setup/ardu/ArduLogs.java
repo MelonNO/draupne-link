@@ -165,15 +165,22 @@ public final class ArduLogs {
     public static List<Path> forFlight(Path dir, String drone, long startMs, long endMs) {
         List<Path> out = new ArrayList<>();
         if (dir == null || !Files.isDirectory(dir) || drone == null) return out;
-        String prefix = safe(drone) + " ";
+        String own = safe(drone) + " ";
+        java.util.Map<Path, Long> times = new java.util.HashMap<>();
         try (var files = Files.list(dir)) {
             for (Path f : (Iterable<Path>) files::iterator) {
                 String n = f.getFileName().toString();
-                if (!n.startsWith(prefix) || !n.toLowerCase(Locale.ROOT).endsWith(".bin")) continue;
+                // a log taken over USB on the bench doesn't know the phone's name ("USB COM7 ..."): it was saved
+                // "where PREVIOUS FLIGHTS finds it" and never found. Its own time (the drone's GPS) places it.
+                String prefix = n.startsWith(own) ? own : usbPrefix(n);
+                if (prefix == null || !n.toLowerCase(Locale.ROOT).endsWith(".bin")) continue;
                 try {
                     long t = java.time.LocalDateTime.parse(n.substring(prefix.length(), n.length() - 4), DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"))
                             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-                    if (t >= startMs - 600_000 && t <= (endMs <= 0 ? startMs : endMs) + 600_000) out.add(f);
+                    if (t >= startMs - 600_000 && t <= (endMs <= 0 ? startMs : endMs) + 600_000) {
+                        out.add(f);
+                        times.put(f, t);
+                    }
                 } catch (RuntimeException ignored) {
                     // not one of ours
                 }
@@ -181,8 +188,15 @@ public final class ArduLogs {
         } catch (IOException ignored) {
             // none then
         }
-        out.sort((a, b) -> b.getFileName().toString().compareTo(a.getFileName().toString()));
+        out.sort((a, b) -> Long.compare(times.get(b), times.get(a))); // newest first, whatever the name
         return out;
+    }
+
+    /** "USB COM7 " of a log taken over USB ("USB COM7 2026-11-23 10-00-00.bin"), else null. */
+    static String usbPrefix(String fileName) {
+        if (!fileName.startsWith("USB ")) return null;
+        int space = fileName.indexOf(' ', 4);
+        return space < 0 ? null : fileName.substring(0, space + 1);
     }
 
     private static String safe(String drone) {
