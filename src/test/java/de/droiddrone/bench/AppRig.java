@@ -136,6 +136,20 @@ public final class AppRig implements AutoCloseable {
             return this;
         }
 
+        private boolean throughWire;
+
+        /**
+         * A hardware run whose link goes through the bench's wire (R8, the bad-network box: bench/hw/HwLinkMatrixScenario):
+         * everything of {@link #hardware} - the fence's one way through, the radio's limits, the keeper's guard - but the
+         * bench's Tailscale answer has no phone in it and the settings no phone address, so the app finds the phone only
+         * as the scenario's wire announces it on this PC's loopback ({@code rig.fleet.announceExtra}; VIRTUAL in the
+         * PHONE list), and the wire alone speaks to the phone's address. Only with {@link #hardware}.
+         */
+        public Plan phoneThroughWire() {
+            throughWire = true;
+            return this;
+        }
+
         private Fence.Reach reach = Fence.Reach.none();
 
         /**
@@ -212,6 +226,10 @@ public final class AppRig implements AutoCloseable {
     private AppRig(Plan plan) throws Exception {
         name = plan.name;
         hardware = plan.hardware;
+        if (plan.throughWire && hardware == null) { // R8: the wire's way to the real phone is a hardware run's alone
+            throw new IllegalStateException("The scenario \"" + plan.name + "\" asks for its phone through the bench's wire (phoneThroughWire) and is no hardware run: "
+                    + "hardware(Hardware.load()) goes with it");
+        }
         if (hardware != null) hardwareMayStart(plan); // before anything is made, sealed or started
         if (hardware != null && !plan.reach.isEmpty()) { // one way through the fence a run: never two put together
             throw new IllegalStateException("The hardware run \"" + plan.name + "\" was handed a phone scenario's reach as well: it has its own (Hardware.reach)");
@@ -237,8 +255,9 @@ public final class AppRig implements AutoCloseable {
         web = new FakeWeb();
         doors = new BenchDoors(web);
         if (hardware != null) {
-            // the app finds phones by asking Tailscale who is on its network: the bench's door answers with the real phone
-            doors.tailscaleStatus(hardware.tailscaleStatus());
+            // the app finds phones by asking Tailscale who is on its network: the bench's door answers with the real phone -
+            // unless the scenario's wire stands between (R8): then this PC alone, and the wire announces the phone
+            if (!plan.throughWire) doors.tailscaleStatus(hardware.tailscaleStatus());
             // the made-up radio's hard limits, before the app can read it once: nothing arms until a scenario says handsOn()
             radio.armSwitch(hardware.armAux()).ceiling(Hardware.THROTTLE_CEILING).handsOff();
         }
@@ -267,7 +286,7 @@ public final class AppRig implements AutoCloseable {
                 s.put("axis" + axis + ".max", "1.0");
             }
             if (hardware != null) {
-                s.put("ip", hardware.phoneIp());
+                if (!plan.throughWire) s.put("ip", hardware.phoneIp()); // through the wire (R8) the PHONE list's choice says where
                 if (!hardware.phoneKey().isEmpty()) s.put("key", hardware.phoneKey());
             }
             s.putAll(plan.settings);
@@ -346,6 +365,10 @@ public final class AppRig implements AutoCloseable {
         if (hardware != null) {
             film.remark("HARDWARE RUN: " + hardware + ". The fence lets this app reach " + Fence.reach() + " and nothing else outside this PC. The radio: "
                     + radio.limits() + ".");
+            if (plan.throughWire) {
+                film.remark("The phone through the bench's wire: the made-up Tailscale names no phone, and the app finds it as the scenario's wire announces it "
+                        + "on this PC's loopback (VIRTUAL in the PHONE list); the wire alone speaks to the phone's address.");
+            }
             // >>> R3, the flight controller keeper: where a hardware rig starts, its guard starts
             if (hardware.hasKeeper()) {
                 guard = new HwGuard(hardware.keeperPort(), radio, new HwGuard.Eyes() {

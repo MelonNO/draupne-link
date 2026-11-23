@@ -653,6 +653,17 @@ class BenchSelfTest {
         assertEquals(home, System.getProperty("user.home"), "no user was made for it");
         assertEquals(windows, java.awt.Window.getWindows().length, "and no window");
         assertThrows(IllegalArgumentException.class, () -> AppRig.scenario("self-hardware-none").hardware(null));
+
+        // R8: the real phone through the bench's wire is a hardware run's way alone - asked of any other run, nothing is started
+        IllegalStateException wired = assertThrows(IllegalStateException.class, () -> AppRig.scenario("self-wire-alone").phoneThroughWire().start());
+        assertTrue(wired.getMessage().contains("no hardware run") && wired.getMessage().contains("phoneThroughWire"), wired.getMessage());
+        assertFalse(Fence.isUp(), "no fence went up");
+        assertEquals(home, System.getProperty("user.home"), "no user was made for it");
+        assertEquals(windows, java.awt.Window.getWindows().length, "and no window");
+        // and in one, it is still a hardware run's start: what is in its way is said first, and nothing is started
+        IllegalStateException both = assertThrows(IllegalStateException.class, () -> AppRig.scenario("self-wire-hardware").hardware(hw).phoneThroughWire().start());
+        assertTrue(both.getMessage().contains("no hardware task's JVM"), both.getMessage());
+        assertFalse(Fence.isUp());
     }
 
     /**

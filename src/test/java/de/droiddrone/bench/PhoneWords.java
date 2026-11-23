@@ -58,6 +58,9 @@ public final class PhoneWords {
     public static final String NEW_SESSION_SAME_PC = "a new session";
     /** The link socket closed, stuck or opened anew (F-039). */
     public static final String LINK_SOCKET = "Link socket:";
+    /** ... of those, the two that say it was closed, or that nothing left it though the PC was heard (a jammed socket), and it was opened anew. */
+    public static final String LINK_SOCKET_CLOSED = LINK_SOCKET + " was closed - ";
+    public static final String LINK_SOCKET_STUCK = LINK_SOCKET + " nothing left the phone for ";
     /** Q-006: the link socket parked, silent - the phone is not on Tailscale (never in the emulator's bench build) ... */
     public static final String NO_TAILSCALE = "no Tailscale - the phone answers nothing";
     /** ... or bound on its Tailscale address ... */
@@ -121,7 +124,7 @@ public final class PhoneWords {
             new Origin(LAST_ENDED_BY, MAIN + "MainActivity.java", "log(\"" + LAST_ENDED_BY + ": \" + ended);"),
             new Origin(NEW_SESSION, MAIN + "Udp.java", "log(\"" + NEW_SESSION + " \" + packet.getAddress().getHostAddress()"),
             new Origin(NEW_SESSION_SAME_PC, MAIN + "Udp.java", "log(\"The pilot connects again (its link was lost): " + NEW_SESSION_SAME_PC + "\");"),
-            new Origin(LINK_SOCKET, MAIN + "Udp.java", "\"" + LINK_SOCKET + " was closed - \"", "\"" + LINK_SOCKET + " nothing left the phone for \""),
+            new Origin(LINK_SOCKET, MAIN + "Udp.java", "\"" + LINK_SOCKET_CLOSED + "\"", "\"" + LINK_SOCKET_STUCK + "\""),
             new Origin(NO_TAILSCALE, MAIN + "Udp.java", "static final String NO_TAILSCALE = \"" + NO_TAILSCALE + "\";", "log(\"Link socket: \" + where(at));"),
             new Origin(ON_TAILSCALE, MAIN + "Udp.java", ": \"" + ON_TAILSCALE + "\" + at.address.getHostAddress() + \":\" + port;"),
             new Origin(LINK_NOT_BOUND, MAIN + "Udp.java", "\" " + LINK_NOT_BOUND + " (\" + e + \") - silent, tried again\""),

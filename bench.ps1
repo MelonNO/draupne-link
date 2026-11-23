@@ -12,6 +12,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 sitl                  Betaflight 4.4.1 itself, as a program in WSL (-Betaflight 4.5.5 / 2025.12.5 another)
   .\bench.ps1 report -Root <folder> the report of a run's folder written again
   .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
+  .\bench.ps1 hw -Tests *HwLinkMatrix* -Quick   the bad-network box on the real phone, a few cells only (-Quick: any suite's quick cut)
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.
@@ -36,7 +37,9 @@ param(
     # the emulator's Android device for this run (its folder under %LOCALAPPDATA%\DroidDroneBuild\avd); left out: draupne-bench
     [string]$Avd = '',
     # the Betaflight the sitl suite runs as a program (tools\sitl): 4.4.1 (the drone's), 4.5.5, 2025.12.5, 4.3.2
-    [string]$Betaflight = '4.4.1'
+    [string]$Betaflight = '4.4.1',
+    # a suite's scenarios with a quick cut of their own run only that (BENCH_QUICK): the bad-link tables' few cells
+    [switch]$Quick
 )
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
@@ -62,7 +65,7 @@ if ($javaRelease -and (Test-Path $javaRelease) -and ((Get-Content $javaRelease -
     if (-not $own) { $own = [Environment]::GetEnvironmentVariable('JAVA_HOME', 'Machine') }
     if ($own) { $env:JAVA_HOME = $own } else { throw "JAVA_HOME is a JDK older than 21 ($env:JAVA_HOME): start the bench in a new window." }
 }
-if ($Run -eq 'quick') { $env:BENCH_QUICK = 'true' } else { $env:BENCH_QUICK = 'false' }
+if ($Run -eq 'quick' -or $Quick) { $env:BENCH_QUICK = 'true' } else { $env:BENCH_QUICK = 'false' }
 if ($Scale) { $env:BENCH_SCALE = $Scale }   # Windows' text scaling for the app under test: 1, 1.25, 1.5, 2
 if ($Screen) { $env:BENCH_SIZE = $Screen }   # the app on a screen this small, e.g. 1093x584 (a 1366 x 768 laptop at 125 %): every scenario
 # everything started from here inherits it: a real drone's link on this PC goes first

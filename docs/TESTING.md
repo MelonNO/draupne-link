@@ -21,6 +21,7 @@ are not part of it.
 .\bench.ps1 report -Root <folder>  a run's report written again
 .\bench.ps1 sitl                   Betaflight 4.4.1 itself, as a program in WSL (-Betaflight 4.5.5 another version)
 .\bench.ps1 hw                     REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
+.\bench.ps1 hw -Tests *HwLinkMatrix* -Quick    the bad-network box on the real phone, two networks and two cuts (-Quick: a suite's quick cut)
 .\bench.ps1 phone                  REAL HARDWARE: the real phone itself
 ```
 
@@ -61,7 +62,7 @@ somebody removes their folders.
 | The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`). |
 | Betaflight | `sitl` | Betaflight 4.4.1 itself, as a program in WSL, set up as the drone is (see "Betaflight as a program"): a snapshot, settings changed, the restore - the board as the snapshot again; the keeper's lock, a window under the cap, its ends, END safe; the drone's own failsafe when the sticks stop, timed. About 6 min. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
-| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Two scenarios: the phone found, the link, the picture, STANDBY - nothing armed; and the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`). See "Real hardware", "The keeper". |
+| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Three scenarios: the phone found, the link, the picture, STANDBY - nothing armed; the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`); and the bad-network box - the bad-link table between the app and the real phone, the sticks counted at the board (`*HwLinkMatrix*`, about 25 min). See "Real hardware", "The keeper", "The bad-network box". |
 | Real hardware: the phone | `phone` | Never part of `quick` or `full`. The emulator's phone scenarios against this bench's one real phone on adb, with the bench build of the app: first start, the PC's link and the camera's picture through the bench's wire, a weak link, a cut, a link dead one way, the camera closed under a size change (a real camera here), the app ended by an error and killed asleep - asleep "on battery" though it is on a cable - and, with `-Tests *PhoneNight* -Hours 8`, the app left running for hours. Ends with `gradlew phoneReset`. See "Real hardware", "The phone run". |
 
 Beside what a scenario checks, every scenario fails on: an error nobody caught, the window not answering for more
@@ -307,6 +308,43 @@ that board is restarted: name the port when another one is plugged in (`bench.ps
   largest gap 52.5 ms, the 99th percentile 18.7 ms, the keeper's own share 0.76 ms at most. Ended locked, disarmed, at
   rest. Then `gradlew boardCap -Plimit=15`: 15 in all four profiles, saved, read back. The first arm window waits for
   a session with the battery in.
+
+### The bad-network box on the real phone (`HwLinkMatrixScenario`, R8)
+
+The bad-link table (`link/LinkMatrixScenario`, a made-up drone) between the real, sealed Windows app and the one real
+phone, with the sticks counted where they end: at the real board, through the keeper. Built 2026-11-23 and proved on
+the made-up pieces only (`gradlew test --tests *HwLinkMatrix*`); not yet run on the phone and the board.
+
+```
+.\bench.ps1 hw -Tests *HwLinkMatrix* -Quick     two networks (clean, one bar) and two cuts (1 s and 10 s both ways): about 5 min
+.\bench.ps1 hw -Tests *HwLinkMatrix*            the whole table: about 25 min, 30 with the armed part
+```
+
+- **The way.** A hardware run as ever (the fence's one way through, the radio's limits, the keeper's guard), with the
+  bench's wire between app and phone (`AppRig.Plan.phoneThroughWire`): the made-up Tailscale names no phone, the wire
+  announces it on this PC's loopback (VIRTUAL in the PHONE list), and the wire alone speaks to the phone's address. So
+  each bad network and each cut comes on top of what the real network does. The phone app is the bench build on the
+  phone, told to reach its board through the keeper as `BoardChainScenario` does.
+- **Steady cells** (9; the table's networks but doubled packets), the network bad from before PILOT UAV: LINK READY,
+  then 40 s of the stick frames at the board (frames a second, the largest gap, the 99th percentile), the picture, the
+  app's own link figures from its link log (LINK READY share, ping, telemetry gaps, frames a second), the board's own
+  word (RXLOSS, armed) - nothing armed; the network good again, LINK READY.
+- **Cut cells** (12: 1, 3, 10 and 60 s, both ways, PC to phone only, phone to PC only), on a good network: the link
+  back by itself and in how long, the picture back and in how long, the pilot's sticks at the board again and in how
+  long (by their rate: a disarmed board gets the phone's own idle sticks, 20 a second, 300 ms into a cut until the
+  phone counts the link lost), the largest stick gap at the board, RXLOSS and FAILSAFE as the board said them, the
+  phone's new sessions (F-001: two at most, one more for each 4 s it hears the PC unheard), the phone app's log for a
+  jammed socket (F-039: counted and said - what a real phone does is the open question), errors (said) and a crash
+  (failed).
+- **The armed part**, only with `board.mayArm=true`: after a cut cell's link part, one keeper window of 10 s
+  (throttle minimum, PREARM then ARM) and the same cut while armed (12 s at most), the board held to the rules: no
+  FAILSAFE for a cut shorter than its failsafe_delay; past the keeper's limit (or failsafe_delay where the failsafe is
+  let run) disarmed or FAILSAFE - on the real board the keeper ends the window on RXLOSS first; and no re-arm. The
+  scenario's own ARM off comes in the window's last 2 s at the latest. With `board.letFailsafeRun` only cuts up to 3 s
+  are armed for. Without `board.mayArm` the film says the armed part is skipped and the rows say "skipped".
+- **What it leaves:** `matrix\hw-steady.tsv` and `matrix\hw-cuts.tsv` in the run's folder (the report shows them),
+  each cell's phone log and the board's word look by look in `matrix\logs`, a check line in the film for each thing
+  held or not.
 
 ### The phone run (`.\bench.ps1 phone`)
 
