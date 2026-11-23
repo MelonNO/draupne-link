@@ -46,6 +46,8 @@ final class FleetRole {
     static final long SILENT_MS = de.droiddrone.common.ArduLinkLossRule.BRAKE_AFTER_MS;
 
     private volatile InetSocketAddress commander;
+    /** The commander's order, plan and traffic sequences: an older datagram is dropped (receive thread). */
+    private volatile de.droiddrone.common.group.OrderGates gates = new de.droiddrone.common.group.OrderGates();
     private volatile long commanderHeardAt, reportUntil, reportedAt;
     private volatile FollowerBrain brain;
     private FleetIntent lastIntent = FleetIntent.NOTHING;
@@ -88,7 +90,10 @@ final class FleetRole {
             return false;
         }
         refusedSaid = false;
-        if (v == FleetCommandGate.NEW_COMMANDER) log("Fleet commander now " + from.getAddress().getHostAddress());
+        if (v == FleetCommandGate.NEW_COMMANDER) {
+            log("Fleet commander now " + from.getAddress().getHostAddress());
+            gates = new de.droiddrone.common.group.OrderGates(); // another sender: its own sequences
+        }
         commander = from; // its port too: the reports go where the commands come from
         commanderHeardAt = now;
         reportUntil = now + REPORT_FOR_MS;
@@ -105,6 +110,7 @@ final class FleetRole {
             case FleetCmd.GROUP: {
                 GroupOrder o = GroupOrder.decode(c.data, c.at + 1);
                 if (o == null || inSession) break; // the piloted drone is never a follower (FL-7)
+                if (!gates.group.take(o.seq, now)) break; // older than the newest (a late one; also after DISBAND)
                 FollowerBrain b = brain;
                 if (b == null) {
                     b = new FollowerBrain(SILENT_MS);
@@ -112,12 +118,13 @@ final class FleetRole {
                     log("A follower now (group order from the PC)");
                 }
                 b.order(o, now);
+                if (m != null) launch.followerOrder(udp, m, o); // a reserve: the group has it - at the group, in transit, IN GROUP in its cell
                 break;
             }
             case FleetCmd.EXIT: {
                 ExitPlan p = ExitPlan.decode(c.data, c.at + 1);
                 FollowerBrain b = brain;
-                if (p != null && b != null) {
+                if (p != null && b != null && gates.exit.take(p.seq, now)) {
                     b.plan(p);
                     m.setRtlAltM(p.returnAltRelM); // its own way home's height, set now (AC-41) - the FC's RTL goes up there
                     m.rallyPoint(p.rallyLat, p.rallyLon, p.returnAltRelM); // AC-10: its RTL to its own rally point (only when it changed)
@@ -159,7 +166,10 @@ final class FleetRole {
                 if (!inSession) launch.order(udp, m, c.data, c.at, c.length);
                 break;
             case FleetCmd.TRAFFIC: // FD-8 / AC-11: the other drones to the FC as ADS-B targets (the lead's too)
-                m.adsbTraffic(de.droiddrone.common.group.Traffic.decode(c.data, c.at + 1, c.length - 1));
+                {
+                    de.droiddrone.common.group.Traffic t = de.droiddrone.common.group.Traffic.decode(c.data, c.at + 1, c.length - 1);
+                    if (t != null && gates.traffic.take(t.seq, now)) m.adsbTraffic(t); // never the other drones where they were
+                }
                 break;
             case FleetCmd.RETURN: { // RT-9 / FD-6: its RTL_ALT; the reports say what ArduPilot answered
                 double h = FleetCmd.readReturnHeight(c);
