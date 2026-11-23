@@ -789,7 +789,8 @@ final class FleetOps {
                 return;
             }
             String next = l.discardLead(System.currentTimeMillis());
-            if (next == null) host.alert("DISCARD LEAD: no follower in the bottom row to take over.");
+            if (next == null) host.alert(l.handingOver() ? "DISCARD LEAD: wait - the new lead is still leaving the group."
+                    : "DISCARD LEAD: no follower in the bottom row to take over.");
         });
     }
 

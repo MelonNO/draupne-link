@@ -399,7 +399,7 @@ public final class GroupController {
         // moves
         runMoves(now, reports, lead, others, events);
         for (Member m : members.values()) {
-            if (m.state == State.LEAVING && m.stage >= 0 && m.stage == m.stages.size()) {
+            if (m.state == State.LEAVING && (m.stage >= 0 && m.stage == m.stages.size() || leftByItself(m, reports.get(m.id), now))) {
                 m.state = State.GONE;
                 scheduler.releaseAll(m.id);
                 leadId = m.id;
@@ -408,6 +408,13 @@ public final class GroupController {
                 events.add("NEW LEAD " + m.id);
                 changed = true;
             }
+        }
+        if (leftLanded != null) { // the new lead came down before it had left (updateMembers)
+            leadId = leftLanded;
+            newLead = leftLanded;
+            leftLanded = null;
+            leaving = false;
+            changed = true;
         }
         if (!landMode && !leaving && (changed || lastOrderCheck < 0 || now - lastOrderCheck >= p.orderCheckMs())) orderCheck(now);
         // orders
@@ -422,6 +429,26 @@ public final class GroupController {
         }
         members.values().removeIf(m -> m.state == State.GONE && m.goneBy < 0);
         return new Out(orders, sent, events, leadRtlAltRel, newLead, clearOthers(now, others, events));
+    }
+
+    /** A new lead that landed before it had left the group (its hand-over ends at the next tick); null: none. */
+    private String leftLanded;
+
+    /**
+     * FL-6 / K12: the new lead is the pilot's from the moment of DISCARD LEAD - the pilot may fly it out any way, not
+     * along the abort exit's points. It has left once it is past the keep-out zone round the group's edge (where the
+     * abort exit ends), whatever way it went there; or once it has been silent as long as a lead may be (then the silent
+     * lead's take-over picks the next one, FL-5).
+     */
+    private boolean leftByItself(Member m, Report r, long now) {
+        if (r == null) return false;
+        if (now - r.heardAt() > p.leadSilentMs()) return true;
+        return cube.outsideEdge(r.pos().minus(centre)) >= p.keepOutM() + p.radiusM() - REACHED_H_M;
+    }
+
+    /** DISCARD LEAD's new lead is still on its way out of the group (no other hand-over until it is out). */
+    public boolean leaving() {
+        return leaving;
     }
 
     private void updateMembers(long now, Map<String, Report> reports, List<String> events) {
@@ -444,6 +471,7 @@ public final class GroupController {
                 m.errM = r.errM();
             }
             if (fresh && r.landed() && m.state != State.APPROACH) {
+                if (m.state == State.LEAVING) leftLanded = m.id; // a new lead landed on its way out: the hand-over is over
                 if (m.state != State.GONE) events.add("LANDED " + m.id);
                 scheduler.releaseAll(m.id);
                 m.state = State.GONE;

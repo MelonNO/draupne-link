@@ -215,6 +215,12 @@ public final class GroupLink implements AutoCloseable {
         return next;
     }
 
+    /** The last new lead is still on its way out of the group: DISCARD LEAD waits until it is out. */
+    public synchronized boolean handingOver() {
+        GroupController g = group;
+        return g != null && g.leaving();
+    }
+
     /** FL-9: the settings the next FOLLOW GROUP is formed with (the group designer's; the PRD's by default). */
     private volatile AirParams params = AirParams.defaults();
 
@@ -337,13 +343,16 @@ public final class GroupLink implements AutoCloseable {
         Map<String, GroupController.Report> reports = new HashMap<>();
         GroupController.Report leadReport = null;
         List<GroupController.Other> others = new ArrayList<>();
+        // the group's own lead: after DISCARD LEAD the old one until the new lead has left the group - the pilot flies the
+        // new one at once, but it is still a member on its way out and its reports are the member's (else it never left)
+        String groupLead = g.lead() != null ? g.lead() : lead;
         for (Map.Entry<String, FleetStatus> e : last.entrySet()) {
             FleetStatus s = e.getValue();
             long heard = heardAt.getOrDefault(e.getKey(), 0L);
             GroupController.Report r = new GroupController.Report(e.getKey(), local(s.lat, s.lon), s.altAmsl, new V2(s.velE, s.velN),
                     s.velU, s.battery == 255 ? Double.NaN : s.battery, s.has(FleetStatus.GNSS), s.errM, heard,
                     s.phase != 255, s.has(FleetStatus.LANDED), s.homeAmsl);
-            if (e.getKey().equals(lead)) leadReport = r;
+            if (e.getKey().equals(groupLead)) leadReport = r;
             else if (g.members().containsKey(e.getKey())) reports.put(e.getKey(), r);
             else others.add(new GroupController.Other(e.getKey(), r.pos(), r.altAmsl(), r.vel(), false));
         }
@@ -377,14 +386,24 @@ public final class GroupLink implements AutoCloseable {
             }
         }
         for (String ev : out.events()) listener.event(ev);
-        if (out.newLead() != null && !out.newLead().equals(lead)) { // the lead silent 30 s: taken over (FL-5)
-            String was = lead;
-            lead = out.newLead();
-            if (was != null) send(was, FleetCmd.lead(false, 0));
-            send(lead, FleetCmd.disband());
-            send(lead, FleetCmd.lead(true, out.leadRtlAltRelM()));
-            listener.newLead(lead);
-        }
+        // the lead silent 30 s: taken over (FL-5) - the pilot gets the new lead at once, as with DISCARD LEAD, while it
+        // leaves the group (before, only once it had flown the whole abort exit by itself)
+        for (String ev : out.events()) if (ev.startsWith(TAKEN_OVER)) handTo(ev.substring(TAKEN_OVER.length()), out.leadRtlAltRelM());
+        if (out.newLead() != null) handTo(out.newLead(), out.leadRtlAltRelM());
+    }
+
+    private static final String TAKEN_OVER = "LEAD TAKEN OVER ";
+
+    /** The pilot's lead is now this drone (unless it is already): the old one told, the new one's brain let go. */
+    private void handTo(String next, double rtlAltRelM) {
+        if (next.equals(lead)) return;
+        String was = lead;
+        lead = next;
+        if (was != null) send(was, FleetCmd.lead(false, 0));
+        send(next, FleetCmd.disband());
+        send(next, FleetCmd.lead(true, Double.isNaN(rtlAltRelM) || rtlAltRelM < 0 ? 0 : rtlAltRelM));
+        refreshView();
+        listener.newLead(next);
     }
 
     /**
