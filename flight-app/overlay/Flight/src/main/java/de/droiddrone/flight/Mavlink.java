@@ -565,7 +565,7 @@ public class Mavlink {
     /** MAV_FRAME_GLOBAL_INT: heights above sea level, as the PC plans them. */
     static final short FRAME_GLOBAL_INT = 5;
     /** SET_POSITION_TARGET's type mask: no acceleration, no yaw rate (and no yaw: +0x400). */
-    static final int MASK_POS_VEL = 0x1C0 | 0x800, MASK_NO_YAW = 0x400;
+    static final int MASK_POS_VEL = 0x1C0 | 0x800, MASK_NO_YAW = 0x400, MASK_NO_VEL = 0x38;
 
     /** The drone as its FC says, for the PC's fleet report (FleetStatus). */
     void fillStatus(de.droiddrone.common.FleetStatus s, long now) {
@@ -607,9 +607,12 @@ public class Mavlink {
      */
     void guidedTarget(double lat, double lon, double altAmsl, double yawDeg, double velEast, double velNorth) {
         if (customModeNow != COPTER_GUIDED) setMode(COPTER_GUIDED);
-        int mask = MASK_POS_VEL | (Double.isNaN(yawDeg) ? MASK_NO_YAW : 0);
+        // no velocity given (the exit lane, a step aside): position only. Before, NaN went out as the velocity with the
+        // velocity bits on - ArduPilot drops such a target: a cut-off follower never flew its exit plan (SitlFlowTest)
+        boolean noVel = Double.isNaN(velEast) || Double.isNaN(velNorth);
+        int mask = MASK_POS_VEL | (Double.isNaN(yawDeg) ? MASK_NO_YAW : 0) | (noVel ? MASK_NO_VEL : 0);
         send(new com.MAVLink.common.msg_set_position_target_global_int(0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7),
-                (float) altAmsl, (float) velNorth, (float) velEast, 0f, 0f, 0f, 0f, Double.isNaN(yawDeg) ? 0f : (float) Math.toRadians(yawDeg),
+                (float) altAmsl, noVel ? 0f : (float) velNorth, noVel ? 0f : (float) velEast, 0f, 0f, 0f, 0f, Double.isNaN(yawDeg) ? 0f : (float) Math.toRadians(yawDeg),
                 0f, mask, targetSys(), targetComponent, FRAME_GLOBAL_INT, config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
     }
 
