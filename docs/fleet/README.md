@@ -18,11 +18,11 @@ Work on [DRAUPNE Fleet & ArduPilot](PRD.md): ArduPilot as a second flight-contro
 
 | # | Phase | Gate | State |
 |---|---|---|---|
-| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gate not run (no SITL here) |
+| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gates 1 and 2 pass in ArduPilot SITL on the PC; F405 bench test not done |
 | 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | built; the ridge gate passes on made-up terrain |
-| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback |
+| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback, 3 SITL drones dispatched and held apart |
 | 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; random overlapping failures still lose separation (open); hand-over is a new session (1-2 s) |
-| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback; the AL-19 cases as unit tests |
+| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback and in SITL; the AL-19 cases as unit tests |
 | 6-9 | GNSS-denied (stage 2) | See the PRD | after stage 1 |
 
 Phases 2-4 need only phase 1; phase 5 needs phase 4. Each phase brings its own GUI, setup-guide, tour and docs
@@ -103,11 +103,33 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    group before all of them pass.**
 2. **Real ArduPilot:** every gate again in SITL (needs WSL), then the PRD's bench tests (F405, two real drones).
 3. **Hand-over speed (NFR, FL-6):** a new lead is a new pilot session, 1-2 s; the PRD wants sticks within 500 ms.
-4. **Not built yet:** the launch mini-view (AL-20/21) and the reserves' OSD list (AL-5), HOME NOW (FD-5), the
-   dispatch preview (FD-9), the other drones' pictures on demand (C3), ADS-B to the lead (FD-8), geofence (AP-9),
-   flight logs (AP-10), the Mission Planner bridge (AP-11), go-look (AP-12), the rally point upload (AC-10: RTL goes
-   to each drone's own home), RT-14 power lines, the tour's new steps (area I), flashing ArduPilot onto a Betaflight
-   board (H1/H4).
+4. **Not built yet:** ADS-B of the other drones to the lead's ArduPilot (FD-8, AC-11: only the virtual airspace has
+   it), the rally points sent before take-off (AC-10: the upload exists in `RouteSender`, nothing sends it yet, so RTL
+   goes to each drone's own home), the group's floor - / + on its map label (FL-14: it is in the right-click menu),
+   the group designer (FL-9). The F405 bench test and two real drones (PRD gates) wait for hardware.
+
+**The pilot GUI (area G), 2026-11-23:**
+- GU-1 - GU-7 built (the merges of `fleet-osd`, `fleet-ardx`, `fleet-tour`): words and FC type, right-click fleet items,
+  the map's group, routes and dispatch, the mode buttons, the OSD elements, alerts, the radio's fleet switches.
+- **GU-4:** the radio's mode switch is the first way; the OSD buttons (LOI, RTL, LND, GO) the backup. ArduPilot drone
+  setup now puts ARM and the mode switch on the AUX channels this PC's Drone setup uses (were always AUX1 / AUX2),
+  and the switch's default modes make a 3-position switch STABILIZE / ALT HOLD / LOITER (its top was LAND). A route
+  paused with GO and then moved by the switch starts anew at the next GO.
+- **GU-8:** a spectator mirrors the pilot PC's group, the fleet's OSD figures (reserves, group, TRAFFIC, HOME NOW,
+  LEAD DOWN; the launch views' words, not their pictures) and the route, besides the drones' states it had. A
+  spectator, a watcher of a drone and an observation PC get no fleet controls: no right-click fleet items, DISPATCH,
+  CALL RESERVE, DISCARD LEAD, TAKE CONTROL, VIEW, mode buttons, UPLOAD / GO / FENCE (`FleetOps.Host.watchOnly`,
+  `FleetWatchOnlyTest`). Not done: an observation PC shows only what it knows itself - the pilot PC's group reaches
+  spectators, not observers.
+- **GU-9:** the OSD's fleet figures are worked out in the window's refresh, 4 a second, and the paint only reads them
+  (they were worked out inside the video's paint - and with the OSD's PINS off they were not shown at all). The launch
+  views' feeds open and close on a thread of their own (they started decoders in the paint). The group's map picture,
+  member states and next approach height are a view made at each tick: the Swing thread never waits for a tick (and
+  no longer walks the tick thread's own maps). Nothing new runs on the stick or video threads: the radio's fleet
+  switches are a few compares per stick frame, their action goes to the Swing thread.
+- **AC-14 (real flights):** while this PC flies a real drone, armed, the nearest other DRAUPNE drone in the air - those
+  the fleet tracks with their height, others the network says are armed by their place - goes into the flight's record
+  once a second; PREVIOUS FLIGHTS shows CLOSEST (who and how, in its tooltip). NONE: watched, none in the air.
 
 ## Real ArduPilot on this PC (SITL)
 

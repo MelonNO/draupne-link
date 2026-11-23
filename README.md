@@ -94,29 +94,66 @@ A drone on the ground as a sentry. The phone sleeps with the camera watching (di
 ## ArduPilot and the fleet (the `fleet` branch: not released, not flown)
 
 ArduPilot Copter 4.6 or newer (1 MB flash and up) beside Betaflight. Spec: [docs/fleet/PRD.md](docs/fleet/PRD.md).
+Nothing in this chapter has flown yet. Try each part on the bench, props off, before a field.
 
 **ArduPilot drones**
-- The phone tells ArduPilot from Betaflight by itself. FLEET shows **ARDU** or **BTFL**.
-- Buttons on the video: **LOI**, **RTL**, **LND**, **GO** (start or pause a route). The radio's mode switch first.
+- The phone tells ArduPilot from Betaflight by itself. FLEET and the drone's card say **ARDU** or **BTFL**.
+- Change the flight mode with the radio's mode switch. A 3-position switch gives STABILIZE, ALT HOLD and LOITER.
+- The buttons on the video are the backup: **LOI** (hold), **RTL** (home), **LND** (land), **GO** (start or pause a
+  route). The lit one is the mode it is in. A red one: the drone said no. The mode switch wins again when you move it.
 - RC CHECK shows ArduPilot's own reason it won't arm.
-- Link lost: LOITER after 1 s, home after 20 s. No GPS: holds its height and waits.
-- **SETUP > ArduPilot drone setup** (USB, battery off): backup first, then the settings, calibrations, motors, an arm check.
-- Battery never sends it home: a warning only, LAND at 3 %.
+- Link lost: it holds (LOITER) after 1 s and flies home after 20 s. Without GPS it holds its height and waits.
+- **SETUP > ArduPilot drone setup** (USB, battery off): a backup first, then the settings, calibrations, motors and an
+  arm check. It puts ARM and the mode switch on the same switches as your Betaflight drones.
+- The battery never sends it home: a warning, then LAND at 3 %. Watch **LEFT m:ss** and **HOME NOW** on the OSD.
 
 **Routes**
-- **MAP TOOLS > ROUTE**: click points, drag to move, right-click to insert, delete or give a height. Right-click: *Fly to here*.
-- Flies a set height above the ground (default 60 m) - above bare ground, not trees or buildings.
-- **UPLOAD** checks every point on the drone; **GO** flies it. At the end it holds and calls you.
+- **MAP TOOLS > ROUTE**: click points, drag to move, right-click to insert, delete or give a point its own height.
+  Right-click the map: *Fly to here*.
+- It flies a set height above the ground (60 m unless you change it): above bare ground, not trees or buildings.
+- **UPLOAD** sends it and checks every point on the drone. **GO** flies it. At the end it holds and calls you.
+- **MASTS** shows power lines and masts near the route (OpenStreetMap, not complete). **FENCE** makes the airspace
+  areas on the map the drone's own fence: it stops at the edge.
 
-**Dispatch**
-- Mark landed drones **SAFE TO AUTOLAUNCH** (right-click). Right-click the map: **DISPATCH ... here**.
-- Each gets its own slot, height layer and route. They launch one by one and hold at their slots: **TAKE CONTROL**.
+**Fleet dispatch**
+- Right-click landed drones: **SAFE TO AUTOLAUNCH: mark**. Then right-click the map: **DISPATCH ... here**.
+- First a preview: each drone's time out, its wait for you, and the way back. **RUNS LOW** means its battery won't do it.
+- Each drone gets its own spot, height layer and route. They take off a few seconds apart and wait at their spots
+  (**YOUR TURN**). Right-click one: **TAKE CONTROL** gives you its sticks, **VIEW** shows its camera.
 
-**Follow group**
-- Fly the lead. Right-click others: **FOLLOW GROUP: add**, then **start**. They keep a block near the lead.
-- **DISCARD LEAD** (radio switch, AUX5): the next drone becomes the lead and you fly it.
-- **CALL RESERVE** (radio switch, AUX6): the marked drone that would be there first launches and joins.
-- A follower cut off holds 2 min, then flies its own way home. Floor: right-click a drone, **Floor +5 m / -5 m**.
+**Follow group and DISCARD LEAD**
+- Fly the lead. Right-click others: **FOLLOW GROUP: add**, then **start**. They keep a block near the lead and don't
+  move while you circle near it. They catch up when you fly away.
+- Floor: right-click a drone, **Floor +5 m / -5 m** (40 m to start, never under 10 m; over 120 m you get a warning).
+- **DISCARD LEAD** (radio switch, AUX5): the bottom drone with the least battery drops out under the group and becomes
+  the lead. You get its sticks and video. The old lead holds where it is.
+- Lead silent 30 s: the same happens by itself. Lead landed: the group holds and the OSD says **LEAD DOWN**.
+- The words on the map and in FLEET: IN GROUP, CATCHING UP, HOLDING, LOST, GNSS LOST, LANDING.
+
+**Safe autolaunch**
+- Mark only a drone on clear ground with nothing above it: it climbs straight up to the floor. The app asks you first.
+- **CALL RESERVE** (radio switch, AUX6): each flip calls one more marked drone, the one that would get there first.
+  The OSD lists them: **+2 RESERVES: R1 1:20 ...**. None left: **NO RESERVE**.
+- Before the motors start its phone checks it is level, where it was marked, not moved and healthy, then beeps 2 s.
+- The climb is watched on the phone: tipping, a hit, no climb or drifting stops the motors at once (**LAUNCH FAILED**)
+  and the next reserve is called. A small view of its camera shows in your corner until it is above the floor.
+- Only a marked drone ever starts by itself, and only when you call. One moved or tipped since it was marked won't
+  start (**MOVED**, **TIPPED**). One OUT OF ACTION is never called.
+
+**Airspace: how drones keep apart**
+- **Layers:** every drone has a height of its own, 10 m apart. Drones move sideways only in their own layer and change
+  height only straight up or down where nothing else is.
+- **The hollow cube:** the followers fly as a block, 8 to a layer round an empty middle, 20 m apart, lowest battery at
+  the bottom. Nothing ever flies through the middle, so every drone can step straight out.
+- **Transit areas:** four shafts, one beside each side of the block. Drones go up or down only there, one at a time.
+- **Keep-out:** a red zone round the block. You (the lead) stay outside it; if you come close the whole block moves
+  away. **TRAFFIC 14 M NE +3 M** on the OSD: another drone is close.
+- **Link lost (a follower):** it holds 2 minutes, then flies out of the block along its own lane, climbs and goes home.
+  It carries this plan with it, so it works without the PC.
+- **GPS lost:** a drone alone holds its height and waits. In the block the others move away from it; if several lose
+  GPS, they land one column at a time, bottom first.
+- **PREVIOUS FLIGHTS** shows each flight's closest approach to another DRAUPNE drone: **CLOSEST** (hover for who).
+- Spectator and observation PCs see the groups, routes, states and TRAFFIC too, but get none of these controls.
 
 ## Latency
 
