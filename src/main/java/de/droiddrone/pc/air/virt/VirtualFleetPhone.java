@@ -314,7 +314,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 seq.setMark(null);
                 return;
             }
-            if (armed()) return;
+            if (armed() || !copter.gnssOk) return; // as the phone's LaunchRunner: never marked without a 3D fix (AL-11)
             double[] ll = latLon();
             seq.setMark(new de.droiddrone.common.launch.LaunchMark(id, ll[0], ll[1], 0, now, floor));
         }

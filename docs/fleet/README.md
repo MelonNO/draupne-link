@@ -80,8 +80,14 @@ First steps of phase 1, in order:
    other drones, ARM on AUX1 and the mode switch on AUX2), `ArduSetupWriter` (backup .param first, write, read back
    each, stop at the first mismatch; RESTORE), `ArduTools` (six-position accelerometer calibration with the 3D
    drone, level, compass, motor test capped at 15 % / 3 s, reboot), `ArduBenchCheck` (AS-10: arms on the overrides,
-   disarms on the switch). SETUP > ArduPilot drone setup. **Not built:** flashing ArduPilot onto a Betaflight board
-   (STM32 DFU needs a USB driver this app doesn't install) - the FIND page says to flash once with ArduPilot's tools.
+   disarms on the switch). SETUP > ArduPilot drone setup.
+   - **H1 / H4 (2026-11-23, not tried on a real board):** FIND's "To ArduPilot (DFU)": the board the pilot picks,
+     disarmed (MSP), the CLI's `bl`, exactly one new STM32 DFU device (others in DFU are never opened), erase all,
+     write ArduPilot's `_with_bl.hex`, read back, restart (`ArduDfuFlow`, `StmDfu`, `WinUsbDfu` by JNA). Needs
+     Windows' WinUSB driver on the DFU device (Betaflight's driver tool or Zadig); the app doesn't install it.
+   - **AS-6 PORTS / AS-7 FRAME AND TUNING (2026-11-23):** USB as MAVLink, the GPS's and the radio's SERIALn (a port
+     doing something else only with REPLACE); motor order, 5"/7"/10" starting points or "keep its tune", AUTOTUNE
+     on a mode switch position. Each a plan and CONFIRM through `ArduSetupWriter`.
 7. **The tunnel (done, not tried):** `MavTunnel` (0x32): whole MAVLink frames PC <-> FC through the phone in the
    pilot's session - parameters, missions, guided targets, ADS-B traffic and a short list of commands; never sticks,
    arming, calibration, motor test or reboot. The FC's answers go back only while the PC uses it. `TunnelWire` lets
@@ -112,8 +118,10 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
 4. **Not built yet:** the launch mini-view (AL-20/21) and the reserves' OSD list (AL-5), HOME NOW (FD-5), the
    dispatch preview (FD-9), the other drones' pictures on demand (C3), ADS-B to the lead (FD-8), geofence (AP-9),
    flight logs (AP-10), the Mission Planner bridge (AP-11), go-look (AP-12), the rally point upload (AC-10: RTL goes
-   to each drone's own home), RT-14 power lines, the tour's new steps (area I), flashing ArduPilot onto a Betaflight
-   board (H1/H4).
+   to each drone's own home), RT-14 power lines, the tour's new steps (area I).
+5. **Area F, 2026-11-23:** AL-11 (SAFE TO AUTOLAUNCH / CALL RESERVE greyed out without a 3D fix) and AL-10 (a
+   reserve on its way joins whoever is the lead now; group lost: a new group round the flown drone) built, loopback
+   tested (`ReserveLeadNowLoopbackTest`).
 
 ## Real ArduPilot on this PC (SITL)
 

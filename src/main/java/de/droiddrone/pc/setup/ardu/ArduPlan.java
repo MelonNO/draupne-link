@@ -123,9 +123,14 @@ public final class ArduPlan {
 
     /** With more wanted values (fleet AS-11: frame and board turn carried from Betaflight), after the choices'. */
     public static List<Change> plan(Choices c, Map<String, Wanted> extra, Map<String, Float> now) {
-        List<Change> out = new ArrayList<>();
         Map<String, Wanted> all = new LinkedHashMap<>(wanted(c));
         all.putAll(extra);
+        return changes(all, now);
+    }
+
+    /** Any set of wanted values (AS-6 ports, AS-7 tuning) against the FC's: what changes, the missing ones kept apart. */
+    public static List<Change> changes(Map<String, Wanted> all, Map<String, Float> now) {
+        List<Change> out = new ArrayList<>();
         for (Map.Entry<String, Wanted> e : all.entrySet()) {
             Float have = now.get(e.getKey());
             float to = e.getValue().value();

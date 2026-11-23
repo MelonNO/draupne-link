@@ -17,8 +17,7 @@ import java.util.zip.Inflater;
  * erase, program in 252-byte blocks, the board's CRC32 over the image (padded with 0xFF to the flash size) against
  * ours, reboot. The firmware is an .apj (JSON: board_id, image = base64 of the zlib-compressed binary). Getting there:
  * MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN with param1 3 makes ArduPilot restart into its bootloader (a new serial port).
- * Not built: Betaflight to ArduPilot - that board's bootloader is the STM32's DFU, which needs a USB driver this app
- * doesn't install; flash it once with ArduPilot's own tools.
+ * Betaflight to ArduPilot (that board's bootloader is the STM32's own USB DFU): {@link ArduDfuFlow}.
  */
 public final class ArduFirmware {
     static final int INSYNC = 0x12, EOC = 0x20, OK = 0x10, FAILED = 0x11, INVALID = 0x13;

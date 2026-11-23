@@ -97,6 +97,11 @@ public final class BetaflightUsb implements AutoCloseable {
         usb = standIn;
     }
 
+    /** The test bench's USB stands in now (then no real USB device may be touched: fleet H1's DFU too). */
+    public static boolean standingIn() {
+        return usb != null;
+    }
+
     /** Serial ports that look like a flight controller's USB, by vendor or by name. */
     public static List<Port> findFlightControllers() {
         Usb standIn = usb;
@@ -252,6 +257,29 @@ public final class BetaflightUsb implements AutoCloseable {
 
     /** Leaves the CLI without saving. Betaflight restarts (the port goes away), which also clears a stale MSP arming block. */
     public void exitCli() {
+        close();
+    }
+
+    /** The drone says armed (MSP_STATUS), asked before the CLI is opened. */
+    public boolean armedNow() throws IOException {
+        if (inCli) throw new IOException("The CLI is open");
+        return MotorTest.armed(msp(de.droiddrone.common.FcCommon.MSP_STATUS, null));
+    }
+
+    /**
+     * Fleet H1 / H4: the CLI's "bl" - Betaflight restarts into the STM32's own bootloader (USB DFU); nothing is saved
+     * and this port goes away. Refused while armed. Opens the CLI itself.
+     */
+    public void rebootToBootloader() throws IOException {
+        if (!inCli && armedNow()) throw new IOException("The drone is armed. Disarm it first.");
+        if (!inCli) enterCli();
+        write("bl\n");
+        inCli = false; // the board restarts: no "exit" to send
+        try {
+            Thread.sleep(300);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         close();
     }
 

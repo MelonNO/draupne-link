@@ -12,6 +12,7 @@ DRAUPNE Link is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The release
 | [ZXing](https://github.com/zxing/zxing) | QR codes | Apache-2.0 |
 | [Gson](https://github.com/google/gson) | Reading Tailscale status | Apache-2.0 |
 | [jSerialComm](https://fazecast.github.io/jSerialComm/) | Talking to Betaflight over USB | Apache-2.0 / LGPL-3.0 |
+| [JNA](https://github.com/java-native-access/jna) | Writing ArduPilot onto a Betaflight board through the STM32's USB DFU (Windows' WinUSB) | Apache-2.0 / LGPL-2.1 |
 | [Eclipse Temurin](https://adoptium.net) Java runtime (bundled by jpackage) | Runtime | GPL-2.0 with Classpath Exception |
 | RadioMaster TX16S MKII CAD model by YahyaELone (GrabCAD, STEP from Autodesk Inventor), tessellated into `src/main/resources/model/tx16s-mkii.bin.gz` | The 3D radio in the calibration | Redistributed with permission (confirmed by the maintainer, 2026-11-05) |
 | FPV drone 3D model (OBJ + textures), converted into `src/main/resources/model/fpv-drone.bin.gz` and `fpv-drone-0.jpg` / `fpv-drone-1.jpg` by `tools/model/export_fpv_drone.py` | The 3D drone in Drone setup > Orientation, and the drone team's quads in the tour's DRONES scene (in its own colours) | Redistributed with permission (confirmed by the maintainer, 2026-11-07) |

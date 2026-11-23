@@ -26,6 +26,7 @@ dependencies {
     implementation 'com.google.zxing:core:3.5.3'   // QR codes in the phone guide
     implementation 'com.google.code.gson:gson:2.11.0' // parses `tailscale status --json`
     implementation 'com.fazecast:jSerialComm:2.11.0' // talks to Betaflight over USB in the setup wizard
+    implementation 'net.java.dev.jna:jna:5.6.0' // fleet H1: the STM32's USB DFU through Windows' WinUSB (Betaflight to ArduPilot)
     implementation 'org.bytedeco:ffmpeg:7.1-1.5.11'  // video decoding
     runtimeOnly 'org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64'
     runtimeOnly 'org.bytedeco:javacpp:1.5.11:windows-x86_64'

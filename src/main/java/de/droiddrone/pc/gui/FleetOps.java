@@ -84,6 +84,11 @@ final class FleetOps {
         default de.droiddrone.pc.map.Elevation elevation() {
             return null;
         }
+
+        /** AL-11: the drone's GPS fix as its last check-in said: 1 fix, 0 none, -1 not known. */
+        default int gpsFix(String phone) {
+            return -1;
+        }
     }
 
     // ------------------------------------------------------------------ area C: DISPATCH
@@ -261,11 +266,29 @@ final class FleetOps {
 
     // ------------------------------------------------------------------ area F: reserves
 
-    /** A drone marked SAFE TO AUTOLAUNCH: its mark id and where it was when marked. */
-    record Marked(int markId, double lat, double lon) {}
+    /** A drone marked SAFE TO AUTOLAUNCH: its mark id, where it was and when (ms) it was marked. */
+    record Marked(int markId, double lat, double lon, long at) {}
+
+    /** AL-11: a fresh mark whose phone reports no fix this soon was refused by the phone (LaunchRunner). */
+    static final long MARK_ANSWER_MS = 5000;
 
     private final java.util.Map<String, Marked> marked = new java.util.LinkedHashMap<>();
     private final java.util.Set<String> joined = new java.util.HashSet<>();
+    /** AL-10: the group each reserve joined (a new or no group: it joins whoever is the lead now). */
+    private final java.util.Map<String, de.droiddrone.pc.air.GroupController> joinedTo = new java.util.HashMap<>();
+    private final java.util.Set<String> forming = new java.util.HashSet<>(), holdSaid = new java.util.HashSet<>();
+    /** Reserves that reached their cell: followers like the others from then on (a group ended holds them too). */
+    private final java.util.Set<String> settled = new java.util.HashSet<>();
+
+    private void noteSettled() {
+        GroupLink l = link;
+        de.droiddrone.pc.air.GroupController g = l == null ? null : l.controller();
+        if (g == null) return;
+        for (String d : joined) {
+            de.droiddrone.pc.air.GroupController.Member m = g.members().get(d);
+            if (m != null && m.state() == de.droiddrone.pc.air.GroupController.State.IN_CELL) settled.add(d);
+        }
+    }
     private final java.util.Map<String, Long> orderSentAt = new java.util.HashMap<>();
     private final java.util.Map<String, de.droiddrone.common.launch.LaunchWire.Order> pending = new java.util.HashMap<>();
     private de.droiddrone.pc.launch.ReserveQueue reserves;
@@ -300,6 +323,7 @@ final class FleetOps {
     /** AL-1 / AL-2: marked on the pilot's word that it can climb straight up to the floor with nothing above it. */
     private void mark(String phone) {
         String why = de.droiddrone.pc.launch.MarkRules.refusal(true, true, host.outOfAction(phone));
+        if (why == null) why = de.droiddrone.pc.launch.ReserveRules.markRefusal(fixOf(phone)); // AL-11
         if (why != null) {
             host.alert("SAFE TO AUTOLAUNCH: " + why);
             return;
@@ -317,7 +341,7 @@ final class FleetOps {
             l.command(phone, de.droiddrone.common.FleetCmd.mark(id, floorM));
             l.track(List.of(phone));
             FleetStatus s = l.status(phone);
-            marked.put(phone, new Marked(id, s == null ? Double.NaN : s.lat, s == null ? Double.NaN : s.lon));
+            marked.put(phone, new Marked(id, s == null ? Double.NaN : s.lat, s == null ? Double.NaN : s.lon, System.currentTimeMillis()));
             host.log("SAFE TO AUTOLAUNCH: " + phone + " marked (its phone checks it is level, landed, with a fix).");
         } catch (java.io.IOException e) {
             host.alert("SAFE TO AUTOLAUNCH: " + e.getMessage());
@@ -335,6 +359,19 @@ final class FleetOps {
         return marked.containsKey(phone);
     }
 
+    /** AL-11: the drone's 3D fix - its fleet report when there is one, else its check-in (ReserveRules). */
+    private int fixOf(String phone) {
+        GroupLink l = link;
+        return de.droiddrone.pc.launch.ReserveRules.fix(l == null ? null : l.status(phone), host.gpsFix(phone));
+    }
+
+    /** AL-11: why CALL RESERVE is greyed out now, or null. */
+    private String callRefusal() {
+        List<Integer> fixes = new ArrayList<>();
+        for (String d : marked.keySet()) if (!dispatched.containsKey(d)) fixes.add(fixOf(d));
+        return de.droiddrone.pc.launch.ReserveRules.callRefusal(fixes);
+    }
+
     private java.util.List<de.droiddrone.pc.launch.ReserveChoice.Reserve> reserveList() {
         java.util.List<de.droiddrone.pc.launch.ReserveChoice.Reserve> out = new ArrayList<>();
         GroupLink l = link;
@@ -343,7 +380,8 @@ final class FleetOps {
             Marked m = e.getValue();
             FleetStatus s = l == null ? null : l.status(e.getKey());
             double lat = s != null ? s.lat : m.lat(), lon = s != null ? s.lon : m.lon();
-            boolean ready = !host.outOfAction(e.getKey()) && !Double.isNaN(lat);
+            boolean ready = !host.outOfAction(e.getKey()) && !Double.isNaN(lat)
+                    && fixOf(e.getKey()) != de.droiddrone.pc.launch.ReserveRules.NO_FIX; // AL-11
             out.add(new de.droiddrone.pc.launch.ReserveChoice.Reserve(e.getKey(), true, m.markId(), lat, lon,
                     host.checkInWaitMs(e.getKey()), approachFor(e.getKey()), ready));
         }
@@ -364,6 +402,11 @@ final class FleetOps {
         GroupLink.Picture p = picture();
         if (p == null) {
             host.alert("CALL RESERVE: no follower group to join.");
+            return;
+        }
+        String why = callRefusal(); // AL-11
+        if (why != null) {
+            host.alert("NO RESERVE: " + why + ".");
             return;
         }
         if (reserves == null) {
@@ -393,6 +436,11 @@ final class FleetOps {
     /** Once a second (the window's refresh): calls waiting for their column, orders sent again until answered. */
     void tickReserves() {
         tickDispatch();
+        dropRefusedMarks();
+        noteSettled();
+        for (java.util.Map.Entry<String, de.droiddrone.common.launch.LaunchWire.Status> e : new ArrayList<>(launches.entrySet())) {
+            if (!dispatched.containsKey(e.getKey())) joinReserve(e.getKey(), e.getValue()); // AL-10: a group lost since its last word
+        }
         if (reserves == null) {
             for (String d : new ArrayList<>(pending.keySet())) {
                 Long at = orderSentAt.get(d);
@@ -404,6 +452,19 @@ final class FleetOps {
         for (String d : new ArrayList<>(pending.keySet())) {
             Long at = orderSentAt.get(d);
             if (at == null || System.currentTimeMillis() - at >= 2000) sendOrder(d);
+        }
+    }
+
+    /** AL-11: a mark its phone refused for want of a 3D fix (its first reports say no GNSS) is dropped here too. */
+    private void dropRefusedMarks() {
+        GroupLink l = link;
+        if (l == null) return;
+        long now = System.currentTimeMillis();
+        for (java.util.Map.Entry<String, Marked> e : new ArrayList<>(marked.entrySet())) {
+            FleetStatus s = l.status(e.getKey());
+            if (s == null || now - e.getValue().at() > MARK_ANSWER_MS || s.has(FleetStatus.GNSS)) continue;
+            marked.remove(e.getKey());
+            host.alert("SAFE TO AUTOLAUNCH: " + e.getKey() + " has no GPS fix - not marked.");
         }
     }
 
@@ -433,16 +494,53 @@ final class FleetOps {
             if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED) host.alert("LAUNCH FAILED: " + drone + " - "
                     + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason) + ". The next reserve is called.");
         }
-        // AC-5 / AL-9: past the floor and on its way: the group takes it (a new cell at the top, through a shaft)
+        joinReserve(drone, s);
+    }
+
+    /**
+     * AC-5 / AL-9 / AL-10: past the floor and on its way, it joins whoever is the lead now - the group's (a new cell at
+     * the top, through a shaft); with the group lost, a new group round the drone the pilot flies; with neither, it
+     * holds in its approach layer and the pilot is told. Asked again at each of its reports, so a group lost after it
+     * joined (before it reached its cell) is handled the same way. A cancel after arming changes nothing (FA10).
+     */
+    private void joinReserve(String drone, de.droiddrone.common.launch.LaunchWire.Status s) {
+        if (!s.passedFloor || settled.contains(drone) || s.state == de.droiddrone.common.launch.LaunchSequence.IN_GROUP
+                || !de.droiddrone.common.launch.LaunchSequence.motorsMayRun(s.state)) return;
         GroupLink l = link;
-        if (s.passedFloor && !joined.contains(drone) && l != null && l.controller() != null) {
-            FleetStatus st = l.status(drone);
-            if (st != null) {
+        if (l == null || forming.contains(drone)) return;
+        de.droiddrone.pc.air.GroupController g = l.controller();
+        if (g != null && joinedTo.get(drone) == g) return; // in this group already
+        de.droiddrone.pc.launch.ReserveRules.Decision d = de.droiddrone.pc.launch.ReserveRules.joinWhom(
+                g == null ? null : l.lead(), host.flownPhone(), drone);
+        switch (d.join()) {
+            case GROUP -> {
+                FleetStatus st = l.status(drone);
+                if (st == null) return;
+                boolean again = joined.contains(drone);
                 joined.add(drone);
+                joinedTo.put(drone, g);
+                holdSaid.remove(drone);
                 marked.remove(drone);
-                l.controller().addReserve(drone, st.battery == 255 ? 50 : st.battery,
-                        new de.droiddrone.pc.air.V2(0, 0), l.controller().nextApproachAlt(), System.currentTimeMillis());
-                host.log(drone + " joins the group.");
+                g.addReserve(drone, st.battery == 255 ? 50 : st.battery,
+                        new de.droiddrone.pc.air.V2(0, 0), g.nextApproachAlt(), System.currentTimeMillis());
+                host.log(again ? drone + " joins " + d.lead() + "'s group." : drone + " joins the group.");
+            }
+            case NEW_GROUP -> {
+                holdSaid.remove(drone);
+                marked.remove(drone);
+                forming.add(drone);
+                host.log(drone + ": group lost - joins " + d.lead() + ".");
+                start(d.lead(), List.of(drone), why -> {
+                    forming.remove(drone);
+                    GroupLink k = link;
+                    if (why == null && k != null) {
+                        joined.add(drone);
+                        joinedTo.put(drone, k.controller());
+                    }
+                });
+            }
+            case HOLD -> {
+                if (holdSaid.add(drone)) host.alert(drone + " holds: no lead to join.");
             }
         }
     }
@@ -512,11 +610,22 @@ final class FleetOps {
         // AL-1: SAFE TO AUTOLAUNCH on any drone but the one flown
         if (!phone.equalsIgnoreCase(String.valueOf(host.flownPhone()))) {
             JMenuItem m = new JMenuItem(isMarked(phone) ? "SAFE TO AUTOLAUNCH: clear " + phone : "SAFE TO AUTOLAUNCH: mark " + phone);
+            String noGps = isMarked(phone) ? null : de.droiddrone.pc.launch.ReserveRules.markRefusal(fixOf(phone));
+            if (noGps != null) { // AL-11: greyed out, with the reason
+                m.setText(m.getText() + " (" + noGps + ")");
+                m.setEnabled(false);
+            }
             m.addActionListener(e -> {
                 if (isMarked(phone)) unmark(phone);
                 else mark(phone);
             });
             out.add(m);
+        } else if (active()) { // AL-5 / AL-11: CALL RESERVE on the lead's menu too (the radio switch is the main way)
+            String why = callRefusal();
+            JMenuItem c = new JMenuItem(why == null ? "CALL RESERVE" : "CALL RESERVE (" + why + ")");
+            c.setEnabled(why == null);
+            c.addActionListener(e -> callReserve());
+            out.add(c);
         }
         String lead = host.flownPhone();
         if (!active()) {
@@ -559,7 +668,13 @@ final class FleetOps {
     }
 
     private void start(String lead) {
-        List<String> followers = new ArrayList<>(chosen);
+        start(lead, new ArrayList<>(chosen), why -> {
+            if (why == null) chosen.clear();
+        });
+    }
+
+    /** FOLLOW GROUP round this lead; done gets why it failed (null: formed), on Swing's thread. */
+    private void start(String lead, List<String> followers, java.util.function.Consumer<String> done) {
         try {
             ensureLink();
         } catch (java.io.IOException e) {
@@ -592,7 +707,7 @@ final class FleetOps {
             String why = ls == null ? "the lead hasn't reported (phone app pc.58 or newer)." : l.form(lead, followers, ls.homeAmsl);
             SwingUtilities.invokeLater(() -> {
                 if (why != null) host.alert("FOLLOW GROUP not started: " + why);
-                else chosen.clear();
+                done.accept(why);
             });
         }, "followGroupStart");
         t.setDaemon(true);
@@ -607,6 +722,7 @@ final class FleetOps {
 
     void end() {
         GroupLink l = link;
+        noteSettled(); // in their cells: they hold with the rest; reserves still on their way join the lead now (AL-10)
         if (l != null) l.disband();
     }
 
