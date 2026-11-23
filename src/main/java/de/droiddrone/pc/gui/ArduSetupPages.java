@@ -195,17 +195,25 @@ final class ArduSetupPages {
         private void readBetaflight() {
             if (flashing) return;
             fromBf.setEnabled(false);
-            say("Reading the Betaflight board ...");
+            say("Looking for boards ...");
+            String own = state.found == null ? null : state.found.port().systemName();
             background(() -> {
                 try {
                     java.util.List<de.droiddrone.pc.setup.BetaflightUsb.Port> ports = de.droiddrone.pc.setup.BetaflightUsb.findFlightControllers();
-                    if (ports.isEmpty()) return "No board on USB.";
-                    de.droiddrone.pc.setup.BetaflightUsb bf = de.droiddrone.pc.setup.BetaflightUsb.open(ports.get(0));
-                    try {
-                        state.carried = de.droiddrone.pc.setup.ardu.FromBetaflight.read(bf);
-                    } finally {
-                        bf.close();
-                    }
+                    // only the board the pilot picks is opened (as To ArduPilot); one alone is preselected, still confirmed
+                    de.droiddrone.pc.setup.ardu.FromBetaflight.Carried c = de.droiddrone.pc.setup.ardu.FromBetaflight.readPicked(ports, own,
+                            (boards, pre) -> {
+                                de.droiddrone.pc.setup.BetaflightUsb.Port[] pick = {null};
+                                try {
+                                    SwingUtilities.invokeAndWait(() -> pick[0] = pickBoard(boards, pre));
+                                } catch (Exception e) {
+                                    return null;
+                                }
+                                if (pick[0] != null) say("Reading " + pick[0].systemName() + " ...");
+                                return pick[0];
+                            });
+                    if (c == null) return ports.isEmpty() ? "No board on USB." : "Nothing read.";
+                    state.carried = c;
                     return null;
                 } catch (Exception e) {
                     return "Betaflight: " + e.getMessage();
@@ -301,6 +309,25 @@ final class ArduSetupPages {
             });
         }
 
+        /**
+         * The pilot's pick for From Betaflight, by port and name: one board is preselected but still confirmed; two
+         * or more: none preselected, the pilot picks. null: cancelled.
+         */
+        private de.droiddrone.pc.setup.BetaflightUsb.Port pickBoard(List<de.droiddrone.pc.setup.BetaflightUsb.Port> boards,
+                                                                  de.droiddrone.pc.setup.BetaflightUsb.Port pre) {
+            javax.swing.JComboBox<de.droiddrone.pc.setup.BetaflightUsb.Port> board =
+                    new javax.swing.JComboBox<>(boards.toArray(new de.droiddrone.pc.setup.BetaflightUsb.Port[0]));
+            board.setSelectedItem(pre); // null with two or more: nothing chosen yet
+            JPanel p = new JPanel(new GridLayout(0, 1, 0, 6));
+            p.add(new JLabel(boards.size() == 1 ? "Read this board? Only it is opened." : "Which board? Only this one is opened."));
+            p.add(board);
+            while (true) {
+                if (Dialogs.confirm(result, p, "From Betaflight", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return null;
+                Object chosen = board.getSelectedItem();
+                if (chosen != null) return (de.droiddrone.pc.setup.BetaflightUsb.Port) chosen;
+            }
+        }
+
         /** One board the pilot may pick for DFU: a Betaflight board's serial port, or a board already in DFU. */
         record DfuPick(de.droiddrone.pc.setup.BetaflightUsb.Port port, String dfuId) {
             @Override
@@ -348,6 +375,7 @@ final class ArduSetupPages {
 
         private void pickAndWrite(List<DfuPick> picks) {
             javax.swing.JComboBox<DfuPick> board = new javax.swing.JComboBox<>(picks.toArray(new DfuPick[0]));
+            if (picks.size() > 1) board.setSelectedItem(null); // two or more: the pilot picks, none preselected
             javax.swing.JComboBox<String> source = new javax.swing.JComboBox<>(new String[]{"Newest Copter for this board", "A file (_with_bl.hex)"});
             JPanel p = new JPanel(new GridLayout(0, 1, 0, 6));
             p.add(new JLabel("Which board? Only this one is touched."));
@@ -357,7 +385,11 @@ final class ArduSetupPages {
             if (state.carried == null) p.add(new JLabel("Tip: From Betaflight first keeps its battery, switches and motor order."));
             if (Dialogs.confirm(result, p, "To ArduPilot", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return;
             DfuPick pick = (DfuPick) board.getSelectedItem();
-            if (pick == null) return;
+            if (pick == null) {
+                result.setText("No board picked: nothing touched.");
+                result.setForeground(Theme.WARN);
+                return;
+            }
             boolean newest = source.getSelectedIndex() == 0;
             if (newest && pick.port() == null) {
                 result.setText("A board already in DFU doesn't say its name: pick a file.");

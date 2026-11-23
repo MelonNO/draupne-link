@@ -146,6 +146,38 @@ public final class FromBetaflight {
         }
     }
 
+    /** The pilot's pick of a board, by its port and name (a dialog in the window). */
+    public interface Chooser {
+        /**
+         * @param boards the flight-controller ports on USB (none opened)
+         * @param preselected the only board when there is one, else null (the pilot must pick)
+         * @return the board picked, or null: cancelled
+         */
+        BetaflightUsb.Port choose(List<BetaflightUsb.Port> boards, BetaflightUsb.Port preselected);
+    }
+
+    /** The one board preselected: only when it is the only one; two or more: none (the pilot picks). */
+    public static BetaflightUsb.Port preselect(List<BetaflightUsb.Port> boards) {
+        return boards.size() == 1 ? boards.get(0) : null;
+    }
+
+    /**
+     * Reads only the board the pilot picks (as the DFU flow does): the boards are listed without opening any, the
+     * pilot confirms one by its port and name, and only that one is opened. null: none on USB or cancelled.
+     * @param except a port not offered (an ArduPilot board found already), or null
+     */
+    public static Carried readPicked(List<BetaflightUsb.Port> all, String except, Chooser chooser) throws IOException {
+        List<BetaflightUsb.Port> boards = new ArrayList<>();
+        for (BetaflightUsb.Port p : all) if (!p.systemName().equals(except)) boards.add(p);
+        if (boards.isEmpty()) return null;
+        BetaflightUsb.Port pick = chooser.choose(List.copyOf(boards), preselect(boards));
+        if (pick == null) return null;
+        if (!boards.contains(pick)) throw new IOException("that board isn't on USB now");
+        try (BetaflightUsb fc = BetaflightUsb.open(pick)) {
+            return read(fc);
+        }
+    }
+
     static String setting(String text, String name) {
         Matcher m = Pattern.compile("(?m)^\\s*set\\s+" + Pattern.quote(name) + "\\s*=\\s*(\\S+)").matcher(text);
         return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
