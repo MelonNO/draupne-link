@@ -97,10 +97,10 @@ Built on this branch, each piece with tests; nothing flown, no ArduPilot SITL on
 Linux part isn't installed), so every gate ran against virtual phones and a kinematic model of the drones.
 
 **Open, in the order they matter:**
-1. **Separation under overlapping failures (AC-14 random runs):** 18 of 30 random 10-minute runs lost separation when
-   failures overlapped; a follower cut off while the group moved came to 9.4 m sideways and 8.9 m in height
-   (`GroupLinkLoopbackTest`, tagged `finding`). The fix - single drones giving way - is being built. **Don't fly a group
-   before these pass.**
+1. **Separation under overlapping failures (AC-14 random runs):** with single followers giving way (Orca) 85 of 90 random
+   10-minute runs keep separation (was about 40 %); five seeds still lose it (closest 6.1 m at one height). The nightly
+   run names them (tags `night` + `finding`). The loopback cut-off case on the real wire now passes. **Don't fly a
+   group before all of them pass.**
 2. **Real ArduPilot:** every gate again in SITL (needs WSL), then the PRD's bench tests (F405, two real drones).
 3. **Hand-over speed (NFR, FL-6):** a new lead is a new pilot session, 1-2 s; the PRD wants sticks within 500 ms.
 4. **Not built yet:** the launch mini-view (AL-20/21) and the reserves' OSD list (AL-5), HOME NOW (FD-5), the

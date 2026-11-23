@@ -21,8 +21,8 @@ Where it stands, phase by phase: [fleet/README.md](fleet/README.md).
   the slot, TAKE CONTROL.
 - **Follow the leader (phase 4):** FOLLOW GROUP from the right-click menus; the hollow cube, battery order, transit
   areas, keep-out zone, exit plans, link and GNSS loss on the phones and the PC; DISCARD LEAD on the radio; the group
-  on the map. **Open:** random runs of overlapping failures still lose separation (the single drones' give-way is
-  being built); a follower cut off while the group moves came to 9.4 m / 8.9 m in a loopback test (tagged `finding`).
+  on the map; single followers give way (Orca). **Open:** 85 of 90 random runs of overlapping failures keep
+  separation, five don't yet - no group flight before they do.
 - **Safe autolaunch (phase 5):** SAFE TO AUTOLAUNCH, CALL RESERVE on the radio, the reserve's own checks and climb
   watchdog on its phone, joining the group at the top.
 - **Fleet link:** FleetCmd (0x34) / FleetStatus (0x38) between the PC and drones it doesn't pilot; who may command a

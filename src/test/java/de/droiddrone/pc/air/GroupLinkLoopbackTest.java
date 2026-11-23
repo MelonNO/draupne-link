@@ -43,11 +43,10 @@ class GroupLinkLoopbackTest {
     }
 
     /**
-     * One follower cut off for 4 s: the pairs came to 9.4 m sideways and 8.9 m in height (2026-11-23) - the give-way of
-     * single drones is not built yet (the airspace work's open point). A finding: fails until fixed (gradlew benchFindings).
+     * One follower cut off for 4 s while the group flies. Before the single drones' give-way (Orca, 2026-11-23) the pairs
+     * came to 9.4 m sideways and 8.9 m in height here; with it, 3 of 3 runs kept apart.
      */
     @Test
-    @org.junit.jupiter.api.Tag("finding")
     void aFollowerCutOffKeepsApart() throws Exception {
         flown(true);
     }
