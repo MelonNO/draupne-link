@@ -93,7 +93,7 @@ public final class MavSession implements AutoCloseable {
         return gpsFix;
     }
 
-    /** {lat, lon, height above sea level m, height above home m, climb m/s} from GLOBAL_POSITION_INT, or null. */
+    /** {lat, lon, height above sea level m, height above home m, climb m/s, east m/s, north m/s} (GLOBAL_POSITION_INT), or null. */
     public double[] position() {
         return position;
     }
@@ -374,7 +374,7 @@ public final class MavSession implements AutoCloseable {
     private void dispatch(MAVLinkPacket p) {
         if (p.msgid == com.MAVLink.common.msg_global_position_int.MAVLINK_MSG_ID_GLOBAL_POSITION_INT) {
             com.MAVLink.common.msg_global_position_int g = new com.MAVLink.common.msg_global_position_int(p);
-            position = new double[]{g.lat / 1e7, g.lon / 1e7, g.alt / 1000.0, g.relative_alt / 1000.0, g.vz / -100.0};
+            position = new double[]{g.lat / 1e7, g.lon / 1e7, g.alt / 1000.0, g.relative_alt / 1000.0, g.vz / -100.0, g.vy / 100.0, g.vx / 100.0};
         } else if (p.msgid == com.MAVLink.common.msg_gps_raw_int.MAVLINK_MSG_ID_GPS_RAW_INT) {
             gpsFix = new com.MAVLink.common.msg_gps_raw_int(p).fix_type;
         }
