@@ -174,6 +174,11 @@ public final class GroupController {
         this.prover = prover;
     }
 
+    /** The ground its layers stand on (AMSL): the highest under the group's area (AC-2). */
+    public double groundAmsl() {
+        return groundAmsl;
+    }
+
     public AirParams params() {
         return p;
     }
@@ -491,6 +496,13 @@ public final class GroupController {
                             m.stage = -1;
                             m.holdAt = new HollowCube.Point(m.lastPos.minus(centre), m.lastAlt - groundAmsl);
                             events.add("LINK BACK " + m.id);
+                        } else if (m.plan != null && now - m.lostAt >= p.holdMs() + Math.round(m.plan.startDelayS * 1000)) {
+                            // its hold was over: it is on its way home by its exit plan and keeps going until the pilot
+                            // calls it back (AC-37, AC-38) - no longer the group's (heard, it is kept clear of as any drone)
+                            m.state = State.GONE;
+                            m.goneBy = -1;
+                            if (m.place != null) scheduler.releaseAll(m.id);
+                            events.add("ON ITS WAY HOME " + m.id);
                         } else if (!m.shifted) { // back within the wait: it carries on where it was (AC-37)
                             m.state = m.before;
                             events.add("LINK BACK " + m.id);
@@ -615,6 +627,13 @@ public final class GroupController {
                 else lost = m;
             }
         }
+        // the PC's own network gone (nobody heard - the lead neither): not one drone cut off but all of them (AC-37's
+        // "the PC gone"); every follower holds and leaves on its own after its hold, with no order needed. Before, the
+        // PC took it as each drone cut off in turn: the group "moved away" from every one of them and, the network
+        // back, made them all rejoin like reserves through the transit areas
+        boolean pcCut = !leadFresh && members.values().stream().anyMatch(m -> m.state == State.LOST)
+                && members.values().stream().allMatch(m -> m.state == State.LOST || m.state == State.GONE);
+        if (pcCut) lost = null;
         if (lost != null && !landMode) { // AC-37: 20 m sideways away from it, once
             V2 away = centre.minus(lost.lastPos);
             shiftTarget = centre.plus(away.unit().times(p.lostMoveM()));
@@ -656,9 +675,10 @@ public final class GroupController {
             double d = rel.length();
             if (!leashing && d > p.leashM()) leashing = true;
             if (leashing) {
-                V2 to = lead.pos().minus(rel.unit().times(p.keepM()));
+                double keep = keepFrom(rel.unit());
+                V2 to = lead.pos().minus(rel.unit().times(keep));
                 double togo = to.minus(centre).length();
-                if (togo < 1 || d <= p.keepM()) leashing = false;
+                if (togo < 1 || d <= keep) leashing = false;
                 else want = to.minus(centre).unit().times(Math.min(p.catchUpMs(), Math.sqrt(2 * p.accelMs2() * togo)));
             }
         }
@@ -672,8 +692,16 @@ public final class GroupController {
             // a drifting drone is the nearer danger: the keep-out buffer gives way to the escape unless the lead is at the edge
             if (escape != null && cube.outsideEdge(l[0].minus(centre)) > p.radiusM() + 5) continue;
             V2 rel0 = l[0].minus(centre), relV = l[1].minus(vel);
+            // a group closing on the lead by its own move (the leash) is taken as braking from now (it can always do
+            // that): before, its closing speed was taken as kept for the whole look ahead - every catch-up with a lead
+            // that hovers ended in TRAFFIC, on and off each tick (an alarm with sound for the pilot), though the leash
+            // brakes the group to a stop outside the keep-out zone. A group moving away keeps its speed (giving way).
+            double sp = vel.length(), stopS = sp / p.brakeMs2();
+            boolean closing = vel.dot(rel0) > 0 && l[1].dot(rel0.unit()) > -0.5; // a lead coming on itself: as before
+            V2 dir = sp > 1e-6 ? vel.unit() : V2.ZERO;
             for (double t = 0; t <= horizon + 1e-9; t += 0.5) {
-                V2 rel = rel0.plus(relV.times(t));
+                double s = t < stopS ? sp * t - 0.5 * p.brakeMs2() * t * t : sp * stopS / 2;
+                V2 rel = closing ? rel0.plus(l[1].times(t)).minus(dir.times(s)) : rel0.plus(relV.times(t));
                 if (cube.outsideEdge(rel) < p.keepOutM()) {
                     V2 away = rel0.length() < 1 ? relV.unit().times(-1) : rel0.unit().times(-1);
                     // sideways too when it comes straight on: off its path, not only ahead of it
@@ -721,6 +749,28 @@ public final class GroupController {
             }
         }
         return want.capped(p.catchUpMs());
+    }
+
+    /** Kept beyond the keep-out zone by the leash's stop, m (so a hovering lead is no TRAFFIC). */
+    static final double KEEP_MARGIN_M = 5;
+
+    /**
+     * FL-12 / AC-34: how far from the centre the group stops from a lead in this direction - the keeping distance, or
+     * more where the lead would otherwise be inside the keep-out zone. The group's edge is a square: off a corner it
+     * reaches further than off a face, and with the PRD's numbers 100 m off a corner is inside the zone (the corner's
+     * keep-out boundary is 108 m out). Before, a lead hovering off a corner was caught up with into its own keep-out
+     * zone: TRAFFIC on and off for as long as it hovered, the group fleeing and coming back.
+     */
+    double keepFrom(V2 dir) {
+        if (dir.length() < 0.5) return p.keepM();
+        double want = p.keepOutM() + KEEP_MARGIN_M, lo = 0, hi = 2000;
+        if (cube.outsideEdge(dir.times(p.keepM())) >= want) return p.keepM();
+        for (int i = 0; i < 40; i++) {
+            double mid = (lo + hi) / 2;
+            if (cube.outsideEdge(dir.times(mid)) >= want) hi = mid;
+            else lo = mid;
+        }
+        return Math.max(p.keepM(), hi);
     }
 
     /**
