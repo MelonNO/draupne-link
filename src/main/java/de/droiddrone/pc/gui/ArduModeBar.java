@@ -80,6 +80,7 @@ final class ArduModeBar extends JPanel {
     }
 
     void press(Action a) {
+        if (!isVisible()) return; // GU-8: hidden (not this PC's own ArduPilot drone): a press sends nothing
         byte[] c = commandFor(a);
         if (!send.test(c)) return;
         paused = a == Action.START && modeNow == ArduModes.AUTO;
@@ -91,7 +92,15 @@ final class ArduModeBar extends JPanel {
      * command shows red for {@link #REFUSED_SHOW_MS}.
      */
     void update(FcTelemetry.Status s, int arduMode, FcTelemetry.CommandAck ack, long now) {
-        boolean ardu = s != null && s.isArduPilot();
+        update(s, arduMode, ack, now, true);
+    }
+
+    /**
+     * As above; ownDrone false (GU-8: a spectator's or a watcher's link): never shown. The OSD's flight mode still says
+     * the mode; the buttons are the pilot's alone.
+     */
+    void update(FcTelemetry.Status s, int arduMode, FcTelemetry.CommandAck ack, long now, boolean ownDrone) {
+        boolean ardu = ownDrone && s != null && s.isArduPilot();
         if (ardu != isVisible()) setVisible(ardu);
         if (!ardu) return;
         int mode = arduMode;
@@ -100,6 +109,8 @@ final class ArduModeBar extends JPanel {
             refusedAt = ack.receivedAt();
         }
         if (refused != null && now - refusedAt > REFUSED_SHOW_MS) refused = null;
+        // GU-4: the radio's mode switch took it out of the paused route's LOITER: the next GO starts the route anew
+        if (paused && mode != ArduModes.LOITER && mode != ArduModes.AUTO) paused = false;
         if (mode != modeNow || refused != null) {
             modeNow = mode;
             for (Button b : buttons) b.repaint();
