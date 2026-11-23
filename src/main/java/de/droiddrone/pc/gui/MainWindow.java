@@ -928,6 +928,8 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "ArduPilot drone setup", "ArduPilot board on USB", () -> ArduSetupPages.open(this));
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
+            // fleet PRD TO-5: the tour's ArduPilot and fleet steps on their own
+            addMenuItem(menu, "Fleet demo", "ArduPilot drones, routes, groups, reserves: virtual", () -> Tour.fleetDemo(this));
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
@@ -5513,8 +5515,16 @@ public class MainWindow extends JFrame {
     private void refreshFleet() {
         if (fleets != null) fleets.refresh();
         MapWindow mw = mapWindowIfOpen(); // fleet G4: the follower group on the map
-        if (mw != null) mw.setGroup(fleetOps.picture());
+        java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> tg = tourGroup;
+        if (mw != null) mw.setGroup(tg != null ? tg.get() : fleetOps.picture());
         fleetOps.tickReserves(); // fleet area F: calls waiting for a column, orders sent again until answered
+    }
+
+    /** Fleet TO-2: the tour's or DEMO's virtual group on the map in place of this PC's own (null: its own). */
+    private volatile java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> tourGroup;
+
+    void setTourGroup(java.util.function.Supplier<de.droiddrone.pc.air.GroupLink.Picture> g) {
+        tourGroup = g;
     }
 
     /** Fleet: this PC's own pilot link now (not a spectator's or a watcher's), or null. */

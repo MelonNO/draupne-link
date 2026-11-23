@@ -533,7 +533,7 @@ final class FleetController {
                     heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,
                     wanted == null ? null : FleetManager.modeName(wanted.mode()), note,
                     wanted == null || wanted.queuedAt() <= 0 ? -1 : Math.max(0, now - wanted.queuedAt())).withWas(marked ? null : was)
-                    .withFc(fcOf(store, e.name())));
+                    .withFc(e.isVirtual() && de.droiddrone.pc.fleet.ArduShow.DEVICE.equals(e.device()) ? "ARDU" : fcOf(store, e.name())));
         }
         return cards;
     }
