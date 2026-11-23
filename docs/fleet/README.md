@@ -21,7 +21,7 @@ Work on [DRAUPNE Fleet & ArduPilot](PRD.md): ArduPilot as a second flight-contro
 | 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gate not run (no SITL here) |
 | 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | built; the ridge gate passes on made-up terrain |
 | 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback |
-| 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; random overlapping failures still lose separation (open); hand-over is a new session (1-2 s) |
+| 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; random overlapping failures still lose separation (open); hand-over within 500 ms on loopback (about 290 ms at a 120 ms round trip), not tried on drones |
 | 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback; the AL-19 cases as unit tests |
 | 6-9 | GNSS-denied (stage 2) | See the PRD | after stage 1 |
 
@@ -102,7 +102,13 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    run names them (tags `night` + `finding`). The loopback cut-off case on the real wire now passes. **Don't fly a
    group before all of them pass.**
 2. **Real ArduPilot:** every gate again in SITL (needs WSL), then the PRD's bench tests (F405, two real drones).
-3. **Hand-over speed (NFR, FL-6):** a new lead is a new pilot session, 1-2 s; the PRD wants sticks within 500 ms.
+3. **Hand-over speed (NFR, FL-6): done on loopback, not tried on drones.** It was a new pilot session that waited for
+   ArduPilot's armed word twice (its heartbeat, once a second): 1.3-2.1 s, and the window never handed over at all (it
+   asked for END LINK first). Now the group's fresh report stands for that word (`RcSession.handedOver`), the link
+   to the new lead sends sticks once the phone's session is up (`ControlLink.handOver`), and the phone lets in its
+   commander's session on a follower it just told to lead, armed or not (`FleetCommandGate.leadConnect`) - nobody
+   else. `LeadHandoverLoopbackTest`: 286-291 ms at a 120 ms round trip. Open: what the radio's mode switch does to the
+   new lead at that moment is untried (AC-32's centred pickup is not built); the video waits for its key frame as before.
 4. **Not built yet:** the launch mini-view (AL-20/21) and the reserves' OSD list (AL-5), HOME NOW (FD-5), the
    dispatch preview (FD-9), the other drones' pictures on demand (C3), ADS-B to the lead (FD-8), geofence (AP-9),
    flight logs (AP-10), the Mission Planner bridge (AP-11), go-look (AP-12), the rally point upload (AC-10: RTL goes

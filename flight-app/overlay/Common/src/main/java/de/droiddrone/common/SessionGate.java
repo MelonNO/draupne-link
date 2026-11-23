@@ -147,6 +147,17 @@ public final class SessionGate {
     }
 
     /**
+     * Fleet FL-6: a session the fleet's hand-over rule lets in where {@link #noSession} said SPECTATOR
+     * (FleetCommandGate.leadConnect: the group's own PC taking its follower as the new lead). Started now, with this id.
+     */
+    public Verdict leadSession(long now, long sessionId) {
+        lastPilotMs = now;
+        sessionStartedMs = now;
+        liveIdIs(sessionId);
+        return Verdict.NEW_SESSION;
+    }
+
+    /**
      * The session id a Connect ends with, 0..2^32-1; {@link #NO_ID} for a Connect without one, or a packet that is no
      * Connect (so every packet from the pilot can be handed to the overload below as it comes).
      */

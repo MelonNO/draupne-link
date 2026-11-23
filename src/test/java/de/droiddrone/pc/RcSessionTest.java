@@ -893,4 +893,48 @@ class RcSessionTest {
         assertNull(RcSession.idleSticks(radio, null));
         assertNull(RcSession.idleSticks(radio, new ArmSwitch(4, List.of(new int[]{900, 2100}))));
     }
+
+    /**
+     * Fleet FL-6: the group's new lead, its report armed and flying - the sticks live at once, as they are, without
+     * waiting for its own telemetry (READING FC); never with the radio's ARM off; its telemetry's DISARMED wins; 3 s at most.
+     */
+    @Test
+    void theNewLeadsSticksGoLiveOnTheGroupsWord() {
+        RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
+        ArmSwitch aux1 = new ArmSwitch(4, List.of(new int[]{1700, 2100}));
+        boolean[] disarmed = {false};
+        java.util.function.Supplier<RcSession> make = () -> new RcSession(new NoLink().link, five, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> disarmed[0], aux1, () -> false, RcSession.FC_READ_WAIT_MS));
+        Joystick.State flying = new Joystick.State(new float[]{0, 0, 0, 0.2f, 1f}, new boolean[0]);
+        Joystick.State armOff = new Joystick.State(new float[]{0, 0, 0, 0.2f, -1f}, new boolean[0]);
+
+        RcSession cold = make.get();
+        cold.onInput(flying);
+        assertFalse(cold.isRcEnabled(), "a new link: READING FC");
+        assertEquals("READING FC", cold.waitingFor());
+
+        RcSession lead = make.get();
+        lead.handedOver();
+        lead.onInput(flying);
+        assertTrue(lead.isRcEnabled(), "the group's word: live at once");
+        assertEquals(RcSession.NEW_LEAD_BANNER, lead.lastResumeBanner().text());
+
+        RcSession off = make.get();
+        off.handedOver();
+        off.onInput(armOff);
+        assertFalse(off.isRcEnabled(), "ARM off on the radio: that frame would disarm it in the air");
+
+        disarmed[0] = true;
+        RcSession down = make.get();
+        down.handedOver();
+        down.onInput(flying);
+        assertFalse(down.isRcEnabled(), "its own telemetry says DISARMED: that counts");
+        disarmed[0] = false;
+
+        RcSession late = make.get();
+        late.handedOver();
+        now[0] += RcSession.HANDED_OVER_MS;
+        late.onInput(flying);
+        assertFalse(late.isRcEnabled(), "the word lasts 3 s");
+    }
 }

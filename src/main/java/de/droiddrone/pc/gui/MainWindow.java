@@ -194,6 +194,11 @@ public class MainWindow extends JFrame {
         }
 
         @Override
+        public void handOver(String phone, boolean flying) {
+            handOverTo(phone, flying);
+        }
+
+        @Override
         public void wake(String phone) {
             fleetRequest(phone, de.droiddrone.pc.ControlLink.POWER_NORMAL, 0, getRootPane());
         }
@@ -2012,12 +2017,13 @@ public class MainWindow extends JFrame {
         nameService.pause(); // the link takes the port, and answers name queries itself meanwhile
         boolean wantVideo = !"false".equalsIgnoreCase(config.getString(VIDEO_KEY));
         ControlLink[] linkRef = new ControlLink[1];
-        // 1.0.64: the last connection's pipeline ends on its own thread - never two of them on the one view
-        awaitVideoClosed(VIDEO_CLOSE_MS);
+        // 1.0.64: the last connection's pipeline ends on its own thread - never two of them on the one view. FL-6: not
+        // waited for in a hand-over (the sticks first): its link is closed, nothing more comes to it
+        if (!handingOver) awaitVideoClosed(VIDEO_CLOSE_MS);
         videoView.clear(); // and no picture it handed over while ending
         video = wantVideo ? new VideoPipeline(videoView, () -> linkRef[0] == null ? -1 : linkRef[0].getPing()) : null;
         try {
-            connection = Connection.open(config, video);
+            connection = handingOver ? Connection.openHandOver(config, video) : Connection.open(config, video);
             linkRef[0] = connection.getLink();
             ControlLink flown = connection.getLink();
             // this PC's "possibly flying" flag (1.0.49): every background download waits while this drone may fly
@@ -5754,6 +5760,35 @@ public class MainWindow extends JFrame {
     }
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
+    /** A hand-over's connect() runs (FL-6): its link is ControlLink.handOver's, the old video's end not waited for. */
+    private boolean handingOver;
+
+    /**
+     * Fleet FL-6 / FL-5: the group's new lead, flown now. DISCARD LEAD is the pilot's own switch (E4): no question -
+     * the link to the old lead ends and the new lead's opens on the same port, its sticks as soon as its phone's session
+     * is up. Its report (flying: fresh, armed, in the air) stands for its FC's own word until that comes.
+     */
+    private void handOverTo(String phone, boolean flying) {
+        if (connectedTo(phone)) return;
+        Connection was = connection;
+        if (was == null || observation != null || was.getLink().isWatchOnly()) {
+            connectFromMap(phone, false);
+            return;
+        }
+        logLine("NEW LEAD " + phone + ": sticks to it.");
+        handingOver = true;
+        try {
+            disconnect();
+            roleCombo.setSelectedItem(ROLE_PILOT);
+            save(Map.of(Names.PHONE_NAME_KEY, phone));
+            updatePhoneList();
+            connect();
+        } finally {
+            handingOver = false;
+        }
+        if (session != null && flying) session.handedOver();
+    }
+
     private void connectFromMap(String phone, boolean watch) {
         toPilotWindow();
         if (observation != null && watch) {

@@ -39,6 +39,14 @@ final class FleetOps {
         /** Fly this drone now (the session goes to it). */
         void flyNow(String phone);
 
+        /**
+         * FL-6 / FL-5: the group's new lead - the sticks go to it now, no question asked (E4), the link to the old lead
+         * ends; flying says its report is fresh, armed and in the air.
+         */
+        default void handOver(String phone, boolean flying) {
+            flyNow(phone);
+        }
+
         /** Fleet AL-7: wake this phone at its next check-in (FLEET's NORMAL mode, queued). */
         default void wake(String phone) {
         }
@@ -273,10 +281,13 @@ final class FleetOps {
             }
 
             public void newLead(String drone) {
-                SwingUtilities.invokeLater(() -> {
+                Runnable r = () -> { // FL-6: the sticks first, the word after
+                    GroupLink l = link;
+                    host.handOver(drone, l != null && l.reportsFlying(drone, System.currentTimeMillis()));
                     host.alert("NEW LEAD: " + drone);
-                    host.flyNow(drone);
-                });
+                };
+                if (SwingUtilities.isEventDispatchThread()) r.run(); // DISCARD LEAD: here already
+                else SwingUtilities.invokeLater(r); // FL-5: the group's tick
             }
 
             public void launchStatus(String drone, de.droiddrone.common.launch.LaunchWire.Status s) {
