@@ -31,6 +31,8 @@ public final class Hardware {
     public static final int THROTTLE_CEILING = 1100;
 
     private static final Set<String> KEYS = Set.of("phone.ip", "phone.port", "phone.key", "phone.adb", "phone.path", "phone.package",
+            // the phone's Wi-Fi as it normally is (the network-switch scenario puts the phone back to it)
+            "phone.wifi",
             "board.port", "board.armAux", "battery.cells", "battery.cellFloor", "keeper.port",
             // >>> R3, the flight controller keeper
             "board.mayArm", "keeper.motorSeconds",
@@ -49,7 +51,7 @@ public final class Hardware {
     private final Set<String> outside;
     private final String phoneIp, phoneKey, phoneAdb, phonePackage, boardPort;
     private final int phonePort, armAux, cells, keeperPort, motorSeconds, outputLimitMax;
-    private final boolean relayed, mayArm, letFailsafeRun, failsafeSeenOnSitl;
+    private final boolean relayed, phoneWifi, mayArm, letFailsafeRun, failsafeSeenOnSitl;
     private final double cellFloor;
 
     private Hardware(Path file, Properties p, Set<String> outside) {
@@ -82,6 +84,9 @@ public final class Hardware {
         String path = text(p, "phone.path");
         if (!path.isEmpty() && !path.equals("direct") && !path.equals("relay")) throw wrong("phone.path is direct or relay, not \"" + path + "\"");
         relayed = path.equals("relay");
+        String wifi = text(p, "phone.wifi");
+        if (!wifi.isEmpty() && !wifi.equals("on") && !wifi.equals("off")) throw wrong("phone.wifi is on or off, not \"" + wifi + "\"");
+        phoneWifi = !wifi.equals("off");
         boardPort = text(p, "board.port");
         if (boardPort.chars().anyMatch(Character::isWhitespace)) throw wrong("board.port is no port's name: \"" + boardPort + "\"");
         armAux = number(p, "board.armAux", 1, 1, 4);
@@ -231,6 +236,14 @@ public final class Hardware {
     /** The way to the phone is one of Tailscale's relays (the file's phone.path=relay): the app is told so, as its own Tailscale would tell it. */
     public boolean relayed() {
         return relayed;
+    }
+
+    /**
+     * The phone's Wi-Fi is normally on (phone.wifi; left out: on): a run that switches the phone's own network begins
+     * only on a phone found so - Wi-Fi as this says, mobile data on, airplane mode off - and puts it back so.
+     */
+    public boolean phoneWifi() {
+        return phoneWifi;
     }
 
     /** The one pair a hardware run's fence lets through. Throws in a JVM that is no hardware task's ({@link Fence.Reach}). */

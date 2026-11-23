@@ -110,6 +110,13 @@ class PhoneRigGuardTest {
             new String[]{"shell", "settings put global stay_on_while_plugged_in 99"},
             new String[]{"shell", "settings put system stay_on_while_plugged_in 2"},
             new String[]{"shell", "settings put global draupne_bench_stay_on_was 2 3"},
+            // the network-switch scenario's note: its two values, nothing else; and no setting of the network written
+            new String[]{"shell", "settings put global draupne_bench_net_was 1"},
+            new String[]{"shell", "settings put global draupne_bench_net_was wifi-on extra"},
+            new String[]{"shell", "settings put secure draupne_bench_net_was wifi-on"},
+            new String[]{"shell", "settings put global wifi_on 0"},
+            new String[]{"shell", "settings put global mobile_data 0"},
+            new String[]{"shell", "cmd phone data disable"},
             new String[]{"shell", "settings delete global airplane_mode_on"},
             new String[]{"shell", "settings delete secure lock_screen_lock_after_timeout"},
             new String[]{"shell", "dumpsys lock_settings --reset"},
@@ -399,7 +406,18 @@ class PhoneRigGuardTest {
                 // R3, the flight controller keeper: the bench build told how to reach its flight controller, and asked
                 new String[]{"shell", "setprop debug.draupne.fc tcp:47801"},
                 new String[]{"shell", "setprop debug.draupne.fc usb"},
-                new String[]{"shell", "getprop debug.draupne.fc"}));
+                new String[]{"shell", "getprop debug.draupne.fc"},
+                // the network-switch scenario (PhoneNet): the phone's network read, switched, put back, the bench's note of it
+                new String[]{"shell", "svc data disable"},
+                new String[]{"shell", "svc data enable"},
+                new String[]{"shell", "settings get global wifi_on"},
+                new String[]{"shell", "settings get global mobile_data"},
+                new String[]{"shell", "dumpsys connectivity"},
+                new String[]{"shell", "settings get global draupne_bench_net_was"},
+                new String[]{"shell", "settings put global draupne_bench_net_was wifi-on"},
+                new String[]{"shell", "settings put global draupne_bench_net_was wifi-off"},
+                new String[]{"shell", "settings delete global draupne_bench_net_was"},
+                new String[]{"shell", "logcat -d -v time -T '" + stamp + "'"}));
         for (String action : BenchControl.ACTIONS) {
             commands.add(new String[]{"shell", "am broadcast -n " + BenchControl.component(app) + " -a " + action});
         }

@@ -228,7 +228,9 @@ hardwareTask('benchHwPhone', 'hwphone & !finding', 'Real hardware: the real phon
 //   -PreleasedAppMayBeChanged=true   the released app on the phone may be cleared, stopped, installed over (never from the file)
 //   -Pphone.apk=<an APK to install first>   -Pphone.onBattery=false   -Pandroid.sdk=<the Android SDK with adb in it>
 //   gradlew phoneReset [-Pserial=<adb serial>]   after a phone run that was killed: what the bench pretended about the
-//                                                phone's battery is taken back (bench.ps1 phone ends with it)
+//                                                phone's battery is taken back (bench.ps1 phone ends with it), and the
+//                                                phone's own network where a run left its note (bench.ps1 hw, after
+//                                                HwNetworkSwitchScenario)
 tasks.named('benchHwPhone') {
     ['phone.adb'              : 'bench.phone.adb',
      'phone.ip'               : 'bench.phone.ip',
@@ -243,7 +245,7 @@ tasks.named('benchHwPhone') {
 }
 tasks.register('phoneReset', JavaExec) {
     group = 'bench'
-    description = "After a killed phone run: battery and doze pretences taken back on the real phone (-Pserial=...; else the hardware file's phone.adb)"
+    description = "After a killed phone run: battery and doze pretences taken back on the real phone, and its network where a run noted it (-Pserial=...; else the hardware file's phone.adb)"
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'de.droiddrone.bench.PhoneReset'
     args((project.findProperty('serial') ?: project.findProperty('phone.adb') ?: '').toString())

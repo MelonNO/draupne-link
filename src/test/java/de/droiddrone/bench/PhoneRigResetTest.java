@@ -24,6 +24,7 @@ class PhoneRigResetTest {
         assertEquals(List.of("get-state",
                 "shell dumpsys deviceidle unforce", "shell dumpsys battery reset",
                 "shell settings get global draupne_bench_stay_on_was", // a note of a run that kept the phone awake? None here: nothing put back
+                "shell settings get global draupne_bench_net_was",     // nor of one that switched the phone's network
                 "shell dumpsys battery", "shell cmd connectivity airplane-mode", "shell dumpsys deviceidle get deep",
                 "shell settings get global stay_on_while_plugged_in", "reverse --list"), adb.sent);
         assertEquals(List.of(List.of("shell", "dumpsys deviceidle unforce"), List.of("shell", "dumpsys battery reset")), PhoneReset.ORDERS,

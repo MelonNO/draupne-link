@@ -579,6 +579,7 @@ class BenchSelfTest {
         assertFalse(hw.letFailsafeRun() || hw.failsafeSeenOnSitl(), "letting a real board's failsafe run takes two words, and the example says neither");
         assertEquals(15, hw.outputLimitMax());
         assertFalse(hw.relayed());
+        assertTrue(hw.phoneWifi(), "the phone's Wi-Fi normally on: the example leaves phone.wifi out");
         assertThrows(IllegalStateException.class, hw::reach, "no reach from it in a JVM that is no hardware run");
         try (AutoCloseable back = asAHardwareRun()) {
             assertEquals(List.of(hw.phoneIp() + ":" + hw.phonePort()), hw.reach().pairs());
@@ -611,6 +612,7 @@ class BenchSelfTest {
         assertEquals(7000, mine.phonePort());
         assertEquals("Secret16", mine.phoneKey());
         assertEquals(2, mine.armAux());
+        assertTrue(mine.phoneWifi());
         assertFalse(mine.toString().contains("Secret16"), mine.toString());
         de.droiddrone.pc.setup.Tailscale.Status relayed = de.droiddrone.pc.setup.BenchSetupAccess.tailscaleStatus(mine.tailscaleStatus());
         assertTrue(de.droiddrone.pc.setup.Tailscale.phonePath(relayed, "192.0.2.44").startsWith("relay"), "a relayed way is said as one");
@@ -619,11 +621,14 @@ class BenchSelfTest {
                 mine::cellFloor, mine::packFloor, mine::keeperPort)) {
             assertTrue(assertThrows(IllegalStateException.class, needed).getMessage().contains(own.toString()));
         }
+        Path offWifi = s.root().resolve("off-wifi-" + Hardware.FILE);
+        Files.writeString(offWifi, "phone.ip=192.0.2.44\nphone.wifi=off\n");
+        assertFalse(Hardware.read(offWifi).phoneWifi(), "a phone whose Wi-Fi is normally off (phone.wifi=off)");
         // and a slip of the hand is said, not read as something else
         for (String wrong : List.of("phone.port=6286\n", "phone.ip=bench-phone.example\n", "phone.ip=192.0.2.0/24\n", "phone.ip=224.0.0.251\n",
                 "phone.ip=192.0.2.10\nphone.prot=7000\n", "phone.ip=192.0.2.10\nphone.port=0\n", "phone.ip=192.0.2.10\nbattery.cells=40\n",
                 "phone.ip=192.0.2.10\nbattery.cellFloor=35\n", "phone.ip=192.0.2.10\nphone.path=fast\n", "phone.ip=192.0.2.10\nboard.armAux=9\n",
-                "phone.ip=192.0.2.10\nphone.key=more-than-sixteen-characters\n", "phone.ip=192.0.2.10\nkeeper.port=80\n",
+                "phone.ip=192.0.2.10\nphone.key=more-than-sixteen-characters\n", "phone.ip=192.0.2.10\nkeeper.port=80\n", "phone.ip=192.0.2.10\nphone.wifi=yes\n",
                 // R3: the keeper's two other ports follow its control port; arming is true or false; the budget is seconds of an hour
                 "phone.ip=192.0.2.10\nkeeper.port=65535\n", "phone.ip=192.0.2.10\nboard.mayArm=yes\n", "phone.ip=192.0.2.10\nkeeper.motorSeconds=4000\n")) {
             Files.writeString(own, wrong);

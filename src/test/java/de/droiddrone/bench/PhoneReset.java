@@ -5,17 +5,21 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
+import java.util.function.LongSupplier;
 
 /**
  * After a phone run that was killed or failed (its {@link PhoneRig#close} may never have run): what the bench may
- * have left pretended on the real phone is taken back - doze no longer forced, the battery as it really is, and the
- * phone's own "stay awake while plugged in" where a run kept an unlocked phone awake (by the note that run left on
- * the phone; without a note it is not touched). Then the
+ * have left pretended on the real phone is taken back - doze no longer forced, the battery as it really is, the
+ * phone's own "stay awake while plugged in" where a run kept an unlocked phone awake, and the phone's own network
+ * (airplane mode, Wi-Fi, mobile data) where a network-switch run switched it - each by the note that run left on the
+ * phone; without a note it is not touched. Then the
  * phone's state is read and printed, so that anything else left behind is seen (airplane mode on, a port still led
  * back to this PC); that is only said, not changed - it may be the pilot's own setting, or the bench build's flight
  * controller, which comes down such a port.
  * <pre>
- *   gradlew phoneReset [-Pserial=&lt;the phone's adb serial&gt;]      (.\bench.ps1 phone ends with it, however the run went)
+ *   gradlew phoneReset [-Pserial=&lt;the phone's adb serial&gt;]      (.\bench.ps1 phone ends with it, however the run went;
+ *                                                                 .\bench.ps1 hw too, when a scenario switched the phone's network)
  * </pre>
  * Without {@code -Pserial} the phone of this bench's hardware file is taken ({@link Hardware}: phone.adb); with
  * neither nothing is done - a phone is never picked by itself. Safe to run at any time, as often as wanted: both
@@ -62,8 +66,22 @@ public final class PhoneReset {
         return local == null ? null : Path.of(local, "Android", "Sdk");
     }
 
+    /** How long the phone's network gets to be back as a killed run noted it. */
+    static final long NETWORK_BACK_MS = 60_000;
+
     /** The orders sent, then the phone's state read; false when the phone was not there or an order failed. */
     static boolean run(PhoneAdb adb, Consumer<String> out) {
+        return run(adb, out, ms -> {
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, System::currentTimeMillis);
+    }
+
+    /** {@link #run(PhoneAdb, Consumer)} with its waiting and its clock handed in. */
+    static boolean run(PhoneAdb adb, Consumer<String> out, LongConsumer pause, LongSupplier clock) {
         String state;
         try {
             state = said(adb, List.of("get-state"));
@@ -101,6 +119,28 @@ public final class PhoneReset {
         } catch (RuntimeException e) {
             ok = false;
             out.accept("FAILED  stay awake while plugged in: its note could not be read or its value put back   -> " + e.getMessage());
+        }
+        // the phone's own network: a network-switch run notes on the phone what it is to be put back to before its first
+        // switch (PhoneNet.NOTE) and takes the note away once it is back. Still there: that run did not get so far - the
+        // network goes back as noted (airplane mode off, mobile data on, Wi-Fi as it was), and then the note
+        try {
+            PhoneNet.Normal was = PhoneNet.Normal.ofNote(said(adb, List.of("shell", PhoneNet.NOTE_READ)));
+            if (was == null) {
+                out.accept("network: the bench has no note of having switched it - left as it is");
+            } else {
+                PhoneNet.Back back = PhoneNet.putBack(c -> said(adb, List.of("shell", c)), was, pause, clock, NETWORK_BACK_MS, null);
+                for (String o : back.sent()) out.accept("done    shell " + o);
+                if (back.switches()) {
+                    said(adb, List.of("shell", PhoneNet.NOTE_DELETE));
+                    out.accept("done    shell " + PhoneNet.NOTE_DELETE);
+                } else {
+                    ok = false;
+                }
+                out.accept("network: as a killed run of the bench left it noted (" + was.words() + "): " + back.words());
+            }
+        } catch (RuntimeException e) {
+            ok = false;
+            out.accept("FAILED  the phone's network: its note could not be read or the network put back   -> " + e.getMessage());
         }
         // read only, from here on
         List<String> seen = new ArrayList<>();

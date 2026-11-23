@@ -87,7 +87,7 @@ class HwLinkMatrixScenario {
     }
 
     /** The keeper up and the board taken, disarmed and locked, before anything else is started (as BoardChainScenario asks it). */
-    private static KeeperClient.State keeperReady(Hardware bench) {
+    static KeeperClient.State keeperReady(Hardware bench) {
         KeeperClient.State s;
         try (KeeperClient keeper = new KeeperClient(bench.keeperPort(), 5000)) {
             s = keeper.state();

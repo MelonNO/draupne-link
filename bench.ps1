@@ -14,6 +14,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
   .\bench.ps1 hw -Tests *HwLinkMatrix* -Quick   the bad-network box on the real phone, a few cells only (-Quick: any suite's quick cut)
   .\bench.ps1 hw -Tests *HwDroneSetup*          every Drone setup row on the real board, then CONFIRM (battery out, props off)
+  .\bench.ps1 hw -Tests *HwNetworkSwitch* -Quick   the phone's own network switched under the link (Wi-Fi off / on, airplane 10 s)
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.
@@ -403,7 +404,7 @@ function Invoke-PhoneReset {
     $code = Invoke-Gradle @('--offline', '--console=plain', '-q', 'phoneReset') $log
     $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
     [void]$results.Add("phoneReset`t$mins min`t`t`texit $code")
-    if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match '^(done|FAILED|battery|airplane|deep doze|stay awake|ports led|STILL|Nothing done|What the bench|NOT everything)' } | ForEach-Object { Write-Host "          $_" } }
+    if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match '^(done|FAILED|battery|airplane|network|deep doze|stay awake|ports led|STILL|Nothing done|What the bench|NOT everything)' } | ForEach-Object { Write-Host "          $_" } }
     if ($code -ne 0) { Write-Host "          phoneReset ended with exit code $code - LOOK AT THE PHONE (logs\phoneReset.log); with it back on adb: .\gradlew phoneReset" }
 }
 # <<< R5 --------------------------------------------------------------------------------------------------------------
@@ -536,6 +537,9 @@ if ($Run -ne 'report') {
                 if ($s -eq 'hw' -and (Test-Keeper)) { Stop-Keeper $keeper }      # R3: ended first - boardSafe then finds the port free
                 if ($s -eq 'hw') { Invoke-BoardSafe }
                 if ($s -eq 'phone') { Invoke-PhoneReset }   # R5: the phone run ends with the phone's battery and doze as they really are
+                # a hw scenario that switched the phone's own network (HwNetworkSwitchScenario leaves this file before its first
+                # switch): the phone's network put back as the note on the phone says, also after a scenario that was killed
+                if ($s -eq 'hw' -and (Test-Path (Join-Path $runRoot 'phone-network-switched.txt'))) { Invoke-PhoneReset }
             }
             continue
         }

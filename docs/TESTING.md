@@ -22,6 +22,7 @@ are not part of it.
 .\bench.ps1 sitl                   Betaflight 4.4.1 itself, as a program in WSL (-Betaflight 4.5.5 another version)
 .\bench.ps1 hw                     REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
 .\bench.ps1 hw -Tests *HwLinkMatrix* -Quick    the bad-network box on the real phone, two networks and two cuts (-Quick: a suite's quick cut)
+.\bench.ps1 hw -Tests *HwNetworkSwitch* -Quick the phone's own network switched under the link: Wi-Fi off, Wi-Fi on, airplane mode 10 s
 .\bench.ps1 phone                  REAL HARDWARE: the real phone itself
 ```
 
@@ -62,7 +63,7 @@ somebody removes their folders.
 | The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`). |
 | Betaflight | `sitl` | Betaflight 4.4.1 itself, as a program in WSL, set up as the drone is (see "Betaflight as a program"): a snapshot, settings changed, the restore - the board as the snapshot again; the keeper's lock, a window under the cap, its ends, END safe; the drone's own failsafe when the sticks stop, timed. About 6 min. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
-| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Three scenarios: the phone found, the link, the picture, STANDBY - nothing armed; the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`); and the bad-network box - the bad-link table between the app and the real phone, the sticks counted at the board (`*HwLinkMatrix*`, about 25 min). See "Real hardware", "The keeper", "The bad-network box". |
+| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Three scenarios: the phone found, the link, the picture, STANDBY - nothing armed; the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`); and the bad-network box - the bad-link table between the app and the real phone, the sticks counted at the board (`*HwLinkMatrix*`, about 25 min). Beside them the phone's own network switched under the link - Wi-Fi to mobile data and back, mobile data off, airplane mode, a quick Wi-Fi flap - the phone put back as found (`*HwNetworkSwitch*`, about 12 min). See "Real hardware", "The keeper", "The bad-network box", "The phone's own network switched". |
 | Real hardware: the phone | `phone` | Never part of `quick` or `full`. The emulator's phone scenarios against this bench's one real phone on adb, with the bench build of the app: first start, the PC's link and the camera's picture through the bench's wire, a weak link, a cut, a link dead one way, the camera closed under a size change (a real camera here), the app ended by an error and killed asleep - asleep "on battery" though it is on a cable - and, with `-Tests *PhoneNight* -Hours 8`, the app left running for hours. Ends with `gradlew phoneReset`. See "Real hardware", "The phone run". |
 
 Beside what a scenario checks, every scenario fails on: an error nobody caught, the window not answering for more
@@ -135,8 +136,8 @@ yet ([BENCH-RUNS.md](BENCH-RUNS.md)).
 
 - **The hardware file.** `%LOCALAPPDATA%\DraupneBench\hardware.properties`, this PC's own, outside the repo and never
   committed: the phone's address and link port, its adb serial, the board's port, the pack's cells and the volts per
-  cell under which a run ends, the keeper's port. Start from [hardware.example.properties](hardware.example.properties)
-  (made-up values). Without the file every hardware scenario skips itself and `bench.ps1` says what is missing.
+  cell under which a run ends, the keeper's port; `phone.wifi` (on or off, left out: on) says the phone's Wi-Fi as it
+  normally is. Start from [hardware.example.properties](hardware.example.properties) (made-up values). Without the file every hardware scenario skips itself and `bench.ps1` says what is missing.
 - **Still sealed off.** The app has its made-up user, radio, USB, internet and loudspeaker as in every run. The fence
   lets it reach exactly one thing outside this PC: the phone's address at its link port (`Fence.Reach`: addresses
   written out, no names, no ranges, no multicast). Another port of the phone, another address, a name looked up are
@@ -346,6 +347,54 @@ the made-up pieces only (`gradlew test --tests *HwLinkMatrix*`); not yet run on 
   each cell's phone log and the board's word look by look in `matrix\logs`, a check line in the film for each thing
   held or not.
 
+### The phone's own network switched (`HwNetworkSwitchScenario`)
+
+Real networks on the real phone: the phone's own network changed under the link while the sealed app flies it, the
+sticks counted at the real board through the keeper. Built 2026-11-23 and proved on made-up pieces only (`gradlew test
+--tests *HwNetworkSwitch* --tests *PhoneRigNetwork*`: the cells, the rows, a made-up phone whose airplane mode takes its
+Wi-Fi with it, the guard, `phoneReset` by the note); not yet run on the phone and the board.
+
+```
+.\bench.ps1 hw -Tests *HwNetworkSwitch* -Quick     Wi-Fi off (to mobile data), Wi-Fi on (back to Wi-Fi), airplane mode 10 s: about 7 min
+.\bench.ps1 hw -Tests *HwNetworkSwitch*            all six cells: about 12 min, 20 with the armed part
+```
+
+- **The way.** A hardware run as ever (the fence's one way through, the radio's limits, the keeper's guard) - but no
+  bench wire: the app reaches the phone at the hardware file's address itself, as a pilot's PC does over Tailscale, so
+  the network under test is the real one. The phone app is the bench build, its board through the keeper as
+  `BoardChainScenario` has it. The phone must be on this PC's USB cable: with adb over the network the scenario does
+  not begin (a switch would cut adb's own way, and `PhoneGuard` refuses it).
+- **The phone as found, and back.** Before anything is switched: airplane mode off, mobile data on, Wi-Fi as
+  `phone.wifi` says, and the phone on that network, validated - else NOT BEGUN, nothing switched, and the film says
+  what is not so. Before the first switch the scenario notes on the phone what to put back
+  (`settings put global draupne_bench_net_was wifi-on`) and leaves `phone-network-switched.txt` in the run's folder.
+  After every cell and at the end, whatever happened (a finally), the phone is put back - airplane mode off first,
+  then Wi-Fi and mobile data - and read back until it is on its network, validated; the note goes once it is. The
+  rig's close switches on once more what it saw switched off. A run killed in the middle: `bench.ps1 hw` ends with
+  `gradlew phoneReset` when that file is there, which puts the network back by the note (no note: nothing switched).
+  The switch's own orders never wait for the battery watch (a cooling pause in airplane mode would leave the phone
+  offline); the battery is looked at between cells instead. A phone whose Wi-Fi is normally off has its Wi-Fi cells
+  skipped: the bench switches on no network the phone does not have.
+- **The cells**, each from a steady link (LINK READY, the pilot's sticks at the board, the picture, the sound, 5 s
+  steady): Wi-Fi off (to mobile data); Wi-Fi on (back to Wi-Fi, from mobile data); mobile data off on Wi-Fi;
+  airplane mode 10 s and 60 s; Wi-Fi off and on within 2 s. Each stream is watched until it is back (10 s at least
+  after the switch's last order, 60 s at most): the link (LINK READY), the picture (the app's link log), the pilot's
+  sticks at the board (by their rate), the phone's sound (its microphone as the app plays it, on the bench's silent
+  loudspeaker) - when it went, how long it was away, how long after the last order it was back; the largest stick
+  gap, the board's own RXLOSS and FAILSAFE, nothing armed. Which network the phone is on before, half way through a
+  long switch and after (`dumpsys connectivity`: Wi-Fi or mobile data, validated, Tailscale's VPN) - the cell's own
+  premise checked (Wi-Fi off ends on mobile data) - and Tailscale's path as far as its lines in the phone's log show
+  it (direct or relayed, its home relay, the network changes it saw; no address kept). The phone app's new sessions
+  (F-001: two at most), its link socket opened anew (F-039) or parked for want of Tailscale (said), errors (said), a
+  crash (failed).
+- **The armed part**, only with `board.mayArm=true`, as in the bad-network box: per cell the phone back onto the
+  cell's first network, one keeper window of 10 s, the same switch while armed (its hold 12 s at most), the board held
+  to the same rules, ARM off in the window's last 2 s at the latest. Never with `board.letFailsafeRun`: how long a
+  switch keeps the sticks from the board is not known beforehand.
+- **What it leaves:** `matrix\hw-netswitch.tsv` (a row a cell, the report shows it), each cell's log in
+  `matrix\logs` (the switch's orders on their times, the board's word look by look, Tailscale's lines with the
+  addresses left out, the phone app's log), a check line in the film for each thing held or not.
+
 ### Every Drone setup row on the real board (`HwDroneSetupScenario`)
 
 The app's own Drone setup on the real flight controller, as a pilot opens it - SETUP > Set up a new drone, the drone's
@@ -458,8 +507,9 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   suspend with USB attached, not exact-alarm timing after suspend, not the modem or the network's NAT going idle,
   not the phone maker's own app killers: those need one attended night off the cable. It is taken back when the
   scenario ends, whatever happened, and once more by `gradlew phoneReset`, `bench.ps1 phone`'s last step however
-  the run went (beside that it puts the phone's own "stay awake" back where a run left its note, and changes nothing
-  else: airplane mode, or a port led back to this PC, are only said).
+  the run went (beside that it puts the phone's own "stay awake" back where a run left its note, and the phone's
+  network where a network-switch run left its note - `bench.ps1 hw` runs it after such a run too - and changes nothing
+  else: airplane mode without the bench's note, or a port led back to this PC, are only said).
 - **The phone's own good.** Its log is followed into the scenario's film folder from the start
   (`phone-logcat.txt`: the app's lines and Android's word on what ended it). Its battery is read once a minute:
   hotter than 42 degrees the scenario waits until it is 40 (half an hour at most), below 15 % it stops.

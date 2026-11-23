@@ -29,7 +29,9 @@ import java.util.function.Function;
  * stayon usb - and to put the phone's own value back exactly: settings put / delete global {@link #STAY_ON}, with the
  * bench's note of that value kept on the phone meanwhile, {@link #STAY_ON_NOTE}); and the network switched off (airplane
  * mode on, svc wifi disable, svc data disable) - that only while adb comes over the cable: over the network it would cut
- * the bench's own way to the phone, with nobody there to switch it on again.</li>
+ * the bench's own way to the phone, with nobody there to switch it on again - with the bench's note of what to put it
+ * back to kept on the phone meanwhile ({@link #NET_NOTE}: settings put global draupne_bench_net_was wifi-on | wifi-off,
+ * settings delete global draupne_bench_net_was).</li>
  * <li><b>Never</b>: adb root / su, locksettings, install -d (a version down), kill and rm (root's; the bench receiver
  * does that work), a file written on the phone, the clock set, and everything not named above.</li>
  * </ul>
@@ -80,6 +82,12 @@ final class PhoneGuard {
      * A number, or "unset". Gone again once the phone's own value is back.
      */
     static final String STAY_ON_NOTE = "draupne_bench_stay_on_was";
+    /**
+     * The network-switch scenario's note of what the phone's own network is to be put back to ({@link PhoneNet#NOTE}):
+     * "wifi-on" or "wifi-off", written before its first switch and gone once the network is back - or put back by
+     * {@link PhoneReset} after a run that was killed.
+     */
+    static final String NET_NOTE = PhoneNet.NOTE;
     /** The keys a hand's work needs. Not a digit among them. */
     private static final Set<String> KEYS = Set.of("KEYCODE_WAKEUP", "KEYCODE_BACK", "KEYCODE_HOME");
 
@@ -369,8 +377,16 @@ final class PhoneGuard {
                 if (a.size() == 3 && a.get(0).equals("delete") && a.get(1).equals("global") && (a.get(2).equals(STAY_ON) || a.get(2).equals(STAY_ON_NOTE))) {
                     return Verdict.ok(Kind.PHONE);
                 }
+                // the network-switch scenario's note of what the phone's network is to be put back to (PhoneNet.NOTE):
+                // the bench's own entry beside the phone's settings, two values, gone again once the network is back
+                if (a.size() == 4 && a.get(0).equals("put") && a.get(1).equals("global") && a.get(2).equals(NET_NOTE)
+                        && (a.get(3).equals("wifi-on") || a.get(3).equals("wifi-off"))) {
+                    return Verdict.ok(Kind.PHONE);
+                }
+                if (a.equals(List.of("delete", "global", NET_NOTE))) return Verdict.ok(Kind.PHONE);
                 return Verdict.no("settings " + String.join(" ", a) + ": the bench reads the phone's settings and writes one - " + STAY_ON
-                        + ", back to what it was (with its own note of that, " + STAY_ON_NOTE + ")");
+                        + ", back to what it was (with its own note of that, " + STAY_ON_NOTE + ") - and its own note of the network to put back ("
+                        + NET_NOTE + " wifi-on | wifi-off)");
             }
             case "kill", "killall", "pkill":
                 return Verdict.no(c + ": " + ROOTS);

@@ -536,19 +536,43 @@ public final class PhoneRig implements AutoCloseable {
         List<String> command = List.of(args);
         if (device()) {
             if (stopped != null) throw new Stop(stopped);
-            PhoneGuard.Verdict v = PhoneGuard.judge(target, command, ApkPackage::read);
-            if (!v.allowed()) {
-                String text = "Not sent to the real phone: adb " + String.join(" ", command) + " - " + v.refusal() + ".";
-                refusals.add(text);
-                say("REFUSED: " + text);
-                throw new Refused(text);
-            }
+            PhoneGuard.Verdict v = judged(command);
             switchedOff.addAll(v.sets());
             switchedOff.removeAll(v.clears());
             if (v.pretends()) pretending = true;
             if (clock.getAsLong() - batteryCheckedMs >= BATTERY_EVERY_MS) checkBattery();
         }
         return adb.run(timeoutS, command);
+    }
+
+    /** The guard's word on a command for a real phone; what it refuses is kept, said and thrown ({@link Refused}). */
+    private PhoneGuard.Verdict judged(List<String> command) {
+        PhoneGuard.Verdict v = PhoneGuard.judge(target, command, ApkPackage::read);
+        if (!v.allowed()) {
+            String text = "Not sent to the real phone: adb " + String.join(" ", command) + " - " + v.refusal() + ".";
+            refusals.add(text);
+            say("REFUSED: " + text);
+            throw new Refused(text);
+        }
+        return v;
+    }
+
+    /**
+     * The phone's own network switched or read ({@link PhoneNet}: its orders and reads) at once. Held to the guard as
+     * every command - so switched off only while adb comes over the cable - but never kept waiting by the battery
+     * watch: a cooling pause in the middle of a switch would leave the network off for as long (the scenario looks at
+     * the battery itself between its switches). And an order that only puts something back on goes also after the run
+     * was stopped for the battery's sake.
+     */
+    public String network(String command) {
+        List<String> args = List.of("shell", command);
+        if (device()) {
+            PhoneGuard.Verdict v = judged(args);
+            if (stopped != null && !v.sets().isEmpty()) throw new Stop(stopped);
+            switchedOff.addAll(v.sets());
+            switchedOff.removeAll(v.clears());
+        }
+        return new String(adb.run(60, args), StandardCharsets.UTF_8).replace("\r", "").trim();
     }
 
     public String adb(String... args) {
@@ -1734,6 +1758,11 @@ public final class PhoneRig implements AutoCloseable {
     /** The phone's Wi-Fi off or on. On a real phone off only while adb comes over the cable, and on again when the rig closes. */
     public void wifi(boolean on) {
         shell("svc wifi " + (on ? "enable" : "disable"));
+    }
+
+    /** The phone's mobile data off or on. On a real phone off only while adb comes over the cable, and on again when the rig closes. */
+    public void data(boolean on) {
+        shell(on ? PhoneNet.DATA_ON : PhoneNet.DATA_OFF);
     }
 
     /** Android's deep doze forced on, or the phone woken. */
