@@ -88,6 +88,25 @@ public final class Elevation {
     }
 
     /**
+     * Fleet PRD RT-2: the height under a place now, on the caller's thread (a route's terrain fill - never the Swing
+     * thread): the kept answer, else asked of the service. Null when unknown, and while a drone here may fly.
+     */
+    public Double heightNow(double lat, double lon) {
+        long key = key(lat, lon);
+        synchronized (this) {
+            Double z = known.get(key);
+            if (z != null) return z;
+        }
+        Double z = fetch(lat, lon);
+        if (z != null) {
+            synchronized (this) {
+                known.put(key, z);
+            }
+        }
+        return z;
+    }
+
+    /**
      * The terrain along a path (1.0.35, the ruler's elevation profile): the path sampled every stepM metres (at most
      * maxSamples points, the vertices always among them), each sample's height looked up in turn on the lookup thread.
      * result gets {distances along the path in m, heights in m (NaN = not known yet or unknown)} after every few
