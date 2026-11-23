@@ -20,7 +20,8 @@ package de.droiddrone.common;
 /**
  * DRAUPNE Flight (fleet PRD RT-8, AC-10, AC-25, AC-41, FD-8, AP-11): the PC's way to an ArduPilot flight controller's
  * own protocols over the link - routes (the mission protocol), parameters (RTL_ALT, rally points), guided targets and
- * the other drones as traffic - as whole MAVLink frames in a numbered (resent) packet [0x32][frames]. Only what is
+ * the other drones as traffic - as whole MAVLink frames in an unnumbered packet [0x32][frames] (the mission and parameter protocols ask again
+ * themselves). Only what is
  * listed here passes, each way:
  * <ul>
  *   <li>PC to FC: parameters, missions, a guided position target, ADS-B traffic, and COMMAND_LONG / COMMAND_INT with

@@ -151,6 +151,24 @@ class MissionBlockQueueTest {
         assertEquals(List.of("0:5", "0:3"), fc.started);
     }
 
+    /** Two senders' block ids may meet (each starts at a random one): the same id with other items is a new block. */
+    @Test
+    void theSameIdWithOtherItemsIsANewBlock() {
+        Fc fc = new Fc();
+        MissionBlockQueue q = new MissionBlockQueue(fc.maker());
+        q.offer(block(50, MissionUpload.TYPE_MISSION, 5), 0);
+        fc.finish(q, 10);
+        q.tick(20);
+        q.offer(block(50, MissionUpload.TYPE_MISSION, 5), 30);
+        assertEquals(List.of("0:5"), fc.started, "a copy: answered");
+        q.offer(block(50, MissionUpload.TYPE_MISSION, 7), 40);
+        assertEquals(List.of("0:5", "0:7"), fc.started, "other items under the same id: uploaded");
+        q.offer(block(50, MissionUpload.TYPE_FENCE, 7), 50);
+        fc.finish(q, 60);
+        q.tick(70);
+        assertEquals(List.of("0:5", "0:7", "1:7"), fc.started, "another list under the same id: uploaded");
+    }
+
     @Test
     void theOwnRallyWaitsForThePcsUploadAndThePcsBlockWaitsForTheOwn() {
         Fc fc = new Fc();

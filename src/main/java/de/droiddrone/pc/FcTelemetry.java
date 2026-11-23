@@ -433,7 +433,7 @@ public class FcTelemetry {
                 int state = b.readUnsignedByteAsInt();
                 int percent = b.readUnsignedByteAsInt();
                 byte[] reason = new byte[b.readUnsignedByteAsInt()];
-                b.read(reason, 0, reason.length);
+                if (b.read(reason, 0, reason.length) < reason.length) throw new IndexOutOfBoundsException("cut short"); // no status from it
                 RouteUpload u = new RouteUpload(block, state, percent, new String(reason, StandardCharsets.US_ASCII), MonoClock.ms());
                 routeUpload = u;
                 synchronized (routeUploads) {

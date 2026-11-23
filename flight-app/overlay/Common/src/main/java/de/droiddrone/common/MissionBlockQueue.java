@@ -49,6 +49,8 @@ public final class MissionBlockQueue {
     private final Maker maker;
     private MissionUpload current;
     private int currentBlock = OWN;
+    /** The current PC block's items and list, as {@link #key}. */
+    private int currentKey;
     private final List<MissionBlock> waiting = new ArrayList<>();
     private List<MissionItem> ownWaiting, ownOnFc;
     /** The newest PC block taken (running, waiting or ended): what the fleet report names. */
@@ -64,18 +66,21 @@ public final class MissionBlockQueue {
     /** A block from the PC (null ignored). @return true if its status should be said now (taken, waiting or known) */
     public synchronized boolean offer(MissionBlock b, long now) {
         if (b == null) return false;
-        int id = b.blockId;
-        if (id == currentBlock && current != null) return true; // the same again: its status
-        for (MissionBlock w : waiting) if (w.blockId == id) return true;
-        if (ended.containsKey(id)) return true; // ended (or replaced): its outcome, never uploaded again
+        int id = b.blockId, key = key(b);
+        // the same block again (its id and its items: two PCs' ids may meet): its status
+        if (id == currentBlock && current != null && key == currentKey) return true;
+        for (MissionBlock w : waiting) if (w.blockId == id && key(w) == key) return true;
+        Object[] e = ended.get(id);
+        if (e != null && (Integer) e[3] == key) return true; // ended (or replaced): its outcome, never uploaded again
+        if (e != null) ended.remove(id); // the same id, other items: a new block
         newestPc = id;
         boolean busy = current != null && !current.done() && !current.failed();
         if (busy && (currentBlock == OWN || current.missionType() != b.missionType)) {
             for (int i = waiting.size() - 1; i >= 0; i--) {
                 MissionBlock w = waiting.get(i);
                 if (w.missionType == b.missionType) { // the newer of a list wins
-                    waiting.remove(i);
                     end(w.blockId, MissionUpload.FAILED, 0, "replaced by a newer one");
+                    waiting.remove(i);
                 }
             }
             waiting.add(b);
@@ -170,6 +175,7 @@ public final class MissionBlockQueue {
         MissionUpload u = maker.make(b.missionType, b.items);
         current = u;
         currentBlock = b.blockId;
+        currentKey = key(b);
         u.start(now);
     }
 
@@ -189,8 +195,18 @@ public final class MissionBlockQueue {
 
     private void end(int block, int state, int percent, String reason) {
         ended.remove(block);
-        ended.put(block, new Object[]{state, percent, reason});
+        ended.put(block, new Object[]{state, percent, reason, block == currentBlock ? currentKey : keyOfWaiting(block)});
         if (ended.size() > KEPT) ended.remove(ended.keySet().iterator().next());
+    }
+
+    /** A block's items and list as one number: a copy has the same, another block under the same id (almost surely) not. */
+    static int key(MissionBlock b) {
+        return 31 * java.util.Arrays.hashCode(MissionItem.pack(b.items)) + b.missionType;
+    }
+
+    private int keyOfWaiting(int block) {
+        for (MissionBlock w : waiting) if (w.blockId == block) return key(w);
+        return 0;
     }
 
     private static boolean same(List<MissionItem> a, List<MissionItem> b) {

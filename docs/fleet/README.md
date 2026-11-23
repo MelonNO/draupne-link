@@ -154,3 +154,21 @@ firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable: `ArduCopter.elf` 
 `gradlew fleetSitl` runs the gates against it (`src/test/java/de/droiddrone/pc/sitl`): gate 1 - Drone setup's plan
 written, armed on the phone's overrides, flown away, the PC cut, LOITER, Smart RTL after 20 s, landed at home; gate
 2's upload - 100 items up and read back under 5 s. Each instance runs in its own folder (`run0`, `run1`), TCP 5760 + 10 n.
+
+## Wire formats and phone rules: test round (2026-11-23)
+
+Every fleet packet's reader fuzzed (random, cut short, over long, lying lengths, NaN / huge numbers), the phone's rules
+driven on made-up clocks, the PC's MAVLink session at its edges, and five new SITL tests (`SitlEdgeTest`, instances
+6 - 9). What it found is fixed with a test each; the commits on `fleet-test-proto` say what. Most worth knowing:
+- real ArduPilot reads a rally point back in frame 3 (sent 6) and NAV_LAND's NaN param4 as 1: every follower's rally
+  upload and every route ending in a LAND failed its read-back; and it answers a repeated item with INVALID_SEQUENCE
+  and goes on (the upload failed on it)
+- the link-loss rule overrode ArduPilot's own battery-failsafe LAND with Smart RTL at 20 s, and a refused Smart RTL
+  (no path) left the drone in LOITER for good: now never over ArduPilot's own, and RTL after three refusals (SITL)
+- a copy of a LAUNCH order after the launch reported a flying reserve as NOT LAUNCHED; a heartbeat gap in the climb
+  forced the motors off
+- one upload at a time on the phone (`MissionBlockQueue`): a route and a fence sent together restarted each other
+- GO LOOK sent DO_REPOSITION with a NaN height ("the height it has"): ArduPilot DENIES it - GO LOOK never moved a drone;
+  the phone sends the height it has now
+- a gimbal's or ADS-B receiver's heartbeat routed by ArduPilot was taken as the FC's (DISARMED, and the PC addressed
+  its commands to the gimbal)
