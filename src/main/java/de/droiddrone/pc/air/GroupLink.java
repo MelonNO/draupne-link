@@ -232,10 +232,11 @@ public final class GroupLink implements AutoCloseable {
         }
         GroupController.Out out = g.tick(now, reports, leadReport, others, new V2(0, 0));
         for (Map.Entry<String, GroupOrder> o : out.orders().entrySet()) send(o.getKey(), FleetCmd.group(o.getValue().encode()));
-        plans.putAll(out.plans());
+        Map<String, ExitPlan> made = out.plans() == null ? Map.of() : out.plans(); // null: no plans made this tick
+        plans.putAll(made);
         for (Map.Entry<String, ExitPlan> p : plans.entrySet()) {
             Long at = planSentAt.get(p.getKey());
-            if (out.plans().containsKey(p.getKey()) || at == null || now - at >= PLAN_EVERY_MS) {
+            if (made.containsKey(p.getKey()) || at == null || now - at >= PLAN_EVERY_MS) {
                 send(p.getKey(), FleetCmd.exit(p.getValue().encode()));
                 planSentAt.put(p.getKey(), now);
             }

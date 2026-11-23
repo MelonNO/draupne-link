@@ -102,6 +102,7 @@ class SitlFleetTest {
         assertTrue(f1.isFollower() && f2.isFollower(), "both follow " + log);
         assertTrue(worst > 0, "apart while forming: " + worst);
 
+        sitls.get(3).awaitPreArm(120_000); // a reserve that has stood a while: ArduPilot would arm it
         ops.click("R1", "SAFE TO AUTOLAUNCH: mark");
         Thread.sleep(2000);
         ops.callReserve();
