@@ -108,3 +108,12 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    flight logs (AP-10), the Mission Planner bridge (AP-11), go-look (AP-12), the rally point upload (AC-10: RTL goes
    to each drone's own home), RT-14 power lines, the tour's new steps (area I), flashing ArduPilot onto a Betaflight
    board (H1/H4).
+
+## Real ArduPilot on this PC (SITL)
+
+ArduPilot's own Windows build of Copter's SITL (the one Mission Planner's simulation downloads from
+firmware.ardupilot.org/Tools/MissionPlanner/sitl/CopterStable: `ArduCopter.elf` and its Cygwin DLLs) goes in
+`%LOCALAPPDATA%\DroidDroneBuild\sitl\copter` (or `DRAUPNE_ARDU_SITL`). No Windows Linux part needed. Then
+`gradlew fleetSitl` runs the gates against it (`src/test/java/de/droiddrone/pc/sitl`): gate 1 - Drone setup's plan
+written, armed on the phone's overrides, flown away, the PC cut, LOITER, Smart RTL after 20 s, landed at home; gate
+2's upload - 100 items up and read back under 5 s. Each instance runs in its own folder (`run0`, `run1`), TCP 5760 + 10 n.

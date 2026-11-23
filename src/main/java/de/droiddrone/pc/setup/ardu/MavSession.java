@@ -80,6 +80,34 @@ public final class MavSession implements AutoCloseable {
         return heartbeatAt == 0 || System.currentTimeMillis() - heartbeatAt > 3000 || armed;
     }
 
+    private volatile int customMode = -1, gpsFix = -1;
+    private volatile double[] position;
+
+    /** The FC's flight mode (its heartbeat's custom mode), -1 before the first. */
+    public int customMode() {
+        return customMode;
+    }
+
+    /** GPS_RAW_INT's fix type (3: 3D), -1 before the first. */
+    public int gpsFix() {
+        return gpsFix;
+    }
+
+    /** {lat, lon, height above sea level m, height above home m, climb m/s} from GLOBAL_POSITION_INT, or null. */
+    public double[] position() {
+        return position;
+    }
+
+    /** Asks the FC to send a message this many times a second (MAV_CMD_SET_MESSAGE_INTERVAL). */
+    public int stream(int msgId, double hz) throws IOException, InterruptedException {
+        return command(511, msgId, (float) (1_000_000 / hz), 0, 0, 0, 0, 0, 2000);
+    }
+
+    /** The FC's own true armed flag from its last heartbeat (no "not known" folding). */
+    public boolean armedFlag() {
+        return armed;
+    }
+
     /** The flight controller's last heartbeat is no older than 3 s. */
     public boolean heartbeatFresh() {
         long at = heartbeatAt;
@@ -344,9 +372,16 @@ public final class MavSession implements AutoCloseable {
     }
 
     private void dispatch(MAVLinkPacket p) {
+        if (p.msgid == com.MAVLink.common.msg_global_position_int.MAVLINK_MSG_ID_GLOBAL_POSITION_INT) {
+            com.MAVLink.common.msg_global_position_int g = new com.MAVLink.common.msg_global_position_int(p);
+            position = new double[]{g.lat / 1e7, g.lon / 1e7, g.alt / 1000.0, g.relative_alt / 1000.0, g.vz / -100.0};
+        } else if (p.msgid == com.MAVLink.common.msg_gps_raw_int.MAVLINK_MSG_ID_GPS_RAW_INT) {
+            gpsFix = new com.MAVLink.common.msg_gps_raw_int(p).fix_type;
+        }
         if (p.msgid == msg_heartbeat.MAVLINK_MSG_ID_HEARTBEAT) {
             msg_heartbeat h = new msg_heartbeat(p);
             if (h.type != 6) { // not another ground station's
+                customMode = (int) h.custom_mode;
                 armed = (h.base_mode & 128) != 0; // MAV_MODE_FLAG_SAFETY_ARMED
                 heartbeatAt = System.currentTimeMillis();
                 fcCompId = p.compid;
