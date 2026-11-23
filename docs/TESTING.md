@@ -23,6 +23,7 @@ are not part of it.
 .\bench.ps1 hw                     REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
 .\bench.ps1 hw -Tests *HwLinkMatrix* -Quick    the bad-network box on the real phone, two networks and two cuts (-Quick: a suite's quick cut)
 .\bench.ps1 hw -Tests *HwNetworkSwitch* -Quick the phone's own network switched under the link: Wi-Fi off, Wi-Fi on, airplane mode 10 s
+.\bench.ps1 hw -Tests *HwGlassToGlass* -Quick  the picture delay glass to glass: the phone films the Latency test's code on the screen
 .\bench.ps1 phone                  REAL HARDWARE: the real phone itself
 ```
 
@@ -394,6 +395,52 @@ Wi-Fi with it, the guard, `phoneReset` by the note); not yet run on the phone an
 - **What it leaves:** `matrix\hw-netswitch.tsv` (a row a cell, the report shows it), each cell's log in
   `matrix\logs` (the switch's orders on their times, the board's word look by look, Tailscale's lines with the
   addresses left out, the phone app's log), a check line in the film for each thing held or not.
+
+### The picture delay glass to glass (`HwGlassToGlassScenario`)
+
+The real phone films the app's own Latency test (TOOLS > Latency test: its code painted on the screen, read back out
+of the phone's picture - the whole way a pilot's eyes have) and every reading is set beside the app's own estimate of
+the same delay, the OSD's G2G (`video.GlassToGlass`: the phone's capture to send, the network, this PC, plus the
+view's own screen time as the OSD adds it). The sealed app and the real phone with the bench's wire between them, as
+in the bad-network box; no flight controller needed, nothing armed. Built 2026-11-23 and proved on the made-up pieces
+only (`gradlew test --tests *HwGlassToGlass*`; `benchSelf --tests *HwGlassToGlassSelfTest*`, the same run in the
+sealed app against a made-up drone, once with a made-up camera of a known delay and once without); not yet run on the
+phone.
+
+```
+.\bench.ps1 hw -Tests *HwGlassToGlass* -Quick   the network as it is and one bar, NORMAL, H.265: about 5 min
+.\bench.ps1 hw -Tests *HwGlassToGlass*          the whole table, 15 cells: about 25 min
+```
+
+- **By hand, before:** the phone on a stand, its back camera facing this PC's main screen 40 to 60 cm away, the whole
+  screen in its picture (the left half at least: the code is there); the screen bright, no glare; DRAUPNE Flight
+  running on the phone as for any hw run; nothing on top of the screen (no other window, no notification over its
+  left half); mouse and keyboard left alone while it runs.
+- **The windows** are placed by the scenario: the app's main window maximized on the main screen, the video in it (a
+  popped-out video put back, the app's other windows closed), its tooltips off for the run. The Latency test paints
+  its code on the left of the video area and the phone's own picture as a small thumbnail at the bottom right (too
+  small for the camera to read its copy of the code). The code is read off the painted view and its place said in the
+  film. In quiet mode (`BENCH_MODE=quiet`, or a real drone armed on this PC) the windows are off the screen: skipped.
+- **The camera check:** the first cell waits 25 s for the first reading of the code. None: the film says so plainly,
+  a still of what the camera saw (the app's STILL) goes to `matrix\hw-g2g-camera-check.png`, and the scenario is
+  skipped - no failure of the app.
+- **Cells** (each one thing changed from the base: the network as it is - the bench adds nothing -, NORMAL, H.265,
+  recording on as the app has it, no STANAG, nobody watching): 4G good, one bar, slow 300 ms (the bad-link table's);
+  AUTO on one bar and as it is; SHARP and NORMAL in H.264 and H.265 (the hidden setting `videoCodec`, no menu has it);
+  ROBUST and SURVIVAL (H.264 by the app's own rule); recording off; STANAG on; a spectator watching (a stand-in on this
+  PC's loopback, as a 1.0.71 spectator says HELLO: the app passes the picture on to it); the base again at the end.
+  Each: PILOT UAV, the picture, 8 s to settle (AUTO 25 s), then 45 s of readings (`-Quick`: 30 s), STANDBY MODE. The
+  pictures, recording and STANAG are set in the menus as a pilot sets them.
+- **The readings** are taken one by one from the app's own meter (the screen shows only their median): read only,
+  by reflection (`bench/hw/MeterTap`). The app's own figures come from its link log (`g2g_ms`, `g2g_max_ms`, the two
+  parts). Not quite the same thing: the camera's figure also holds the screen's own delay and the phone camera's time
+  before it stamps a picture.
+- **What it leaves:** `matrix\hw-g2g.tsv` (per cell: the codec and size seen, the readings and their median, 90th
+  percentile, most and least; the app's own median, 90th percentile and most; the difference; the phone's and the
+  network's part; the screen time, frames a second, ping; the stand-in spectator's packets; the app's own test's
+  line; the phone's errors), each cell's readings, the app's link-log rows and the phone's log in `matrix\logs`, each
+  cell's figures in plain words in the film. A cell whose picture the camera could not read says "no reading" - no
+  failure.
 
 ### Every Drone setup row on the real board (`HwDroneSetupScenario`)
 
