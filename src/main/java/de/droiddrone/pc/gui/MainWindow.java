@@ -929,6 +929,7 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "ArduPilot flight logs", "After landing: the drone's own log", () -> ArduLogsDialog.open(this)); // fleet AP-10
         if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
+            addMenuItem(menu, "Mission Planner bridge", mpBridge == null ? "Off: tune ArduPilot over the link" : "On: click to stop", this::toggleMpBridge); // fleet AP-11
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
@@ -5516,6 +5517,31 @@ public class MainWindow extends JFrame {
         MapWindow mw = mapWindowIfOpen(); // fleet G4: the follower group on the map
         if (mw != null) mw.setGroup(fleetOps.picture());
         fleetOps.tickReserves(); // fleet area F: calls waiting for a column, orders sent again until answered
+    }
+
+    /** Fleet AP-11: Mission Planner / QGroundControl over the link, while on. */
+    private de.droiddrone.pc.setup.ardu.MavBridge mpBridge;
+
+    private void toggleMpBridge() {
+        if (mpBridge != null) {
+            mpBridge.close();
+            mpBridge = null;
+            logLine("Mission Planner bridge off.");
+            return;
+        }
+        de.droiddrone.pc.ControlLink l = flownLink();
+        if (l == null || l.getFcInfo() == null || l.getFcInfo().getFcVariant() != FcInfo.FC_VARIANT_ARDUPILOT) {
+            Dialogs.message(this, "Connect to an ArduPilot drone first.");
+            return;
+        }
+        try {
+            mpBridge = new de.droiddrone.pc.setup.ardu.MavBridge(l, de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_IN, de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_OUT);
+            Dialogs.message(this, "Mission Planner: connect UDP, port " + de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_OUT
+                    + ".\nParameters and missions only. Sticks, arming and calibration are not carried.");
+            logLine("Mission Planner bridge on: UDP " + de.droiddrone.pc.setup.ardu.MavBridge.DEFAULT_OUT + ".");
+        } catch (java.io.IOException e) {
+            Dialogs.message(this, "Bridge not started: " + e.getMessage());
+        }
     }
 
     /** Fleet: the name of the phone this PC flies (a real one), or null. */
