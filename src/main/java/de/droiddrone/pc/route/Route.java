@@ -103,17 +103,17 @@ public final class Route {
     }
 
     public void add(double lat, double lon) {
-        points.add(new Point(lat, lon));
+        points.add(new Point(lat, wrapLon(lon)));
     }
 
     /** Before point index (0 = first); index == size() adds at the end. */
     public void insert(int index, double lat, double lon) {
-        points.add(index, new Point(lat, lon));
+        points.add(index, new Point(lat, wrapLon(lon)));
     }
 
     public void move(int index, double lat, double lon) {
         Point p = points.get(index);
-        points.set(index, new Point(lat, lon, p.heightM()));
+        points.set(index, new Point(lat, wrapLon(lon), p.heightM()));
     }
 
     public void delete(int index) {
@@ -125,6 +125,13 @@ public final class Route {
         Point p = points.get(index);
         if (Double.isInfinite(h)) return;
         points.set(index, new Point(p.lat(), p.lon(), Double.isNaN(h) ? Double.NaN : Math.max(MIN_HEIGHT_M, h)));
+    }
+
+    /** A longitude in -180..180: the map gives 180.001 right of the antimeridian, and a route file with it was refused. */
+    static double wrapLon(double lon) {
+        if (!Double.isFinite(lon)) return lon;
+        double d = lon - 360 * Math.floor((lon + 180) / 360);
+        return d == -180 && lon > 0 ? 180 : d;
     }
 
     public void reverse() {
