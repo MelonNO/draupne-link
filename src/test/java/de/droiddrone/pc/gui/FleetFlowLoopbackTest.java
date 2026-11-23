@@ -223,6 +223,7 @@ class FleetFlowLoopbackTest {
         double[] target = de.droiddrone.common.group.GeoLocal.offset(LAT, LON, 0, 200);
         SwingUtilities.invokeAndWait(() -> ops.dispatch(target[0], target[1]));
         until(d::routeDone, 90_000, "D1 at its slot");
+        until(() -> { try { return String.valueOf(state("D1")).startsWith("YOUR TURN"); } catch (Exception e) { return false; } }, 5000, "FLEET says YOUR TURN at the slot (ArduPilot holds there in AUTO)");
         land(d);
         Thread.sleep(1500); // its next report says so
         mark("D1");
@@ -231,6 +232,38 @@ class FleetFlowLoopbackTest {
         assertEquals(1, place[0].size(), "DISPATCH offered again: " + log);
         assertTrue(place[0].get(0).getText().startsWith("DISPATCH 1 marked drone"), place[0].get(0).getText());
         assertEquals("RESERVE", state("D1"), "a reserve again, not an old dispatch's word");
+    }
+
+    /**
+     * AC-2: a second DISPATCH while the first one's drone is still out gets layers above it; one while a follower group
+     * flies goes above the group's layers. Before, every DISPATCH started at the same 60 m layer.
+     */
+    @Test
+    void dispatchesTakeLayersNobodyElseHas() throws Exception {
+        onTheGround("D1", 0, 0);
+        onTheGround("D2", 25, 0);
+        flown = null;
+        ops = ops();
+        mark("D1");
+        double[] target = de.droiddrone.common.group.GeoLocal.offset(LAT, LON, 0, 300);
+        SwingUtilities.invokeAndWait(() -> ops.dispatch(target[0], target[1]));
+        until(() -> log.stream().anyMatch(l -> l.contains("D1 launching")), 30_000, "D1 launching");
+        mark("D2");
+        double[] other = de.droiddrone.common.group.GeoLocal.offset(LAT, LON, 100, 300);
+        SwingUtilities.invokeAndWait(() -> ops.dispatch(other[0], other[1]));
+        until(() -> log.stream().anyMatch(l -> l.contains("D2 launching")), 30_000, "D2 launching");
+        assertTrue(log.stream().anyMatch(l -> l.contains("D1 launching (climbs to 60 m)")), log.toString());
+        assertTrue(log.stream().anyMatch(l -> l.contains("D2 launching (climbs to 70 m)")), "D2 above D1: " + log);
+
+        // a group flying: a new DISPATCH goes above its layers and its reserves' approach layers
+        group();
+        flown = "Lead";
+        onTheGround("D3", 50, -100);
+        form("F1", "F2");
+        mark("D3");
+        List<JMenuItem>[] place = new List[1];
+        SwingUtilities.invokeAndWait(() -> place[0] = ops.placeItems(target[0], target[1]));
+        assertTrue(place[0].get(0).getText().contains("(80 m above ground)"), place[0].get(0).getText());
     }
 
     /** AL-5: the last call is cancelled from the lead's menu before its drone arms; the drone stays marked and callable. */

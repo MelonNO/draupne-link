@@ -130,6 +130,8 @@ final class FleetOps {
     private final java.util.Map<String, Sent> dispatched = new java.util.LinkedHashMap<>();
     private int nextBlock = de.droiddrone.pc.route.RouteSender.randomId(); // new at every start: the phone keeps old block ids
     static final double DISPATCH_HEIGHT_M = 60;
+    /** A dispatched drone this close to its slot, standing still, is there (YOUR TURN). */
+    static final double SLOT_REACHED_M = 15;
 
     /** The map's right-click on a place: DISPATCH every drone marked SAFE TO AUTOLAUNCH there (FD-3). */
     List<JMenuItem> placeItems(double lat, double lon) {
@@ -138,7 +140,7 @@ final class FleetOps {
         int n = 0;
         for (String d : marked.keySet()) if (!dispatched.containsKey(d)) n++;
         if (n == 0) return out;
-        JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(DISPATCH_HEIGHT_M) + " m above ground)");
+        JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(dispatchHeightM()) + " m above ground)");
         go.addActionListener(e -> dispatch(lat, lon));
         out.add(go);
         return guarded(out);
@@ -165,27 +167,41 @@ final class FleetOps {
             drones.add(new de.droiddrone.pc.route.Dispatch.Drone(d, s.lat, s.lon, s.homeAmsl));
         }
         if (drones.isEmpty()) return;
+        // AC-2: layers of its own - above those of drones still out from an earlier DISPATCH (and of one still being
+        // planned), and above the follower group's layers and its reserves' approach layers while a group flies
+        int firstLayer = layersPlannedTo;
+        for (java.util.Map.Entry<String, Sent> e : dispatched.entrySet()) {
+            FleetStatus st = l.status(e.getKey());
+            if (st != null && st.has(FleetStatus.LANDED) && e.getValue().started) continue; // back down
+            firstLayer = Math.max(firstLayer, (int) Math.round(e.getValue().leg.layerM() / de.droiddrone.pc.route.Dispatch.LAYER_M) + 1);
+        }
+        double height = dispatchHeightM();
+        int first = firstLayer;
+        layersPlannedTo = first + drones.size();
+        plansRunning++;
         de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
         Thread t = new Thread(() -> {
             for (int attempt = 0; attempt < 2; attempt++) {
                 try {
-                    List<de.droiddrone.pc.route.Dispatch.Leg> legs = de.droiddrone.pc.route.Dispatch.plan(drones, lat, lon, DISPATCH_HEIGHT_M,
-                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT);
+                    List<de.droiddrone.pc.route.Dispatch.Leg> legs = de.droiddrone.pc.route.Dispatch.plan(drones, lat, lon, height,
+                            terrain, de.droiddrone.pc.route.RoutePlanner.Limits.ARDUCOPTER_DEFAULT, first);
                     java.util.Map<String, double[]> starts = new java.util.HashMap<>();
                     for (de.droiddrone.pc.route.Dispatch.Drone d : drones) starts.put(d.name(), new double[]{d.lat(), d.lon()});
                     SwingUtilities.invokeLater(() -> {
                         // FD-9: the preview first - OK sends, CANCEL doesn't
-                        if (!host.confirmTitled("DISPATCH", previewText(preview(legs, starts::get)))) {
-                            host.log("DISPATCH called off.");
-                            return;
-                        }
-                        begin(legs, starts);
+                        boolean go = host.confirmTitled("DISPATCH", previewText(preview(legs, starts::get)));
+                        if (go) begin(legs, starts);
+                        else host.log("DISPATCH called off.");
+                        planDone();
                     });
                     return;
                 } catch (de.droiddrone.pc.route.RoutePlanner.MissingTerrain m) {
                     de.droiddrone.pc.map.Elevation el = host.elevation();
                     if (el == null || attempt > 0 || !(terrain instanceof de.droiddrone.pc.route.TerrainStore store)) {
-                        SwingUtilities.invokeLater(() -> host.alert("DISPATCH: the terrain there isn't known (" + m.nodes().size() + " heights)."));
+                        SwingUtilities.invokeLater(() -> {
+                            host.alert("DISPATCH: the terrain there isn't known (" + m.nodes().size() + " heights).");
+                            planDone();
+                        });
                         return;
                     }
                     SwingUtilities.invokeLater(() -> host.log("DISPATCH: looking up " + m.nodes().size() + " terrain heights ..."));
@@ -195,6 +211,27 @@ final class FleetOps {
         }, "dispatchPlan");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** DISPATCH plans being made (and the layers they hold until their legs are dispatched or called off). */
+    private int plansRunning, layersPlannedTo;
+
+    private void planDone() {
+        if (--plansRunning <= 0) {
+            plansRunning = 0;
+            layersPlannedTo = 0;
+        }
+    }
+
+    /**
+     * FD-3 / AC-2: the route height of a DISPATCH - 60 m above the ground, or while a follower group flies, two layers
+     * above its top layer and a reserve's approach layer (before, dispatched drones flew in the group's own layers).
+     */
+    double dispatchHeightM() {
+        GroupLink l = link;
+        if (l == null || !l.active()) return DISPATCH_HEIGHT_M;
+        de.droiddrone.pc.air.AirParams d = design();
+        return Math.max(DISPATCH_HEIGHT_M, de.droiddrone.pc.air.GroupDesign.topM(d, l.members().size(), 1) + 2 * d.layerM());
     }
 
     private void begin(List<de.droiddrone.pc.route.Dispatch.Leg> legs, java.util.Map<String, double[]> starts) {
@@ -1215,7 +1252,13 @@ final class FleetOps {
             Sent s = dispatched.get(drone);
             if (!s.started) word = s.launched ? "LAUNCHING" : s.uploaded ? "READY" : "ROUTE ...";
             else if (st == null) word = "TRANSIT";
-            else if (st.mode == de.droiddrone.pc.ArduModes.AUTO) word = "TRANSIT";
+            else if (st.mode == de.droiddrone.pc.ArduModes.AUTO) {
+                // B5: the route ends in a LOITER_UNLIM - ArduPilot holds there in AUTO, not LOITER. Before, FLEET said
+                // TRANSIT for good at the slot: YOUR TURN never came on real ArduPilot
+                boolean there = de.droiddrone.common.group.GeoLocal.distance(st.lat, st.lon, s.leg.slotLat(), s.leg.slotLon()) < SLOT_REACHED_M
+                        && Math.hypot(st.velE, st.velN) < 1;
+                word = there ? "YOUR TURN" : "TRANSIT";
+            }
             else if (de.droiddrone.pc.ArduModes.isReturnOrLand(st.mode)) word = "RETURNING";
             else if (st.mode == de.droiddrone.pc.ArduModes.LOITER) word = "YOUR TURN";
             else word = "HOLDING";

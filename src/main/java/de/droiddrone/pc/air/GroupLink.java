@@ -340,6 +340,11 @@ public final class GroupLink implements AutoCloseable {
 
     synchronized void tick(long now) {
         GroupController g = group;
+        if (now - trackedAt > 5000) { // the reports keep coming (each command does that too) - with no group as well: a
+            // dispatched drone's reports stopped 20 s after its last command, FLEET showing it frozen where it was then (FD-1)
+            trackedAt = now;
+            track(new ArrayList<>(phones.keySet()));
+        }
         if (g == null) return;
         double floor = floorAsked;
         if (!Double.isNaN(floor)) {
@@ -356,10 +361,6 @@ public final class GroupLink implements AutoCloseable {
         Map<String, double[]> fr = new LinkedHashMap<>();
         for (Map.Entry<String, V2> e : g.rallies().entrySet()) fr.put(e.getKey(), GeoLocal.offset(lat0, lon0, e.getValue().e(), e.getValue().n()));
         followerRallies = fr;
-        if (now - trackedAt > 5000) { // the reports keep coming (each command does that too)
-            trackedAt = now;
-            track(new ArrayList<>(phones.keySet()));
-        }
         Map<String, GroupController.Report> reports = new HashMap<>();
         GroupController.Report leadReport = null;
         List<GroupController.Other> others = new ArrayList<>();

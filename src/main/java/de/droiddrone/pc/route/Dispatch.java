@@ -51,6 +51,15 @@ public final class Dispatch {
      */
     public static List<Leg> plan(List<Drone> drones, double targetLat, double targetLon, double heightM, TerrainSource terrain,
                                  RoutePlanner.Limits limits) throws RoutePlanner.MissingTerrain {
+        return plan(drones, targetLat, targetLon, heightM, terrain, limits, 0);
+    }
+
+    /**
+     * @param firstLayer the first layer free (AC-2): layers below it are taken by drones still out from an earlier
+     *                   DISPATCH - this one's drones go above them (before, a second DISPATCH reused the first's layers)
+     */
+    public static List<Leg> plan(List<Drone> drones, double targetLat, double targetLon, double heightM, TerrainSource terrain,
+                                 RoutePlanner.Limits limits, int firstLayer) throws RoutePlanner.MissingTerrain {
         List<double[]> free = slots(targetLat, targetLon, drones.size());
         List<Leg> legs = new ArrayList<>();
         List<double[]> missing = new ArrayList<>();
@@ -63,13 +72,14 @@ public final class Dispatch {
             }
             double[] slot = free.remove(best);
             Route r = new Route(d.name());
-            r.setHeightM(heightM + k * LAYER_M);
+            int layer = Math.max(0, firstLayer) + k;
+            r.setHeightM(heightM + layer * LAYER_M);
             r.add(slot[0], slot[1]);
             try {
                 RoutePlanner.Plan p = RoutePlanner.plan(r, new double[]{d.lat(), d.lon()}, false, terrain, limits);
                 MissionBuilder.Mission m = MissionBuilder.build(p, d.lat(), d.lon(), d.homeAmsl());
                 double first = p.out().waypoints().isEmpty() ? heightM : p.out().waypoints().get(0).altAmslM() - d.homeAmsl();
-                legs.add(new Leg(d.name(), slot[0], slot[1], k * LAYER_M, m, Math.max(first, heightM + k * LAYER_M), k * STAGGER_S));
+                legs.add(new Leg(d.name(), slot[0], slot[1], layer * LAYER_M, m, Math.max(first, heightM + layer * LAYER_M), k * STAGGER_S));
             } catch (RoutePlanner.MissingTerrain e) {
                 missing.addAll(e.nodes());
             }
