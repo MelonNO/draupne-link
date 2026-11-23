@@ -49,6 +49,9 @@ final class SitlFleetPhone implements AutoCloseable {
     private volatile boolean open = true;
     volatile boolean linkUp = true;
 
+    /** The blocks' parts, put together as the phone does. */
+    final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();
+
     SitlFleetPhone(ArduSitl sitl, String key) throws IOException {
         this.sitl = sitl;
         this.fc = sitl.fc;
@@ -84,7 +87,7 @@ final class SitlFleetPhone implements AutoCloseable {
     }
 
     private void receive() {
-        byte[] buf = new byte[2048];
+        byte[] buf = new byte[de.droiddrone.common.UdpCommon.packetLength]; // the real phone's limit: a longer datagram is cut
         DatagramPacket p = new DatagramPacket(buf, buf.length);
         while (open) {
             try {
@@ -136,7 +139,8 @@ final class SitlFleetPhone implements AutoCloseable {
                         }
                     }
                     case de.droiddrone.common.MissionBlock.PACKET -> { // the route, uploaded and read back as the phone does over USB
-                        de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
+                        // one part: whole when every part has come (the phone's Mavlink.missionPart)
+                        de.droiddrone.common.MissionBlock b = parts.offer(de.droiddrone.common.MissionBlock.readPart(c.data, c.at + 1, c.length - 1));
                         if (b != null && b.blockId != routeBlock) {
                             routeBlock = b.blockId;
                             upload = new de.droiddrone.common.MissionUpload(b.items, SitlMission.link(fc, b.missionType), b.missionType); // its own list (a fence went up as a route)
@@ -155,6 +159,15 @@ final class SitlFleetPhone implements AutoCloseable {
     }
 
     private volatile de.droiddrone.common.MissionUpload upload;
+
+    /** The upload under way (or ended), and its block. */
+    de.droiddrone.common.MissionUpload uploadNow() {
+        return upload;
+    }
+
+    int routeBlockNow() {
+        return routeBlock;
+    }
 
     /** The upload under way, for a failing test's message. */
     String uploadWhy() {
