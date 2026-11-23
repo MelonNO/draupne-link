@@ -162,13 +162,22 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   MISSION_ITEM_INT, MISSION_ACK, MISSION_CURRENT, MISSION_ITEM_REACHED, COMMAND_ACK, POSITION_TARGET_GLOBAL_INT,
   HOME_POSITION, LOG_ENTRY, LOG_DATA) and its HEARTBEAT, one frame a packet, only while the PC sent a tunnel frame in
   the last 30 s.
-- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only; or inside a `FleetCmd`):
-  `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][count u16]` then per item `[frame u8]
-  [command u16][autocontinue u8][p1..p4 f32][x i32][y i32][z f32]` (`MissionItem.pack`, 28 bytes an item, at most
-  1500). The length must be exactly 6 + 28 x count (a count lower than the items sent would upload a cut route); an
-  empty route is no block, an empty fence or rally list clears it. The PC sends it every second until telemetry record
-  **0x40E1** `[block id u16][state u8][percent u8][reason length u8][ASCII, at most 120]` names it (state: 1 uploading,
-  2 reading back, 3 done, 4 failed), then again after 2 s without a new status (the phone says an upload's end once).
+- **`MissionBlock` 0x33** (PC to phone, unnumbered, the pilot's session only; or inside a `FleetCmd`), **in parts**:
+  the phone reads at most 1100 bytes of a datagram (`UdpCommon.packetLength`; a Tailscale path carries about 1250),
+  and a block in one datagram over about 33 items was cut and dropped, nothing said. Each part is a datagram of its
+  own: `[0x33][block id u16][mission type u8: 0 route, 1 fence, 2 rally points][part u8][parts u8][block CRC-32 u32]
+  [items in the block u16][first item u16][items here u8]` then per item `[frame u8][command u16][autocontinue u8]
+  [p1..p4 f32][x i32][y i32][z f32]` (28 bytes), at most 30 items a part: 855 bytes, 921 inside a `FleetCmd` with a
+  64-byte key (`FleetCmd.wrap` refuses anything over 1100). Parts = max(1, ceil(items / 30)), part i starts at item
+  30 i, its length exactly 15 + 28 x its items; at most 1500 items (50 parts). The CRC-32 is over the whole block's
+  `MissionItem.pack` and its type: the phone (`MissionBlock.Assembler`) uploads a block only when every part has come
+  and they make that block; parts may come lost, twice or out of order; a part with other numbers under the same id
+  starts that block anew; a few blocks are gathered at once. An empty route is no block, an empty fence or rally list
+  (one part, no items) clears it. The PC sends every part each second until telemetry record **0x40E1** `[block id
+  u16][state u8][percent u8][reason length u8][ASCII, at most 120]` names the block with a state past 5 (state: 5
+  receiving its parts - percent of the parts, the PC sends them all again; 1 uploading, 2 reading back, 3 done, 4
+  failed), then the first part again after 2 s without a new status (the phone answers every part of a block it has
+  with that block's status; it says an upload's end once).
   The phone runs the mission protocol with the FC over USB and reads every item back (a route's item 0 is the FC's
   home: not compared; a parameter sent NaN ("its default") matches what is read back; a frame matches its plain twin - 6 reads back as 3, MISSION as GLOBAL). One upload at a time (`MissionBlockQueue`): a block of the
   list under way replaces it (the replaced one: failed, "replaced by a newer one"); a block of another list waits its
@@ -183,6 +192,12 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
   ADS-B receiver, which ArduPilot routes to USB) is skipped (`MavlinkSniff.isFlightController`), on the PC too.
 
 ## Fleet packets (the `fleet` branch: a PC and the drones it commands but does not pilot)
+
+Datagram sizes: the phone reads at most 1100 bytes of a datagram (`UdpCommon.packetLength`), a Tailscale path carries
+about 1250. Every fleet datagram fits: a `FleetCmd` is 2 + key (at most 64) + its inner packet - GroupOrder 49, ExitPlan
+25, LAUNCH 26, TRAFFIC at most 194, CLEAR 13, MARK 7, LEAD 4, RETURN 3, a `MissionBlock` part at most 855 (921 in all;
+`FleetCmd.wrap` refuses over 1100); `FleetStatus` 36; LAUNCH_STATUS 18; `FcCommand` at most 10; the tunnel carries one
+MAVLink frame (at most 280 bytes) a datagram each way. Only a `MissionBlock` could ever be longer: it goes in parts.
 
 - **`FleetCmd` 0x34** (PC to phone, unnumbered, the drone's commander only - `FleetCommandGate`):
   `[0x34][key length u8, 1..64][key UTF-8][one inner packet]`. Inner packets: `FcCommand` 0x30, `MissionBlock` 0x33,

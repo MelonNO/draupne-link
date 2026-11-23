@@ -54,19 +54,27 @@ public final class RouteSender {
     public static Thread send(int missionType, List<MissionItem> items, Predicate<byte[]> send, IntFunction<FcTelemetry.RouteUpload> status,
                               Consumer<Integer> progress, Consumer<Result> done) {
         int block = NEXT.incrementAndGet() & 0xffff;
-        byte[] packet = MissionBlock.packet(block, missionType, items);
-        Thread t = new Thread(() -> done.accept(run(block, packet, send, status, progress)), "routeSender");
+        List<byte[]> parts = MissionBlock.packets(block, missionType, items);
+        Thread t = new Thread(() -> done.accept(run(block, parts, send, status, progress)), "routeSender");
         t.setDaemon(true);
         t.start();
         return t;
     }
 
-    static Result run(int block, byte[] packet, Predicate<byte[]> send, IntFunction<FcTelemetry.RouteUpload> status, Consumer<Integer> progress) {
+    /**
+     * Sends every part of the block each second until the phone's status names the block past RECEIVING (it has them
+     * all), then follows the phone's upload; again after QUIET_MS without news. Each part is a datagram of its own under
+     * the phone's 1100 bytes (MissionBlock.ITEMS_PER_PART): one datagram for the whole block was cut over ~33 items.
+     */
+    static Result run(int block, List<byte[]> parts, Predicate<byte[]> send, IntFunction<FcTelemetry.RouteUpload> status, Consumer<Integer> progress) {
+        byte[] head = parts.get(0);
+        int type = head[3];
+        int items = (head[10] & 0xff) << 8 | (head[11] & 0xff); // [0x33][block u16][type][part][parts][crc u32][items u16]
         long start = de.droiddrone.pc.MonoClock.ms();
-        int sends = 0;
-        boolean heard = false;
+        int rounds = 0;
+        boolean heard = false, receiving = false;
         int lastPercent = -1;
-        long lastNews = start, lastSeen = -1;
+        long lastNews = start, lastSeen = -1, sentAt = Long.MIN_VALUE / 2;
         try {
             while (de.droiddrone.pc.MonoClock.ms() - start < FINISH_MS) {
                 long now = de.droiddrone.pc.MonoClock.ms();
@@ -75,26 +83,28 @@ public final class RouteSender {
                     lastSeen = s.receivedAt();
                     lastNews = now;
                     heard = true;
-                    if (progress != null && s.percent() != lastPercent) progress.accept(lastPercent = s.percent());
-                    if (s.done()) return new Result(true, (packet[3] == 1 ? "Fence" : packet[3] == 2 ? "Rally points" : "Route") + " on the drone, read back: " + itemsOf(packet) + " points.");
+                    receiving = s.state() == MissionBlock.RECEIVING;
+                    if (!receiving && progress != null && s.percent() != lastPercent) progress.accept(lastPercent = s.percent());
+                    if (s.done()) return new Result(true, (type == 1 ? "Fence" : type == 2 ? "Rally points" : "Route") + " on the drone, read back: " + items + " points.");
                     if (s.failed()) return new Result(false, "Route upload failed: " + (s.reason().isEmpty() ? "no reason given" : s.reason()));
                 }
-                if (!heard) {
-                    if (sends >= MissionBlock.MAX_SENDS) return new Result(false, "The phone didn't answer (phone app pc.58 or newer, an ArduPilot drone).");
-                    if (send.test(packet)) sends++;
+                if (!heard || receiving) {
+                    if (now - sentAt >= MissionBlock.RESEND_MS) { // every part again: the phone takes each part once
+                        if (!heard && rounds >= MissionBlock.MAX_SENDS) return new Result(false, "The phone didn't answer (phone app pc.58 or newer, an ArduPilot drone).");
+                        boolean any = false;
+                        for (byte[] p : parts) any |= send.test(p);
+                        if (any) rounds++;
+                        sentAt = now;
+                    }
                 } else if (now - lastNews >= QUIET_MS) {
                     lastNews = now;
-                    send.test(packet); // a lost status: the phone answers the same block with it
+                    send.test(head); // a lost status: the phone answers a block it has with its status
                 }
-                Thread.sleep(heard ? 200 : MissionBlock.RESEND_MS);
+                Thread.sleep(100);
             }
             return new Result(false, heard ? "The upload didn't finish in 30 s." : "The phone didn't answer.");
         } catch (InterruptedException e) {
             return new Result(false, "Stopped.");
         }
-    }
-
-    private static int itemsOf(byte[] packet) {
-        return packet.length >= 6 ? ((packet[4] & 0xff) << 8 | (packet[5] & 0xff)) : 0; // after [0x33][block u16][type u8]
     }
 }

@@ -113,11 +113,26 @@ class RouteWindowTest {
         /** Rally blocks (type 2) apart from the route's; every block's type in the order sent. */
         final List<byte[]> rallies = new CopyOnWriteArrayList<>();
         final List<Integer> order = new CopyOnWriteArrayList<>();
+        /** The phone's parts put together, and each whole block's items by the datagram that made it whole. */
+        final MissionBlock.Assembler parts = new MissionBlock.Assembler();
+        static final java.util.Map<byte[], List<MissionItem>> whole = new java.util.concurrent.ConcurrentHashMap<>();
+
         /** The phone fails the rally point (the route's answer is {@link #phone}'s). */
         volatile boolean rallyFails;
 
         @Override
         public boolean sendMissionBlock(byte[] packet) {
+            // as the phone: one part of a block, whole when all have come (the window sends a long route in parts)
+            MissionBlock.Part part = MissionBlock.readPart(packet, 1, packet.length - 1);
+            assertNotNull(part, "a part that reads");
+            assertTrue(packet.length <= de.droiddrone.common.UdpCommon.packetLength, packet.length + " bytes");
+            MissionBlock whole = parts.offer(part);
+            if (whole == null) {
+                int got = parts.percent(part.blockId);
+                if (got >= 0 && phone != Phone.SILENT) t.upload = new FcTelemetry.RouteUpload(part.blockId, MissionBlock.RECEIVING, got, "", MonoClock.ms());
+                return true;
+            }
+            StandInLink.whole.put(packet, whole.items);
             boolean isRally = packet[3] == MissionUpload.TYPE_RALLY;
             (isRally ? rallies : blocks).add(packet);
             order.add((int) packet[3]);
@@ -214,7 +229,7 @@ class RouteWindowTest {
     }
 
     private static List<MissionItem> items(byte[] block) {
-        return MissionBlock.read(block, 1, block.length - 1).items;
+        return StandInLink.whole.get(block);
     }
 
     // ------------------------------------------------------------------ the pilot's way

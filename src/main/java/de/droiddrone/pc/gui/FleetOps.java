@@ -225,7 +225,10 @@ final class FleetOps {
         if (l == null || a == null) return;
         if (!rallyReady(drone, de.droiddrone.pc.MonoClock.ms())) return; // AC-10: its rally point first (tickRallies sends it)
         l.phone(drone, a);
-        l.command(drone, de.droiddrone.common.MissionBlock.packet(s.block, s.leg.mission().items()));
+        // each part its own datagram: the phone reads 1100 bytes of one, a 111-item route in one was cut and lost
+        for (byte[] part : de.droiddrone.common.MissionBlock.packets(s.block, de.droiddrone.common.MissionUpload.TYPE_MISSION, s.leg.mission().items())) {
+            l.command(drone, part);
+        }
         s.sentAt = de.droiddrone.pc.MonoClock.ms();
     }
 
@@ -571,8 +574,10 @@ final class FleetOps {
         InetSocketAddress a = host.addressOf(drone);
         if (l == null || a == null || now - r.sentAt < 1000) return;
         l.phone(drone, a);
-        l.command(drone, de.droiddrone.common.MissionBlock.packet(r.block, de.droiddrone.common.MissionUpload.TYPE_RALLY,
-                de.droiddrone.pc.launch.RallyPlan.items(r.lat, r.lon, r.relAltM)));
+        for (byte[] part : de.droiddrone.common.MissionBlock.packets(r.block, de.droiddrone.common.MissionUpload.TYPE_RALLY,
+                de.droiddrone.pc.launch.RallyPlan.items(r.lat, r.lon, r.relAltM))) {
+            l.command(drone, part);
+        }
         r.sentAt = now;
     }
 

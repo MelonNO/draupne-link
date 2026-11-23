@@ -85,6 +85,9 @@ public final class FleetCmd {
     public static byte[] wrap(String key, byte[] inner) {
         byte[] k = key.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (k.length == 0 || k.length > 64 || inner == null || inner.length == 0) throw new IllegalArgumentException("key or packet");
+        if (2 + k.length + inner.length > UdpCommon.packetLength) { // the phone reads no more of a datagram: it would be cut and lost
+            throw new IllegalArgumentException((2 + k.length + inner.length) + " bytes: over the phone's " + UdpCommon.packetLength);
+        }
         byte[] out = new byte[2 + k.length + inner.length];
         out[0] = PACKET;
         out[1] = (byte) k.length;

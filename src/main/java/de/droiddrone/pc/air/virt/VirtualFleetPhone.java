@@ -99,7 +99,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
     }
 
     private void receive() {
-        byte[] buf = new byte[512];
+        byte[] buf = new byte[de.droiddrone.common.UdpCommon.packetLength]; // the real phone's limit: a longer datagram is cut
         DatagramPacket p = new DatagramPacket(buf, buf.length);
         while (open) {
             try {
@@ -141,7 +141,8 @@ public final class VirtualFleetPhone implements AutoCloseable {
                     if (plan != null && b != null) b.plan(plan);
                 }
                 case de.droiddrone.common.MissionBlock.PACKET -> { // a route: kept, "read back" at once (the real phone uploads it over USB)
-                    de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
+                    // one part of it: whole when every part has come (as the phone's Mavlink.missionPart)
+                    de.droiddrone.common.MissionBlock b = parts.offer(de.droiddrone.common.MissionBlock.readPart(c.data, c.at + 1, c.length - 1));
                     if (b != null && b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY) synchronized (copter) {
                         rally = b.items; // AC-10: the FC's rally list - its RTL lands there
                         rallyBlocks.add(b.blockId);
@@ -675,11 +676,23 @@ public final class VirtualFleetPhone implements AutoCloseable {
     /** Refuses the next session blocks with this reason (null: takes them). */
     public volatile String refuseBlocks;
 
+    /** The parts of the blocks sent to this phone (both paths), put together as the real phone does. */
+    private final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();
+
     private void sessionBlock(de.droiddrone.common.DataReader r) {
         byte[] buf = new byte[r.getRemaining()];
         if (r.read(buf, 0, buf.length) != buf.length) return;
-        de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(buf, 0, buf.length);
-        if (b == null) return;
+        de.droiddrone.common.MissionBlock.Part part = de.droiddrone.common.MissionBlock.readPart(buf, 0, buf.length);
+        if (part == null) return;
+        de.droiddrone.common.MissionBlock b = parts.offer(part);
+        if (b == null) { // not whole yet: the phone says how many of its parts came
+            int got = parts.percent(part.blockId);
+            if (got >= 0) {
+                blockStatus = de.droiddrone.common.MissionBlock.status(part.blockId, de.droiddrone.common.MissionBlock.RECEIVING, got, null);
+                sessionTelemetryNow();
+            }
+            return;
+        }
         String no = refuseBlocks;
         if (no == null && b.missionType == de.droiddrone.common.MissionUpload.TYPE_MISSION) synchronized (copter) {
             route = b.items; // flown at GO (MISSION_START), as a dispatched route is
