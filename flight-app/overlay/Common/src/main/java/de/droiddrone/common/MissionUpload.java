@@ -54,6 +54,11 @@ public final class MissionUpload {
     public static final int TYPE_MISSION = 0, TYPE_FENCE = 1, TYPE_RALLY = 2;
     /** MAV_MISSION_ACCEPTED. */
     public static final int ACK_ACCEPTED = 0;
+    /**
+     * MAV_MISSION_INVALID_SEQUENCE: ArduPilot's answer to an item it didn't ask for (a resend after a silence, an answer to its
+     * own repeated request) - it goes on with the upload, so this is no end of it.
+     */
+    public static final int ACK_INVALID_SEQUENCE = 13;
     /** No word from the FC for this long: the last message is sent again. */
     public static final long TIMEOUT_MS = 1000;
     /** Sent again this many times without an answer: failed. */
@@ -100,6 +105,8 @@ public final class MissionUpload {
 
     /** MISSION_REQUEST_INT (or the old MISSION_REQUEST) from the FC: it wants this item. */
     public void onRequest(int seq, long now) {
+        // the read-back began on a silence after the last item, but the FC still asks: it hadn't got it (see tick)
+        if (state == READING_BACK && readCount < 0 && seq >= 0 && seq < items.size()) state = UPLOADING;
         if (state != UPLOADING) return;
         if (seq < 0 || seq >= items.size()) {
             fail("the flight controller asked for item " + seq + " of " + items.size(), now);
@@ -113,6 +120,7 @@ public final class MissionUpload {
     /** MISSION_ACK from the FC. */
     public void onAck(int type, long now) {
         if (state != UPLOADING) return;
+        if (type == ACK_INVALID_SEQUENCE) return; // not the end: the FC asks again for what it wants (or times out: CANCELLED)
         heard(now);
         if (type != ACK_ACCEPTED) {
             fail("the flight controller refused the mission (" + ackName(type) + ")", now);
@@ -177,8 +185,17 @@ public final class MissionUpload {
         }
         lastHeard = now;
         if (state == UPLOADING) {
-            if (highestSent < 0) link.sendCount(items.size());
-            else link.sendItem(items.get(highestSent)); // the FC asks again for what it lost; this wakes a lost answer
+            if (highestSent < 0) {
+                link.sendCount(items.size());
+            } else if (highestSent == items.size() - 1) {
+                // every item was asked for and sent: the FC's last MISSION_ACK was lost (or it still waits for the last
+                // item). The read-back tells which - the route is there whole, or the count or an item differs
+                state = READING_BACK;
+                retries = 0;
+                link.sendRequestList();
+            } else {
+                link.sendItem(items.get(highestSent)); // the FC asks again for what it lost; this wakes a lost answer
+            }
         } else if (readCount < 0) {
             link.sendRequestList();
         } else {
@@ -218,6 +235,7 @@ public final class MissionUpload {
     public int percent() {
         if (state == DONE) return 100;
         int n = items.size();
+        if (n == 0) return 0; // an empty fence or rally list: nothing counted until it is done
         int done = (highestSent + 1) + (state == READING_BACK ? readNext : 0);
         return Math.min(99, done * 100 / (2 * n));
     }
