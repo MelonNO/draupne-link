@@ -76,8 +76,19 @@ public final class ArduLogs {
         }
     }
 
+    /** Nothing at all for this long: the drone has stopped answering (it was asked again and again all the while). */
+    public static final long SILENT_MS = 20_000;
+
     /** The log's bytes, whole; lost stretches asked for again. progress gets 0-100. */
     public static byte[] download(MavSession fc, Entry e, IntConsumer progress, long timeoutMs) throws IOException, InterruptedException {
+        return download(fc, e, progress, timeoutMs, SILENT_MS);
+    }
+
+    /**
+     * As above; silentMs without a single part: given up (a drone gone off the link, a closed session). Before, it asked
+     * for 30 minutes - a big log's whole time - with "Downloading ... 0 %" standing all the while.
+     */
+    public static byte[] download(MavSession fc, Entry e, IntConsumer progress, long timeoutMs, long silentMs) throws IOException, InterruptedException {
         if (e.size() <= 0 || e.size() > 512L * 1024 * 1024) throw new IOException("log size " + e.size());
         byte[] data = new byte[(int) e.size()];
         int chunks = (int) ((e.size() + CHUNK - 1) / CHUNK);
@@ -107,6 +118,11 @@ public final class ArduLogs {
                 }
                 if (missing >= chunks) break;
                 if (System.currentTimeMillis() > end) throw new IOException("log " + e.id() + ": " + have.cardinality() + " of " + chunks + " parts");
+                long quiet;
+                synchronized (got) {
+                    quiet = System.currentTimeMillis() - heard[0];
+                }
+                if (quiet > silentMs) throw new IOException("no answer from the drone for " + quiet / 1000 + " s (" + have.cardinality() + " of " + chunks + " parts)");
                 // ask for the first stretch that is missing, at most ASK_BYTES
                 int last;
                 synchronized (got) {
