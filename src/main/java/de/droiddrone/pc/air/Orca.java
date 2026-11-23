@@ -19,10 +19,18 @@ public final class Orca {
     public static final double TAU_S = 6;
 
     /** A drone: where, how fast, where it wants to go (controlled ones), how fast it may go; err widens its radius. */
-    public record Agent(String id, V2 pos, double alt, V2 vel, double vu, V2 pref, double maxSpeed, boolean controlled, double err, boolean firm) {
-        /** firm: flown by the PC, but the others take all of the avoiding (it may stop and come down where it is any moment). */
+    public record Agent(String id, V2 pos, double alt, V2 vel, double vu, V2 pref, double maxSpeed, boolean controlled, double err, boolean firm,
+                        boolean falling) {
+        /**
+         * firm: flown by the PC, but the others take all of the avoiding (it may stop and come down where it is any moment);
+         * falling: really coming down now (its own climb rate) - it goes on down, so whatever is under it is in its way.
+         */
+        public Agent(String id, V2 pos, double alt, V2 vel, double vu, V2 pref, double maxSpeed, boolean controlled, double err, boolean firm) {
+            this(id, pos, alt, vel, vu, pref, maxSpeed, controlled, err, firm, false);
+        }
+
         public Agent(String id, V2 pos, double alt, V2 vel, double vu, V2 pref, double maxSpeed, boolean controlled, double err) {
-            this(id, pos, alt, vel, vu, pref, maxSpeed, controlled, err, false);
+            this(id, pos, alt, vel, vu, pref, maxSpeed, controlled, err, false, false);
         }
     }
 
@@ -40,7 +48,9 @@ public final class Orca {
             for (Agent b : agents) {
                 if (b == a) continue;
                 double dz = Math.abs(a.alt() - b.alt());
-                if (dz - Math.abs(a.vu() - b.vu()) * TAU_S >= heightM) continue; // a layer apart, staying so
+                // one coming down comes down all the way: whatever is under it is in its way, however far below
+                boolean under = b.falling() && a.alt() < b.alt() || a.falling() && b.alt() < a.alt();
+                if (!under && dz - Math.abs(a.vu() - b.vu()) * TAU_S >= heightM) continue; // a layer apart, staying so
                 double r = radiusM + b.err() + a.err();
                 if (b.pos().dist(a.pos()) > r + (a.maxSpeed() + b.vel().length()) * TAU_S) continue;
                 lines.add(line(a, b, r, b.controlled() && !b.firm() ? 0.5 : 1.0));

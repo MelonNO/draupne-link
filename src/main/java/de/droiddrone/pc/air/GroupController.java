@@ -1064,8 +1064,11 @@ public final class GroupController {
         // comes down onto nobody; the group is moved out of their drift lines meanwhile
         boolean drifting = false;
         for (Member m : members.values()) {
-            if (m.state != State.GNSS_LOST) continue;
-            drifting = true;
+            if (m.state != State.GNSS_LOST || landedNow.getOrDefault(m.id, false)) continue;
+            // one drifted far off (its estimate, less its error circle as the safe velocities keep it, beyond the
+            // keep-out zone round the group) no longer holds the group's landings back: it comes down where it is
+            boolean far = m.lastPos.dist(centre) - Math.min(m.errM, GNSS_ERR_CAP_M) > p.edgeM() * Math.sqrt(2) + p.keepOutM() + p.radiusM();
+            if (!far) drifting = true;
             boolean under = false; // anyone below it within two radii and its error circle: it waits (drifting clear)
             for (Member o : members.values()) {
                 if (o == m || o.state == State.GONE || landedNow.getOrDefault(o.id, false)) continue;
@@ -1266,6 +1269,16 @@ public final class GroupController {
     static final double PLACE_GAIN = 0.6;
     /** Kept on top of the protection radius by the safe velocities: what the drones' response (the PC's tick, the phone, their acceleration) may cost. */
     static final double ORCA_BUFFER_M = 3;
+    /** How late a cut-off drone may set off on its plan against the PC's prediction (its phone's silence, its brake): s. */
+    static final double LOST_START_SLACK_S = 3;
+    /** Coming down faster than this (m/s, its own climb rate): it goes on down, whatever is under it is in its way. */
+    static final double FALLING_MS = 0.5;
+    /**
+     * The most of a GNSS-less drone's error circle the safe velocities keep clear of, m: its estimate drifts off a little
+     * more each second (14.7 m after 50 s at 0.3 m/s, its circle 26 m); past this, a circle that big would wedge every drone near it - by
+     * then the group has moved away from it (AC-42) or it is landed (AC-20).
+     */
+    static final double GNSS_ERR_CAP_M = 20;
 
     /**
      * Every follower the PC flies (in its cell, on a move) gets the velocity closest to the one that takes it to its
@@ -1290,11 +1303,11 @@ public final class GroupController {
             double toCritical = (mm.battery - LAND_PCT) / Math.max(mm.drainPerS, 1e-6);
             double vu = toCritical < LANDING_WARN_S && mm.battery < 50 || landingSoon.contains(mm.id) ? Math.min(r.vu(), -1.5) : r.vu();
             boolean firm = nearCritical(mm) || mm.state == State.LANDING || landingSoon.contains(mm.id);
-            agents.add(new Orca.Agent(w.m().id, r.pos(), r.altAmsl(), r.vel(), vu, pref, p.catchUpMs(), true, 0, firm));
+            agents.add(new Orca.Agent(w.m().id, r.pos(), r.altAmsl(), r.vel(), vu, pref, p.catchUpMs(), true, 0, firm, r.vu() < -FALLING_MS));
             flown.add(w.m().id);
         }
         if (lead != null && leadFresh && !lead.landed()) {
-            agents.add(new Orca.Agent("lead", lead.pos(), lead.altAmsl(), lead.vel(), lead.vu(), lead.vel(), 0, false, 0));
+            agents.add(new Orca.Agent("lead", lead.pos(), lead.altAmsl(), lead.vel(), lead.vu(), lead.vel(), 0, false, 0, false, lead.vu() < -FALLING_MS));
         }
         for (Member m : members.values()) {
             if (flown.contains(m.id) || m.state == State.GONE) continue;
@@ -1302,7 +1315,15 @@ public final class GroupController {
             if (m.state == State.LOST) { // where its plan has it: still through its hold, then out along its lane and home
                 double[] at = predicted(m.id, lastTick);
                 V2 pos = at == null ? m.lastPos : new V2(at[0], at[1]), v = at == null ? V2.ZERO : new V2(at[3], at[4]);
-                agents.add(new Orca.Agent(m.id, pos, at == null ? m.lastAlt : at[2], v, at == null ? 0 : at[5], v, 0, false, 1));
+                agents.add(new Orca.Agent(m.id, pos, at == null ? m.lastAlt : at[2], v, at == null ? 0 : at[5], v, 0, false, 1, false, at != null && at[5] < -FALLING_MS));
+                if (v.length() >= 0.01) { // on its way: when it set off isn't known to the second (its phone's silence, its brake),
+                    // so it may be anywhere behind that place along its track - kept clear back that far, moving as it does
+                    double back = v.length() * LOST_START_SLACK_S + (m.heardPos == null ? 0 : m.heardPos.dist(m.lastPos));
+                    V2 behind = v.unit().times(-1);
+                    for (double s = 4; s <= back + 1e-9; s += 4) {
+                        agents.add(new Orca.Agent(m.id + "<" + Math.round(s), pos.plus(behind.times(s)), at[2], v, at[5], v, 0, false, 1));
+                    }
+                }
                 if (v.length() < 0.01 && m.heardPos != null) { // still: somewhere between where it was heard and its furthest stop
                     double way = m.heardPos.dist(m.lastPos);
                     for (double s = 0; s < way; s += 4) {
@@ -1322,9 +1343,21 @@ public final class GroupController {
                     agents.add(new Orca.Agent(m.id + "~", m.lastPos.plus(wind.times(since)), m.lastAlt, wind, 0, wind, 0, false, 1));
                 }
             } else if (r != null && !r.landed()) { // without GNSS, or landing: it goes where it goes
-                double err = m.state == State.GNSS_LOST ? Math.min(m.errM, 10) : 0;
+                double err = m.state == State.GNSS_LOST ? Math.min(m.errM, GNSS_ERR_CAP_M) : 0; // AC-42: its estimate and its growing error circle
                 double vu = forceLand.contains(m.id) ? Math.min(r.vu(), -1.5) : r.vu(); // about to be landed: shown coming down
-                agents.add(new Orca.Agent(m.id, m.state == State.GNSS_LOST ? m.lastPos : r.pos(), r.altAmsl(), r.vel(), vu, r.vel(), 0, false, err));
+                if (r.gnssOk() && m.state != State.GNSS_LOST && r.vel().length() > 0.3) {
+                    // landing on its own GNSS (LAND holds its place): it brakes to a stop, it doesn't fly on - kept clear
+                    // where it is and all the way to where it will stand
+                    V2 stop = r.pos().plus(r.vel().times(r.vel().length() / (2 * p.brakeMs2())));
+                    double way = r.pos().dist(stop);
+                    for (double s = 0; s <= way + 1e-9; s += 4) {
+                        V2 on = r.pos().plus(stop.minus(r.pos()).unit().times(s));
+                        agents.add(new Orca.Agent(m.id + "#" + Math.round(s), on, r.altAmsl(), V2.ZERO, vu, V2.ZERO, 0, false, 0, false, r.vu() < -FALLING_MS));
+                    }
+                    agents.add(new Orca.Agent(m.id, stop, r.altAmsl(), V2.ZERO, vu, V2.ZERO, 0, false, 0, false, r.vu() < -FALLING_MS));
+                    continue;
+                }
+                agents.add(new Orca.Agent(m.id, m.state == State.GNSS_LOST ? m.lastPos : r.pos(), r.altAmsl(), r.vel(), vu, r.vel(), 0, false, err, false, r.vu() < -FALLING_MS));
             }
         }
         for (Other o : others) agents.add(new Orca.Agent(o.id(), o.pos(), o.altAmsl(), o.vel(), 0, o.vel(), 0, false, 0));

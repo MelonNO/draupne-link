@@ -37,7 +37,7 @@ class SeparationSuiteTest {
         TABLE.forEach(System.out::println);
     }
 
-    private static double leadAlt(VirtualAirspace a) {
+    static double leadAlt(VirtualAirspace a) {
         return a.copters.get("LEAD").u;
     }
 
@@ -338,25 +338,26 @@ class SeparationSuiteTest {
 
     /**
      * Random cases (AC-14 "random scenarios"): an event every 10 s for 5 min - the lead flown anywhere, links cut and back,
-     * GNSS lost, packs draining fast, reserves called, DISCARD LEAD. Five seeds in the normal suite; the long run (30
-     * seeds, 10 min each) under the night tag.
+     * GNSS lost, packs draining fast, reserves called, DISCARD LEAD. Twelve seeds in the normal suite (about a second
+     * each; seed 11 was the last of them to lose separation, fixed 2026-11-23); the long run (30 seeds, 10 min each)
+     * under the night tag.
      */
     @Test
     void randomCasesSeeded() {
-        for (long seed = 1; seed <= 5; seed++) randomCase(seed, 300);
+        for (long seed = 1; seed <= 12; seed++) randomCase(seed, 300);
     }
 
     /**
      * The nightly run (AC-14 "random scenarios run every night"): gradlew benchNight; AIR_SEEDS=N for how many (30),
      * seeds from 100, 10 min each; every seed is run and every one that lost separation is said.
      * <p>
-     * OPEN (tagged finding too, until it holds for all): 2026-11-23, seeds 100-189: 85 of 90 keep separation; 112
-     * (6.1 m at the same height), 139 (9.2 m), 147 (9.5 m sideways, 9.0 m in height), 157 (9.0 m, 8.6 m), 160
-     * (10.0 m, 5.9 m) do not. Near misses mostly: what the safe velocities' buffer (3 m) can buy against the drones'
-     * response; a wider buffer (4 m) made it worse (82 of 90).
+     * 2026-11-23: seeds 100-189 all keep separation (AIR_SEEDS=90). The last five (112, 139, 147, 157, 160) and seed 11
+     * were not near misses of the buffer but things the PC had wrong: a cut-off drone setting off on its plan a little
+     * later than predicted; a drone landing with GNSS braking to a stop, not flying on; a GNSS-less drone's error circle
+     * cut at 10 m; the lead's ADS-B hold let go the moment it stopped; one GNSS-less drone far off holding back the
+     * group's landings; and whatever is under a drone coming down being taken as a layer clear of it.
      */
     @Tag("night")
-    @Tag("finding")
     @Test
     void randomCasesNightly() {
         String env = System.getenv("AIR_SEEDS");
