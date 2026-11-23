@@ -149,7 +149,7 @@ public final class VirtualAirspace {
             VirtualCopter c = copters.get(id);
             if (c == null || c.landed) continue;
             V2 aside = outsideTarget.get(id);
-            if (linkUp(id) && aside != null) { // the PC steps it out of a cut-off drone's way (AC-37)
+            if (linkUp(id) && aside != null && c.gnssOk) { // the PC steps it out of a cut-off drone's way (AC-37); never one without GNSS (AC-12)
                 double[] ll = GeoLocal.offset(lat0, lon0, aside.e(), aside.n());
                 c.apply(FleetIntent.guided(ll[0], ll[1], c.u, Double.NaN, 5), lat0, lon0);
             } else             if (linkUp(id)) c.apply(FleetIntent.HOLD, lat0, lon0); // keeps its mode (E3): here, it holds

@@ -134,7 +134,7 @@ final class FleetRole {
                 }
                 break;
             case FleetCmd.CLEAR:
-                if (c.length >= 13 && !inSession) {
+                if (c.length >= 13 && !inSession && m.gnssOk()) { // AC-12: never sideways without GNSS
                     java.nio.ByteBuffer bb = java.nio.ByteBuffer.wrap(c.data, c.at + 1, 12);
                     clearTo = new double[]{bb.getInt() / 1e7, bb.getInt() / 1e7, bb.getInt() / 10.0};
                 }
@@ -221,7 +221,7 @@ final class FleetRole {
         double[] c = clearTo;
         if (c != null && !inSession) { // an old lead stepped out of the way (the group's order)
             clearTo = null;
-            m.guidedTarget(c[0], c[1], c[2], Double.NaN, 0, 0);
+            if (m.gnssOk()) m.guidedTarget(c[0], c[1], c[2], Double.NaN, 0, 0); // AC-12: never sideways without GNSS
         }
         FollowerBrain b = brain;
         if (b == null || inSession) return;
