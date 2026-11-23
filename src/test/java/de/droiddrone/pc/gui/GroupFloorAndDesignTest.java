@@ -78,6 +78,24 @@ class GroupFloorAndDesignTest {
         return new Point(r.x + r.width / 2, r.y + r.height / 2);
     }
 
+    /**
+     * AC-2 / E2: the group's layers stand on the highest ground under its area, not on the lead's home ground (which
+     * may be a valley far off): a hill under the group lifts the floor; unknown terrain keeps the lead's home.
+     */
+    @Test
+    void theGroundUnderTheGroupIsItsHighest() {
+        AirParams p = AirParams.defaults();
+        de.droiddrone.pc.route.TerrainSource hill = (lat, lon) -> {
+            double e = de.droiddrone.common.group.GeoLocal.east(LAT, LON, lat, lon);
+            return e > 40 ? 230 : 180; // a ridge 40 m east of the group's centre, inside its keep-out
+        };
+        assertEquals(230, FleetOps.groupGround(hill, p, LAT, LON, 120), 1e-9);
+        assertEquals(120, FleetOps.groupGround((lat, lon) -> Double.NaN, p, LAT, LON, 120), 1e-9, "unknown: the lead's home");
+        de.droiddrone.pc.route.TerrainSource far = (lat, lon) ->
+                de.droiddrone.common.group.GeoLocal.east(LAT, LON, lat, lon) > 400 ? 500 : 180; // far outside: not counted
+        assertEquals(180, FleetOps.groupGround(far, p, LAT, LON, 120), 1e-9);
+    }
+
     @Test
     void theDesignersChecks() {
         AirParams d = AirParams.defaults();

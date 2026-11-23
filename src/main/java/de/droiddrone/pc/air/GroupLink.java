@@ -66,8 +66,8 @@ public final class GroupLink implements AutoCloseable {
     private volatile View view = View.NONE;
 
     /** The group as the window shows it, as of the last tick (at most {@link #TICK_MS} old). */
-    public record View(Picture picture, Map<String, GroupController.State> states, double nextApproachAlt) {
-        static final View NONE = new View(null, Map.of(), Double.NaN);
+    public record View(Picture picture, Map<String, GroupController.State> states, double nextApproachAlt, double groundAmsl) {
+        static final View NONE = new View(null, Map.of(), Double.NaN, Double.NaN);
     }
 
     public GroupLink(String key, Listener listener) throws IOException {
@@ -102,6 +102,20 @@ public final class GroupLink implements AutoCloseable {
         return lead;
     }
 
+    /** How long ago (ms, MonoClock) the drone's last report came; MAX_VALUE: never. */
+    public long heardAgoMs(String drone, long now) {
+        Long at = heardAt.get(drone);
+        return at == null ? Long.MAX_VALUE : Math.max(0, now - at);
+    }
+
+    /** The cut-off followers where their exit plans have them now ({lat, lon, altAmsl} by drone), as of the last tick. */
+    private volatile Map<String, double[]> unheardNow = Map.of();
+
+    /** AC-8 / AC-37: where the cut-off followers are now, as their plans say (the PC can't hear them). */
+    public Map<String, double[]> unheardNow() {
+        return unheardNow;
+    }
+
     /** A report this fresh counts as the drone's state now (FL-6's hand-over). */
     public static final long REPORT_FRESH_MS = 1500;
 
@@ -133,6 +147,11 @@ public final class GroupLink implements AutoCloseable {
     }
 
     /** AC-5: the approach height (AMSL) for the next reserve, as of the last tick; NaN without a group. */
+    /** AC-2 / AC-13: the ground the group's layers and its ceiling stand on (AMSL); NaN without a group. */
+    public double groundAmsl() {
+        return view.groundAmsl();
+    }
+
     public double nextApproachAlt() {
         return view.nextApproachAlt();
     }
@@ -154,7 +173,7 @@ public final class GroupLink implements AutoCloseable {
         }
         Map<String, GroupController.State> states = new LinkedHashMap<>();
         for (Map.Entry<String, GroupController.Member> m : g.members().entrySet()) states.put(m.getKey(), m.getValue().state());
-        view = new View(makePicture(), java.util.Collections.unmodifiableMap(states), g.nextApproachAlt());
+        view = new View(makePicture(), java.util.Collections.unmodifiableMap(states), g.nextApproachAlt(), g.groundAmsl());
     }
 
     /** Asks these drones for their reports (the start of FOLLOW GROUP: where are they?). */
@@ -259,6 +278,7 @@ public final class GroupLink implements AutoCloseable {
         GroupController g = group;
         group = null;
         followerRallies = Map.of();
+        unheardNow = Map.of();
         if (g == null) return;
         refreshView();
         for (String d : phones.keySet()) send(d, FleetCmd.disband());
@@ -375,11 +395,17 @@ public final class GroupLink implements AutoCloseable {
             // AC-12: one without GNSS is never moved sideways (it couldn't fly GUIDED anyway: its FC holds its height)
             if (s != null && s.has(FleetStatus.GNSS)) send(c.getKey(), FleetCmd.clear(ll[0], ll[1], s.altAmsl));
         }
+        Map<String, double[]> unheard = g.unheard(now);
+        Map<String, double[]> unheardLl = new LinkedHashMap<>();
+        for (Map.Entry<String, double[]> u : unheard.entrySet()) {
+            double[] ll = GeoLocal.offset(lat0, lon0, u.getValue()[0], u.getValue()[1]);
+            unheardLl.put(u.getKey(), new double[]{ll[0], ll[1], u.getValue()[2]});
+        }
+        unheardNow = java.util.Collections.unmodifiableMap(unheardLl);
         if (now - trafficAt >= TRAFFIC_EVERY_MS) { // FD-8 / AC-11: each FC gets the others as ADS-B targets
             trafficAt = now;
             List<String> to = new ArrayList<>(g.members().keySet());
             if (lead != null && !to.contains(lead)) to.add(lead);
-            Map<String, double[]> unheard = g.unheard(now);
             for (String d : to) {
                 Traffic t = trafficFor(d, now, unheard);
                 if (t != null) send(d, FleetCmd.traffic(t.encode()));
