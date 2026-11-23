@@ -233,6 +233,15 @@ class BenchSelfTest {
     /** An address kept for examples (TEST-NET-1): nobody's. Nothing is ever sent to it here - the fence is only asked. */
     private static final String PHONE = "192.0.2.10";
 
+    /**
+     * An address made up for examples: one of the three kept for documentation (192.0.2.x, 198.51.100.x, 203.0.113.x) -
+     * or, for a phone that is reached over Tailscale only (Q-006), the very start of Tailscale's range (100.64.0.x),
+     * written as an example is written. A phone's own Tailscale address is anywhere in 100.64.0.0/10.
+     */
+    static boolean exampleAddress(String ip) {
+        return ip.matches("(192\\.0\\.2|198\\.51\\.100|203\\.0\\.113|100\\.64\\.0)\\.(\\d{1,3})") && Integer.parseInt(ip.substring(ip.lastIndexOf('.') + 1)) <= 255;
+    }
+
     /** As gradlew benchHw starts its JVM; put back to what it was by the returned step. */
     private static AutoCloseable asAHardwareRun() {
         String was = System.getProperty(Fence.Reach.PROPERTY);
@@ -527,10 +536,33 @@ class BenchSelfTest {
         IllegalStateException missing = assertThrows(IllegalStateException.class, () -> Hardware.read(none));
         assertTrue(missing.getMessage().contains(none.toString()) && missing.getMessage().contains(Hardware.EXAMPLE), missing.getMessage());
 
-        // the example in the repo reads, and has nobody's values
+        // the example in the repo reads, and has nobody's values: since Q-006 its phone is at a Tailscale address (the
+        // phone app answers there only), one made up for examples - and none of this PC's own hardware file
         Path example = repo.resolve(Hardware.EXAMPLE);
         Hardware hw = Hardware.read(example);
-        assertTrue(hw.phoneIp().startsWith("192.0.2."), "an address kept for examples: " + hw.phoneIp());
+        assertTrue(exampleAddress(hw.phoneIp()), "an address kept for examples: " + hw.phoneIp());
+        assertTrue(de.droiddrone.common.TailscaleOnly.peer(java.net.InetAddress.getByName(hw.phoneIp())), "a Tailscale address, as the phone app wants: " + hw.phoneIp());
+        if (Hardware.present()) {
+            Hardware real = null;
+            try {
+                real = Hardware.read(place); // this PC's own, read only - and its values never put into a message
+            } catch (IllegalStateException unreadable) {
+                // a file this bench cannot read has nothing to compare
+            }
+            if (real != null) {
+                assertFalse(real.phoneIp().equals(hw.phoneIp()), "the example's phone.ip is this PC's own phone's");
+                String serial = "";
+                try {
+                    serial = real.phoneAdb();
+                } catch (IllegalStateException noSerial) {
+                    // the file names no phone on adb
+                }
+                assertFalse(serial.equals(hw.phoneAdb()), "the example's phone.adb is this PC's own phone's");
+            }
+        }
+        for (String own : List.of("100.101.102.103", "100.127.255.1", "100.64.1.10", "10.0.0.5", "192.168.1.20")) {
+            assertFalse(exampleAddress(own), "a phone's own address is not one made up for examples: " + own);
+        }
         assertEquals(de.droiddrone.common.UdpCommon.defaultPort, hw.phonePort());
         assertEquals("", hw.phoneKey());
         assertEquals("EXAMPLE0SERIAL", hw.phoneAdb());

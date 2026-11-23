@@ -8,6 +8,7 @@ import de.droiddrone.bench.hw.Msp;
 import de.droiddrone.common.MspFrames;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.MotorTest;
+import de.droiddrone.testing.Waits;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -127,7 +128,7 @@ class SitlArmedWritesScenario {
             BetaflightUsb.use(tap); // the app's USB from here on: UART1, through the tap
             rx = new Receiver();
             Receiver r = rx;
-            rig.check(waitFor(30_000, () -> r.last() != null && r.last().flags() == 0), "the stand-in receiver's sticks reach Betaflight on UART2 and nothing keeps it "
+            rig.check(within(30_000, () -> r.last() != null && r.last().flags() == 0), "the stand-in receiver's sticks reach Betaflight on UART2 and nothing keeps it "
                     + "from arming: " + r.blocks());
             byte[] mixer = rx.ask(Msp.MIXER_CONFIG, 1500);
             rig.check(mixer.length >= 2 && mixer[0] == MotorTest.MIXER_QUADX && mixer[1] == 0, "before anything: Quad X, props in in Betaflight's memory (MSP_MIXER_CONFIG "
@@ -138,7 +139,7 @@ class SitlArmedWritesScenario {
 
             // ---- the end: nothing of the app's on the board's port any more, then Betaflight read on its own
             tap.unplug();
-            rig.check(waitFor(20_000, () -> !threadAlive("motor-test") && !threadAlive("orientation-live") && tap.quietFor(3000)),
+            rig.check(within(20_000, () -> !threadAlive("motor-test") && !threadAlive("orientation-live") && tap.quietFor(3000)),
                     "the app has let go of the board (no motor test, no live view, nothing sent for 3 s)");
             try (BetaflightUsb fc = Sitl.open(film::remark)) {
                 byte[] status = fc.msp(Msp.STATUS, null);
@@ -183,7 +184,7 @@ class SitlArmedWritesScenario {
                 // closed already
             }
         }
-        waitFor(20_000, () -> !threadAlive("motor-test") && !threadAlive("orientation-live") && tap.quietFor(2000));
+        within(20_000, () -> !threadAlive("motor-test") && !threadAlive("orientation-live") && tap.quietFor(2000));
         try {
             String serial = Sitl.toDefaults(rig.film::remark);
             rig.check(serial.contains("serial 1 0 ") && serial.contains("serial 3 0 "), "the board is left with Betaflight's defaults for the next scenario "
@@ -234,7 +235,7 @@ class SitlArmedWritesScenario {
         ui.click("Set up a new drone");
         ui.until("Drone setup's first step", 15_000, () -> ui.window("New drone") != null);
         ui.until("the first step to read Betaflight and offer CONFIRM", 150_000, () -> confirmOffered(ui));
-        boolean rests = waitFor(150_000, () -> tap.quietFor(8000) && !Ui.edt(() -> ui.buttons().contains("[NEXT]")));
+        boolean rests = within(150_000, () -> tap.quietFor(8000) && !Ui.edt(() -> ui.buttons().contains("[NEXT]")));
         rig.check(rests, "disarmed: the first step has read Betaflight (" + tap.opens() + " visits to UART1) and rests, CONFIRM offered");
         ui.shot("Drone setup's first step: Betaflight read, CONFIRM offered");
 
@@ -242,16 +243,16 @@ class SitlArmedWritesScenario {
         ui.click("NEXT");
         ui.until("the Motors and orientation step", 10_000, () -> ui.sees("Motors and orientation"));
         long shown = System.currentTimeMillis();
-        rig.check(waitFor(20_000, () -> tap.asked(shown, MSP_ATTITUDE)), "the second step's live view follows Betaflight (MSP_ATTITUDE on UART1)");
+        rig.check(within(20_000, () -> tap.asked(shown, MSP_ATTITUDE)), "the second step's live view follows Betaflight (MSP_ATTITUDE on UART1)");
         ui.click("Check now");
         ui.until("the motor test window", 10_000, () -> ui.window("Motor test") != null);
         Window motorTest = ui.window("Motor test");
-        boolean found = waitFor(20_000, () -> texts(motorTest).stream().anyMatch(t -> t.contains("Betaflight " + version)));
+        boolean found = within(20_000, () -> texts(motorTest).stream().anyMatch(t -> t.contains("Betaflight " + version)));
         rig.check(found, "the motor test finds Betaflight " + version + " while disarmed");
         Component props = Ui.edt(() -> first(motorTest, c -> c.getClass().getSimpleName().equals("DirectionSwitch")));
         rig.check(props != null && Ui.edt(props::isEnabled), "disarmed: PROPS IN / OUT can be pressed");
         long from = arm(rig, rx, "with Drone setup's motor test open");
-        boolean grey = waitFor(6000, () -> texts(motorTest).stream().anyMatch(t -> t.contains("ARMED - motor test stopped. Disarm."))
+        boolean grey = within(6000, () -> texts(motorTest).stream().anyMatch(t -> t.contains("ARMED - motor test stopped. Disarm."))
                 && props != null && !Ui.edt(props::isEnabled));
         rig.check(grey, "armed: the motor test says ARMED - motor test stopped. Disarm. and PROPS IN / OUT is grey");
         ui.shot("armed: the motor test, PROPS IN / OUT grey");
@@ -290,13 +291,13 @@ class SitlArmedWritesScenario {
             return null;
         });
         ui.until("the motor test to close", 10_000, () -> ui.window("Motor test") == null);
-        rig.check(waitFor(10_000, () -> !threadAlive("motor-test")), "the motor test has let go of the board");
+        rig.check(within(10_000, () -> !threadAlive("motor-test")), "the motor test has let go of the board");
 
         // ---- CALIBRATE on the armed board (F-079)
         long closed = System.currentTimeMillis();
-        rig.check(waitFor(20_000, () -> tap.asked(closed, MSP_ATTITUDE)), "the live view has the board again");
+        rig.check(within(20_000, () -> tap.asked(closed, MSP_ATTITUDE)), "the live view has the board again");
         ui.click("Calibrate");
-        boolean said = waitFor(15_000, () -> ui.sees(ARMED) || ui.sees("Calibrated: reads flat"));
+        boolean said = within(15_000, () -> ui.sees(ARMED) || ui.sees("Calibrated: reads flat"));
         rig.check(said && ui.sees(ARMED) && !ui.sees("Calibrated: reads flat"), "armed: CALIBRATE says \"" + ARMED + "\" - not \"Calibrated: reads flat.\": "
                 + lines(ui, "armed", "Calibrat"));
         ui.shot("armed: CALIBRATE");
@@ -333,7 +334,7 @@ class SitlArmedWritesScenario {
         noWrites(rig, tap, from, to, "Drone setup: motor test, CALIBRATE, CONFIRM");
 
         // ---- disarmed: CONFIRM's write goes through, arming blocked while the CLI is open (F-078)
-        boolean saved = waitFor(150_000, () -> tap.firstAfter(to, "cli", "save") != null);
+        boolean saved = within(150_000, () -> tap.firstAfter(to, "cli", "save") != null);
         rig.check(saved, "disarmed: CONFIRM writes and saves (the CLI's \"save\" on UART1)");
         if (saved) {
             Tap.Event save = tap.firstAfter(to, "cli", "save");
@@ -349,7 +350,7 @@ class SitlArmedWritesScenario {
                     + (status == null ? "not read" : status.text()));
             film.add("CONFIRM's visit to UART1: " + visit.size() + " requests and lines, \"save\" at " + seconds(save.atMs()), null, "sitl", status == null ? "" : status.text());
             Receiver r = rx;
-            boolean free = waitFor(30_000, () -> {
+            boolean free = within(30_000, () -> {
                 Receiver.Seen s = r.firstAfter(save.atMs());
                 return s != null && s.flags() != -1;
             });
@@ -357,8 +358,8 @@ class SitlArmedWritesScenario {
             rig.check(free && after != null && (after.flags() & MSP_BLOCK) == 0, "after the restart the arming block MSP is gone (the first status after it: "
                     + (after == null ? "none" : Msp.armingBlocks(after.flags())) + ")");
         }
-        rig.check(waitFor(30_000, () -> rig.logged("Its settings before:")), "disarmed: the app's log says what CONFIRM wrote and where the backup is");
-        boolean settled = waitFor(150_000, () -> tap.quietFor(8000));
+        rig.check(within(30_000, () -> rig.logged("Its settings before:")), "disarmed: the app's log says what CONFIRM wrote and where the backup is");
+        boolean settled = within(150_000, () -> tap.quietFor(8000));
         film.remark("After CONFIRM the page says: " + lines(ui, "SITL", "Nothing written", "Done", "armed"));
         rig.check(settled && !ui.sees("Nothing written"), "disarmed: CONFIRM's write went through and the page rests (no \"Nothing written\")");
         // every visit of the app to Betaflight's CLI: the block on while it was open
@@ -387,10 +388,10 @@ class SitlArmedWritesScenario {
         boolean armed = false;
         for (int flip = 1; flip <= 6 && !armed; flip++) {
             rx.arm(false);
-            waitFor(8000, () -> rx.last() != null && rx.last().flags() != -1 && (rx.last().flags() & ~passing) == 0);
+            within(8000, () -> rx.last() != null && rx.last().flags() != -1 && (rx.last().flags() & ~passing) == 0);
             Ui.pause(300);
             rx.arm(true);
-            armed = waitFor(3000, () -> rx.last() != null && rx.last().armed());
+            armed = within(3000, () -> rx.last() != null && rx.last().armed());
             if (!armed) rig.film.remark("The ARM switch up did not arm Betaflight " + when + " (" + rx.blocks() + "): down and up again.");
         }
         if (!armed) throw new AssertionError("Betaflight did not arm " + when + " in six flips of the ARM switch: " + rx.blocks());
@@ -407,7 +408,7 @@ class SitlArmedWritesScenario {
         armedSpells.get(armedSpells.size() - 1)[1] = at;
         rx.throttle(1000);
         rx.arm(false);
-        boolean off = waitFor(5000, () -> rx.last() != null && !rx.last().armed() && rx.last().atMs() > at);
+        boolean off = within(5000, () -> rx.last() != null && !rx.last().armed() && rx.last().atMs() > at);
         rig.check(off, "the ARM switch down disarms Betaflight: " + rx.blocks());
         return at;
     }
@@ -442,18 +443,23 @@ class SitlArmedWritesScenario {
         }
     }
 
-    private static boolean waitFor(long ms, BooleanSupplier ok) {
-        long end = System.currentTimeMillis() + ms;
-        while (true) {
-            boolean is;
-            try {
-                is = ok.getAsBoolean();
-            } catch (RuntimeException e) {
-                is = false;
-            }
-            if (is) return true;
-            if (System.currentTimeMillis() > end) return false;
-            Ui.pause(100);
+    /**
+     * Whether it is so within ms - the shared helper's wait (Waits), looked at ten times a second as before: a look that
+     * throws (an answer not there yet, a window being laid out) counts as "not yet", and the last look comes after the
+     * time is up. Interrupted (the scenario's time is up): false at once.
+     */
+    private static boolean within(long ms, BooleanSupplier ok) {
+        try {
+            return Waits.until(() -> {
+                try {
+                    return ok.getAsBoolean();
+                } catch (RuntimeException e) {
+                    return false;
+                }
+            }, ms, 100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

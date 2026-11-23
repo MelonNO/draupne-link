@@ -49,7 +49,11 @@ public final class Waits {
         }
     }
 
-    private static boolean until(BooleanSupplier ok, long ms, long stepMs) throws InterruptedException {
+    /**
+     * No failure of its own: true when it was so within {@code ms}, looking every {@code stepMs} - for a condition that
+     * is dear to look at (a window's texts on the Swing thread, Betaflight's answers): each test keeps its pace.
+     */
+    public static boolean until(BooleanSupplier ok, long ms, long stepMs) throws InterruptedException {
         long end = System.currentTimeMillis() + ms;
         while (!ok.getAsBoolean()) {
             if (System.currentTimeMillis() > end) return false;
