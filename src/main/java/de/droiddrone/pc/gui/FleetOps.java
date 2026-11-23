@@ -1042,6 +1042,12 @@ final class FleetOps {
         l.setFloor(floorM);
         host.log("Group floor " + Math.round(floorM) + " m above the ground.");
         if (floorM > FLOOR_WARN_M) host.alert("Floor over 120 m: check the airspace's height limit.");
+        else if (l.active()) { // AC-13: the group's top layer over GROUP DESIGN's ceiling - said, not only found at the next call
+            de.droiddrone.pc.air.AirParams d = design();
+            double top = de.droiddrone.pc.air.GroupDesign.topM(d, l.members().size(), 0), ceiling = de.droiddrone.pc.air.GroupDesign.ceiling(d);
+            if (top > ceiling) host.alert("Floor " + Math.round(floorM) + " m: top layer " + Math.round(top) + " m, over the ceiling ("
+                    + Math.round(ceiling) + " m). No reserve can join.");
+        }
     }
 
     private void start(String lead) {

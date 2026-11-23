@@ -365,6 +365,22 @@ class FleetFlowLoopbackTest {
         assertEquals(List.of(), r.arms, "never armed");
     }
 
+    /**
+     * FL-14 through the menu: floor - stops at 10 m (the followers' orders carry it within 2 s); floor + past the
+     * ceiling says so at once (AC-13), not only when a reserve is refused later.
+     */
+    @Test
+    void theFloorStepsDownTo10AndWarnsOverTheCeiling() throws Exception {
+        group();
+        ops = ops();
+        form("F1", "F2");
+        for (int i = 0; i < 8; i++) click("F1", "Floor -5 m");
+        assertEquals(10, ops.floorM(), 1e-9);
+        until(() -> ops.picture() != null && Math.abs(ops.picture().floorM() - 10) < 1e-6, 2000, "the group's floor 10 m");
+        for (int i = 0; i < 30 && log.stream().noneMatch(l -> l.contains("over the ceiling")); i++) click("F1", "Floor +5 m");
+        assertTrue(log.stream().anyMatch(l -> l.startsWith("! Floor 115 m: top layer 125 m, over the ceiling (120 m)")), log.toString());
+    }
+
     /** FA1: a follower in the air (its report says armed and flying) is not marked SAFE TO AUTOLAUNCH. */
     @Test
     void aFlyingFollowerIsNotMarked() throws Exception {
