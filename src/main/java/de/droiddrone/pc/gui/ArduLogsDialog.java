@@ -31,16 +31,20 @@ final class ArduLogsDialog extends JDialog {
     private final JList<ArduLogs.Entry> list = new JList<>(entries);
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 13f), Theme.MUTED);
     private final JButton download = Theme.primaryButton("DOWNLOAD");
-    private MavSession fc;
-    private String drone;
+    /** The session the logs come over (set on the list's thread, closed on Swing's). */
+    private volatile MavSession fc;
+    private volatile String drone;
+    /** The window is closed: a session that comes after is let go at once (it held the board's USB port till the app ended). */
+    private volatile boolean closed;
 
     static void open(MainWindow main) {
-        ArduLogsDialog d = new ArduLogsDialog(main);
+        ArduLogsDialog d = new ArduLogsDialog(main, main.flownLink(), main.flownPhoneName());
         d.setVisible(true);
     }
 
-    private ArduLogsDialog(MainWindow main) {
-        super(main, "ArduPilot flight logs", ModalityType.MODELESS);
+    /** @param link the ArduPilot drone this PC flies (null: none - USB then); @param name its name */
+    ArduLogsDialog(java.awt.Window owner, ControlLink link, String name) {
+        super(owner, "ArduPilot flight logs", ModalityType.MODELESS);
         JPanel root = new JPanel(new BorderLayout(0, 8));
         root.setBackground(Theme.PANEL);
         root.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -58,19 +62,17 @@ final class ArduLogsDialog extends JDialog {
         root.add(row, BorderLayout.SOUTH);
         setContentPane(root);
         setSize(460, 320);
-        setLocationRelativeTo(main);
+        setLocationRelativeTo(owner);
         download.setEnabled(false);
         download.addActionListener(e -> download());
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent e) {
-                if (fc != null) fc.close();
+                letGo();
             }
         });
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         status.setText("Asking the drone for its logs ...");
-        ControlLink link = main.flownLink();
-        String name = main.flownPhoneName();
         Thread t = new Thread(() -> connect(link, name), "arduLogsList");
         t.setDaemon(true);
         t.start();
@@ -81,8 +83,9 @@ final class ArduLogsDialog extends JDialog {
             boolean viaLink = link != null && link.getFcInfo() != null
                     && link.getFcInfo().getFcVariant() == de.droiddrone.common.FcInfo.FC_VARIANT_ARDUPILOT
                     && link.getTelemetry().isDisarmedNow(de.droiddrone.pc.MonoClock.ms(), 3000);
+            MavSession s;
             if (viaLink) {
-                fc = new MavSession(new TunnelWire(link), false);
+                s = new MavSession(new TunnelWire(link), false);
                 drone = name == null ? "drone" : name;
             } else {
                 ArduUsb.Found f = ArduUsb.find();
@@ -90,10 +93,15 @@ final class ArduLogsDialog extends JDialog {
                     say("No landed ArduPilot drone on the link, and none on USB.");
                     return;
                 }
-                fc = f.session();
+                s = f.session();
                 drone = "USB " + f.port().systemName();
             }
-            List<ArduLogs.Entry> l = ArduLogs.list(fc, 8000);
+            fc = s;
+            if (closed) { // closed while the board was looked for
+                letGo();
+                return;
+            }
+            List<ArduLogs.Entry> l = ArduLogs.list(s, 8000);
             SwingUtilities.invokeLater(() -> {
                 for (ArduLogs.Entry e : l) entries.addElement(e);
                 if (!l.isEmpty()) list.setSelectedIndex(l.size() - 1);
@@ -121,6 +129,23 @@ final class ArduLogsDialog extends JDialog {
         }, "arduLogsDownload");
         t.setDaemon(true);
         t.start();
+    }
+
+    /** The session closed (the window's close; or a session found after it). */
+    private void letGo() {
+        closed = true;
+        MavSession s = fc;
+        if (s != null) s.close();
+    }
+
+    /** What the window says now (tests). */
+    String statusText() {
+        return status.getText();
+    }
+
+    /** The download button (tests). */
+    JButton downloadButton() {
+        return download;
     }
 
     private void say(String text) {

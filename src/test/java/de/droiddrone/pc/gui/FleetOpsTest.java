@@ -49,9 +49,10 @@ class FleetOpsTest {
         FleetOps f = ops("MobileAlpha", log);
         assertEquals(List.of(), texts(f.items("MobileAlpha")), "the lead itself: nothing");
         List<JMenuItem> items = f.items("MobileBravo");
-        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo", "FOLLOW GROUP: add MobileBravo"), texts(items));
+        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo", "FOLLOW GROUP: add MobileBravo", "GROUP DESIGN..."), texts(items)); // FL-9
         items.get(1).doClick();
-        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo", "FOLLOW GROUP: leave out MobileBravo", "FOLLOW GROUP: start (1 follow MobileAlpha)"),
+        assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo", "FOLLOW GROUP: leave out MobileBravo", "FOLLOW GROUP: start (1 follow MobileAlpha)",
+                "GROUP DESIGN..."),
                 texts(f.items("MobileBravo")));
         assertEquals(List.of("SAFE TO AUTOLAUNCH: mark MobileBravo"), texts(ops(null, log).items("MobileBravo")), "no ArduPilot drone flown: no group");
     }

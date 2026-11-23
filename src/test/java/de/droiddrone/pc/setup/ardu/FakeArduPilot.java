@@ -23,30 +23,45 @@ import java.util.concurrent.TimeUnit;
  * the accelerometer calibration's position questions - enough of ArduPilot for the setup's tests. Names and numbers
  * are made up.
  */
-final class FakeArduPilot implements MavSession.Wire {
-    final Map<String, Float> params = new LinkedHashMap<>();
-    final List<Integer> commands = new ArrayList<>();
+public final class FakeArduPilot implements MavSession.Wire {
+    public final Map<String, Float> params = new LinkedHashMap<>();
+    public final List<Integer> commands = new ArrayList<>();
     final List<float[]> commandParams = new ArrayList<>();
-    volatile boolean armed;
-    volatile int sysId = 1;
+    public volatile boolean armed;
+    public volatile int sysId = 1;
     /** PARAM_VALUEs of the whole list not sent the first time (to be asked again by index). */
-    volatile int dropEvery;
+    public volatile int dropEvery;
     /** A parameter that stays at its value whatever is set (reads back the old one). */
-    volatile String stuck;
+    public volatile String stuck;
+    /** The board pulled off USB after this many PARAM_SETs (-1: never): writes fail, reads end. */
+    public volatile int unplugAfterSets = -1;
+    /** It arms itself after this many PARAM_SETs (-1: never): the writer must stop. */
+    public volatile int armAfterSets = -1;
+    /** Never answers a log's data (a link that drops everything). */
+    public volatile boolean silentLogData;
+    /** Log list entries lost the first time they are sent (asked again, they come). */
+    public final java.util.Set<Integer> dropEntriesOnce = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** Each LOG_REQUEST_LIST as "start-end". */
+    public final java.util.List<String> listAsks = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** The whole list was asked for from Swing's thread (a frozen window while it comes). */
+    public volatile boolean listAskedOnSwing;
+    /** PARAM_SETs so far. */
+    public volatile int sets;
+    private volatile boolean unplugged;
     /** AP-10: the logs on its card (id 1, 2 ...) and every n-th LOG_DATA dropped on the way (0: none). */
-    final java.util.List<byte[]> logs = new java.util.ArrayList<>();
-    volatile int dropLogEvery;
+    public final java.util.List<byte[]> logs = new java.util.ArrayList<>();
+    public volatile int dropLogEvery;
     private int logSent;
 
     /** Answers to COMMAND_LONG by command (default 0 = accepted). */
-    final Map<Integer, Integer> results = new java.util.HashMap<>();
+    public final Map<Integer, Integer> results = new java.util.HashMap<>();
     private final BlockingQueue<byte[]> out = new LinkedBlockingQueue<>();
     private final Parser parser = new Parser();
     private volatile boolean closed;
     private int accelStep;
     private final Thread beat;
 
-    FakeArduPilot() {
+    public FakeArduPilot() {
         params.put("SYSID_THISMAV", 1f);
         params.put("SYSID_MYGCS", 255f);
         params.put("FS_THR_ENABLE", 1f);
@@ -98,7 +113,8 @@ final class FakeArduPilot implements MavSession.Wire {
     }
 
     @Override
-    public void write(byte[] data) {
+    public void write(byte[] data) throws java.io.IOException {
+        if (unplugged || closed) throw new java.io.IOException("write failed");
         for (byte b : data) {
             MAVLinkPacket p = parser.mavlink_parse_char(b & 0xff);
             if (p != null) handle(MavSession.pad(p));
@@ -108,6 +124,7 @@ final class FakeArduPilot implements MavSession.Wire {
     private void handle(MAVLinkPacket p) {
         switch (p.msgid) {
             case msg_param_request_list.MAVLINK_MSG_ID_PARAM_REQUEST_LIST -> {
+                if (javax.swing.SwingUtilities.isEventDispatchThread()) listAskedOnSwing = true;
                 List<String> names = new ArrayList<>(params.keySet());
                 for (int i = 0; i < names.size(); i++) {
                     if (dropEvery > 0 && i % dropEvery == 0) continue;
@@ -127,6 +144,15 @@ final class FakeArduPilot implements MavSession.Wire {
             case msg_param_set.MAVLINK_MSG_ID_PARAM_SET -> {
                 msg_param_set s = new msg_param_set(p);
                 String n = s.getParam_Id();
+                sets++;
+                if (sets == armAfterSets) {
+                    armed = true; // and says so at once, before it answers the set
+                    emit(new msg_heartbeat(5, (short) 2, (short) 3, (short) (128 | 1), (short) 3, (short) 3, sysId, 1, true).pack());
+                }
+                if (unplugAfterSets >= 0 && sets > unplugAfterSets) {
+                    unplugged = true;
+                    return;
+                }
                 if (!params.containsKey(n)) return; // ArduPilot says nothing for a name it hasn't
                 if (!n.equals(stuck)) params.put(n, s.param_value);
                 List<String> names = new ArrayList<>(params.keySet());
@@ -149,14 +175,19 @@ final class FakeArduPilot implements MavSession.Wire {
                 }
             }
             case com.MAVLink.common.msg_log_request_list.MAVLINK_MSG_ID_LOG_REQUEST_LIST -> {
+                com.MAVLink.common.msg_log_request_list r = new com.MAVLink.common.msg_log_request_list(p);
+                listAsks.add(r.start + "-" + r.end);
                 if (logs.isEmpty()) emit(new com.MAVLink.common.msg_log_entry(0, 0, 0, 0, 0, sysId, 1, true).pack());
                 for (int i = 0; i < logs.size(); i++) {
-                    emit(new com.MAVLink.common.msg_log_entry(1_800_000_000L + i * 600, logs.get(i).length, i + 1, logs.size(), logs.size(), sysId, 1, true).pack());
+                    int id = i + 1;
+                    if (id < r.start || id > r.end) continue;
+                    if (dropEntriesOnce.remove(id)) continue; // lost on the way, this once
+                    emit(new com.MAVLink.common.msg_log_entry(1_800_000_000L + i * 600, logs.get(i).length, id, logs.size(), logs.size(), sysId, 1, true).pack());
                 }
             }
             case com.MAVLink.common.msg_log_request_data.MAVLINK_MSG_ID_LOG_REQUEST_DATA -> {
                 com.MAVLink.common.msg_log_request_data r = new com.MAVLink.common.msg_log_request_data(p);
-                if (r.id < 1 || r.id > logs.size()) return;
+                if (r.id < 1 || r.id > logs.size() || silentLogData) return;
                 byte[] log = logs.get(r.id - 1);
                 long end = Math.min(log.length, r.ofs + r.count);
                 for (long o = r.ofs; o < end; o += 90) {
@@ -165,6 +196,17 @@ final class FakeArduPilot implements MavSession.Wire {
                     int n = (int) Math.min(90, end - o);
                     for (int i = 0; i < n; i++) d[i] = (short) (log[(int) o + i] & 0xff);
                     emit(new com.MAVLink.common.msg_log_data(o, r.id, (short) n, d, sysId, 1, true).pack());
+                }
+            }
+            case com.MAVLink.common.msg_rc_channels_override.MAVLINK_MSG_ID_RC_CHANNELS_OVERRIDE -> {
+                // the ARM switch is whichever channel has RCn_OPTION 153: high arms, low disarms
+                com.MAVLink.common.msg_rc_channels_override o = new com.MAVLink.common.msg_rc_channels_override(p);
+                int[] ch = {o.chan1_raw, o.chan2_raw, o.chan3_raw, o.chan4_raw, o.chan5_raw, o.chan6_raw, o.chan7_raw, o.chan8_raw};
+                for (int n = 1; n <= 8; n++) {
+                    Float opt = params.get("RC" + n + "_OPTION");
+                    if (opt == null || opt != 153f) continue;
+                    if (ch[n - 1] > 1800 && ch[n - 1] != 65535) armed = true;
+                    else if (ch[n - 1] > 0 && ch[n - 1] < 1200) armed = false;
                 }
             }
             default -> {
@@ -183,7 +225,7 @@ final class FakeArduPilot implements MavSession.Wire {
 
     @Override
     public int read(byte[] buf, int timeoutMs) throws java.io.IOException {
-        if (closed) return -1;
+        if (closed || unplugged) return -1;
         byte[] chunk;
         try {
             chunk = out.poll(timeoutMs, TimeUnit.MILLISECONDS);

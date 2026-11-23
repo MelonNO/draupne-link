@@ -44,40 +44,78 @@ public final class ArduLogs {
     private ArduLogs() {
     }
 
-    /** Every log the FC has (an empty list when it has none). */
+    /** A list entry's answer is waited for this long after the last one before the missing are asked for again. */
+    static final long LIST_QUIET_MS = 700;
+
+    /**
+     * Every log the FC has (an empty list when it has none), in id order. Entries lost on the way (a busy link drops some
+     * of ArduPilot's burst) are asked for again one by one (LOG_REQUEST_LIST start = end = id) until all are in or the
+     * time is up - before, the list came back short after the whole wait, and a lost log could not be downloaded.
+     */
     public static List<Entry> list(MavSession fc, long timeoutMs) throws IOException, InterruptedException {
-        List<Entry> out = new ArrayList<>();
-        int[] total = {-1};
+        java.util.Map<Integer, Entry> out = new java.util.TreeMap<>();
+        int[] total = {-1}, last = {-1};
+        long[] heard = {0};
         Object got = new Object();
         Consumer<MAVLinkPacket> l = p -> {
             if (p.msgid != msg_log_entry.MAVLINK_MSG_ID_LOG_ENTRY) return;
             msg_log_entry e = new msg_log_entry(p);
             synchronized (got) {
                 total[0] = e.num_logs;
-                if (e.num_logs > 0 && out.stream().noneMatch(x -> x.id() == e.id)) out.add(new Entry(e.id, e.size, e.time_utc));
+                last[0] = e.last_log_num;
+                heard[0] = System.currentTimeMillis();
+                if (e.num_logs > 0) out.putIfAbsent(e.id, new Entry(e.id, e.size, e.time_utc));
                 got.notifyAll();
             }
         };
         fc.onPacket(l);
         try {
-            fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
             long end = System.currentTimeMillis() + timeoutMs;
-            synchronized (got) {
-                while (total[0] < 0 || out.size() < total[0]) {
-                    long left = end - System.currentTimeMillis();
-                    if (left <= 0) break;
-                    got.wait(left);
+            fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+            long asked = System.currentTimeMillis();
+            while (true) {
+                List<Integer> missing = new ArrayList<>();
+                synchronized (got) {
+                    // a burst under way: let it come while entries keep arriving
+                    while (System.currentTimeMillis() < end && (total[0] < 0 || out.size() < total[0])
+                            && System.currentTimeMillis() - Math.max(heard[0], asked) < LIST_QUIET_MS) got.wait(100);
+                    if (total[0] >= 0 && out.size() >= total[0]) return new ArrayList<>(out.values());
+                    if (System.currentTimeMillis() >= end) {
+                        if (total[0] < 0) throw new IOException("no answer to the log list");
+                        return new ArrayList<>(out.values()); // what came; the rest didn't, asked as it was
+                    }
+                    if (total[0] >= 0) {
+                        int top = last[0] > 0 ? last[0] : total[0];
+                        for (int id = Math.max(1, top - total[0] + 1); id <= top; id++) if (!out.containsKey(id)) missing.add(id);
+                    }
                 }
-                if (total[0] < 0) throw new IOException("no answer to the log list");
-                return new ArrayList<>(out);
+                if (missing.isEmpty()) { // nothing at all yet: the whole list again
+                    fc.send(new msg_log_request_list(0, 0xffff, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+                } else {
+                    for (int id : missing) {
+                        fc.send(new msg_log_request_list(id, id, target(fc), (short) 1, MavSession.GCS_SYSID, MavSession.GCS_COMPID, true).pack());
+                    }
+                }
+                asked = System.currentTimeMillis();
             }
         } finally {
             fc.removePacketListener(l);
         }
     }
 
+    /** Nothing at all for this long: the drone has stopped answering (it was asked again and again all the while). */
+    public static final long SILENT_MS = 20_000;
+
     /** The log's bytes, whole; lost stretches asked for again. progress gets 0-100. */
     public static byte[] download(MavSession fc, Entry e, IntConsumer progress, long timeoutMs) throws IOException, InterruptedException {
+        return download(fc, e, progress, timeoutMs, SILENT_MS);
+    }
+
+    /**
+     * As above; silentMs without a single part: given up (a drone gone off the link, a closed session). Before, it asked
+     * for 30 minutes - a big log's whole time - with "Downloading ... 0 %" standing all the while.
+     */
+    public static byte[] download(MavSession fc, Entry e, IntConsumer progress, long timeoutMs, long silentMs) throws IOException, InterruptedException {
         if (e.size() <= 0 || e.size() > 512L * 1024 * 1024) throw new IOException("log size " + e.size());
         byte[] data = new byte[(int) e.size()];
         int chunks = (int) ((e.size() + CHUNK - 1) / CHUNK);
@@ -107,6 +145,11 @@ public final class ArduLogs {
                 }
                 if (missing >= chunks) break;
                 if (System.currentTimeMillis() > end) throw new IOException("log " + e.id() + ": " + have.cardinality() + " of " + chunks + " parts");
+                long quiet;
+                synchronized (got) {
+                    quiet = System.currentTimeMillis() - heard[0];
+                }
+                if (quiet > silentMs) throw new IOException("no answer from the drone for " + quiet / 1000 + " s (" + have.cardinality() + " of " + chunks + " parts)");
                 // ask for the first stretch that is missing, at most ASK_BYTES
                 int last;
                 synchronized (got) {
@@ -149,15 +192,22 @@ public final class ArduLogs {
     public static List<Path> forFlight(Path dir, String drone, long startMs, long endMs) {
         List<Path> out = new ArrayList<>();
         if (dir == null || !Files.isDirectory(dir) || drone == null) return out;
-        String prefix = safe(drone) + " ";
+        String own = safe(drone) + " ";
+        java.util.Map<Path, Long> times = new java.util.HashMap<>();
         try (var files = Files.list(dir)) {
             for (Path f : (Iterable<Path>) files::iterator) {
                 String n = f.getFileName().toString();
-                if (!n.startsWith(prefix) || !n.toLowerCase(Locale.ROOT).endsWith(".bin")) continue;
+                // a log taken over USB on the bench doesn't know the phone's name ("USB COM7 ..."): it was saved
+                // "where PREVIOUS FLIGHTS finds it" and never found. Its own time (the drone's GPS) places it.
+                String prefix = n.startsWith(own) ? own : usbPrefix(n);
+                if (prefix == null || !n.toLowerCase(Locale.ROOT).endsWith(".bin")) continue;
                 try {
                     long t = java.time.LocalDateTime.parse(n.substring(prefix.length(), n.length() - 4), DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss"))
                             .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-                    if (t >= startMs - 600_000 && t <= (endMs <= 0 ? startMs : endMs) + 600_000) out.add(f);
+                    if (t >= startMs - 600_000 && t <= (endMs <= 0 ? startMs : endMs) + 600_000) {
+                        out.add(f);
+                        times.put(f, t);
+                    }
                 } catch (RuntimeException ignored) {
                     // not one of ours
                 }
@@ -165,8 +215,15 @@ public final class ArduLogs {
         } catch (IOException ignored) {
             // none then
         }
-        out.sort((a, b) -> b.getFileName().toString().compareTo(a.getFileName().toString()));
+        out.sort((a, b) -> Long.compare(times.get(b), times.get(a))); // newest first, whatever the name
         return out;
+    }
+
+    /** "USB COM7 " of a log taken over USB ("USB COM7 2026-11-23 10-00-00.bin"), else null. */
+    static String usbPrefix(String fileName) {
+        if (!fileName.startsWith("USB ")) return null;
+        int space = fileName.indexOf(' ', 4);
+        return space < 0 ? null : fileName.substring(0, space + 1);
     }
 
     private static String safe(String drone) {

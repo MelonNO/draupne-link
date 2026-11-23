@@ -97,6 +97,16 @@ final class FleetOps {
         default boolean watchOnly() {
             return false;
         }
+
+        /** A value typed by the pilot (shown with the value now); null: cancelled. */
+        default String ask(String question, String now) {
+            return null;
+        }
+
+        /** FL-9: the group designer, opened on these settings; the pilot's settings back, or null: cancelled. */
+        default de.droiddrone.pc.air.AirParams design(de.droiddrone.pc.air.AirParams now) {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ area C: DISPATCH
@@ -131,12 +141,12 @@ final class FleetOps {
         JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(DISPATCH_HEIGHT_M) + " m above ground)");
         go.addActionListener(e -> dispatch(lat, lon));
         out.add(go);
-        return out;
+        return guarded(out);
     }
 
     /** FD-3: each a slot, a layer and a terrain route of its own, staggered launches; at the slot it holds (YOUR TURN). */
     void dispatch(double lat, double lon) {
-        if (host.watchOnly()) return; // GU-8
+        if (host.watchOnly() || closed) return; // GU-8; nothing after close
         List<de.droiddrone.pc.route.Dispatch.Drone> drones = new ArrayList<>();
         GroupLink l;
         try {
@@ -207,6 +217,7 @@ final class FleetOps {
         GroupLink l = link;
         InetSocketAddress a = host.addressOf(drone);
         if (l == null || a == null) return;
+        if (!rallyReady(drone, System.currentTimeMillis())) return; // AC-10: its rally point first (tickRallies sends it)
         l.phone(drone, a);
         l.command(drone, de.droiddrone.common.MissionBlock.packet(s.block, s.leg.mission().items()));
         s.sentAt = System.currentTimeMillis();
@@ -305,6 +316,9 @@ final class FleetOps {
     private int nextMark = (int) (System.nanoTime() & 0x3fffffff) + 1;
 
     private GroupLink ensureLink() throws java.io.IOException {
+        // closed (the tour or DEMO ended, its show with it): a late call (the tour's DISPATCH timer, a reserve tick)
+        // made a new GroupLink - its socket and threads - that nothing ever closed
+        if (closed) throw new java.io.IOException("the fleet controls are closed");
         if (link == null) link = new GroupLink(host.key(), new GroupLink.Listener() {
             public void event(String text) {
                 SwingUtilities.invokeLater(() -> {
@@ -444,8 +458,145 @@ final class FleetOps {
         }
     }
 
+    // ------------------------------------------------------------------ AC-10: each drone's own rally point
+
+    /** A drone's rally point: where, its block, whether it was read back on the drone, when it was last sent. */
+    private static final class Rally {
+        final double lat, lon, relAltM, fromLat, fromLon;
+        final int block;
+        boolean onDrone, said;
+        long sentAt, waitFrom;
+
+        Rally(double lat, double lon, double relAltM, int block, double fromLat, double fromLon) {
+            this.lat = lat;
+            this.lon = lon;
+            this.relAltM = relAltM;
+            this.block = block;
+            this.fromLat = fromLat;
+            this.fromLon = fromLon;
+        }
+    }
+
+    /** A drone this far from where its rally point was given has been moved: it gets a new one. */
+    static final double RALLY_MOVED_M = 5;
+
+    private final java.util.Map<String, Rally> rallies = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, Long> rallyUnplaced = new java.util.HashMap<>();
+    /**
+     * A launch or a route waits this long at most for its rally point to read back (one item: about a second over USB).
+     * Then it goes with an alert: its RTL lands it at its home, which is its own column's spot.
+     */
+    static final long RALLY_WAIT_MS = 10_000;
+
+    /** The rally point a drone has (lat, lon), or null; for tests and the map. */
+    double[] rallyOf(String drone) {
+        Rally r = rallies.get(drone);
+        return r == null ? null : new double[]{r.lat, r.lon};
+    }
+
+    /** It is on the drone, read back (tests). */
+    boolean rallyOnDrone(String drone) {
+        Rally r = rallies.get(drone);
+        return r != null && r.onDrone;
+    }
+
+    /**
+     * Gives the drone its rally point at (lat, lon) - or the nearest free spot round it - unless it has one there already
+     * (it goes up again only when it changed). Returns it.
+     */
+    private Rally rallyAt(String drone, double lat, double lon) {
+        Rally had = rallies.get(drone);
+        java.util.List<double[]> taken = new ArrayList<>();
+        for (java.util.Map.Entry<String, Rally> e : rallies.entrySet()) {
+            if (!e.getKey().equals(drone)) taken.add(new double[]{e.getValue().lat, e.getValue().lon});
+        }
+        if (had != null && de.droiddrone.pc.launch.RallyPlan.free(had.lat, had.lon, taken)
+                && de.droiddrone.common.group.GeoLocal.distance(had.fromLat, had.fromLon, lat, lon) < RALLY_MOVED_M) return had;
+        double[] p = de.droiddrone.pc.launch.RallyPlan.place(lat, lon, taken);
+        Rally r = new Rally(p[0], p[1], floorM, nextBlock++ & 0xffff, lat, lon);
+        rallies.put(drone, r);
+        return r;
+    }
+
+    /** The pilot's own drone before a route's GO (RouteWindow): its rally point at (lat, lon), and whether it changed. */
+    double[] rallyForFlown(double lat, double lon) {
+        String drone = host.flownPhone();
+        if (drone == null || Double.isNaN(lat) || Double.isNaN(lon)) return new double[]{lat, lon};
+        Rally r = rallyAt(drone, lat, lon);
+        r.onDrone = true; // the route window sends it over the pilot's link and reads it back itself
+        return new double[]{r.lat, r.lon};
+    }
+
+    /** Ready to leave the ground: its rally point read back - or waited for {@link #RALLY_WAIT_MS} (said once). */
+    private boolean rallyReady(String drone, long now) {
+        Rally r = rallies.get(drone);
+        if (r == null) {
+            GroupLink l = link;
+            FleetStatus s = l == null ? null : l.status(drone);
+            Marked m = marked.get(drone);
+            double lat = s != null ? s.lat : m != null ? m.lat() : Double.NaN, lon = s != null ? s.lon : m != null ? m.lon() : Double.NaN;
+            if (Double.isNaN(lat)) { // where it stands not known yet: its report comes - waited for as long as for the point
+                long from = rallyUnplaced.computeIfAbsent(drone, k -> now);
+                return now - from >= RALLY_WAIT_MS;
+            }
+            r = rallyAt(drone, lat, lon);
+            Long from = rallyUnplaced.remove(drone);
+            if (from != null) r.waitFrom = from;
+        }
+        if (r.onDrone) return true;
+        if (r.waitFrom == 0) r.waitFrom = now;
+        sendRally(drone, r, now);
+        if (now - r.waitFrom < RALLY_WAIT_MS) return false;
+        if (!r.said) {
+            r.said = true;
+            host.alert(drone + ": rally point not confirmed - it goes; its RTL lands it at its home.");
+        }
+        return true;
+    }
+
+    private void sendRally(String drone, Rally r, long now) {
+        GroupLink l = link;
+        InetSocketAddress a = host.addressOf(drone);
+        if (l == null || a == null || now - r.sentAt < 1000) return;
+        l.phone(drone, a);
+        l.command(drone, de.droiddrone.common.MissionBlock.packet(r.block, de.droiddrone.common.MissionUpload.TYPE_RALLY,
+                de.droiddrone.pc.launch.RallyPlan.items(r.lat, r.lon, r.relAltM)));
+        r.sentAt = now;
+    }
+
+    /**
+     * Once a second: every marked or dispatched drone gets its rally point as soon as its place is known - long before
+     * it is called, so a launch doesn't wait for it - sent until its phone has read it back on the FC.
+     */
+    private void tickRallies(long now) {
+        GroupLink l = link;
+        if (l == null) return;
+        java.util.Set<String> drones = new LinkedHashSet<>(marked.keySet());
+        drones.addAll(dispatched.keySet());
+        for (String d : drones) {
+            FleetStatus s = l.status(d);
+            Rally r = rallies.get(d);
+            if (s != null && s.has(FleetStatus.LANDED) && s.has(FleetStatus.GNSS)) r = rallyAt(d, s.lat, s.lon); // it may have been moved
+            if (r == null || r.onDrone) continue;
+            if (s != null && s.routeBlock == r.block && s.routeState == de.droiddrone.common.MissionUpload.DONE) {
+                r.onDrone = true;
+                host.log(d + ": rally point on the drone, read back.");
+            } else if (s != null && s.routeBlock == r.block && s.routeState == de.droiddrone.common.MissionUpload.FAILED) {
+                // again under a new block (the phone answers the same block's failure again, uploads nothing)
+                Rally again = new Rally(r.lat, r.lon, r.relAltM, nextBlock++ & 0xffff, r.fromLat, r.fromLon);
+                again.waitFrom = r.waitFrom;
+                rallies.put(d, again);
+                host.log(d + ": rally point upload failed - sent again.");
+                sendRally(d, again, now);
+            } else {
+                sendRally(d, r, now);
+            }
+        }
+    }
+
     /** Once a second (the window's refresh): calls waiting for their column, orders sent again until answered. */
     void tickReserves() {
+        tickRallies(System.currentTimeMillis());
         tickDispatch();
         dropRefusedMarks();
         noteSettled();
@@ -484,6 +635,7 @@ final class FleetOps {
         GroupLink l = link;
         InetSocketAddress a = host.addressOf(drone);
         if (o == null || l == null || a == null) return;
+        if (!rallyReady(drone, System.currentTimeMillis())) return; // AC-10: not off the ground before its rally point is on it
         l.phone(drone, a);
         l.command(drone, de.droiddrone.common.FleetCmd.launch(de.droiddrone.common.launch.LaunchWire.encode(o)));
         orderSentAt.put(drone, System.currentTimeMillis());
@@ -583,6 +735,8 @@ final class FleetOps {
     private final Host host;
     private final Set<String> chosen = new LinkedHashSet<>();
     private GroupLink link;
+    /** close() was called: no new group link after it. */
+    private volatile boolean closed;
     private double floorM = 40;
 
     FleetOps(Host host) {
@@ -594,9 +748,28 @@ final class FleetOps {
         return l != null && l.active();
     }
 
+    /**
+     * GU-8 at the click, not only when the menu is made: a menu opened on the pilot's PC and clicked after it became a
+     * watcher (the link handed to a spectator's, an observation started) marked, dispatched or took control all the same.
+     */
+    private List<JMenuItem> guarded(List<JMenuItem> items) {
+        for (JMenuItem i : items) {
+            java.awt.event.ActionListener[] was = i.getActionListeners();
+            for (java.awt.event.ActionListener l : was) i.removeActionListener(l);
+            i.addActionListener(e -> {
+                if (host.watchOnly() || closed) {
+                    host.log("Watching only: " + i.getText() + " not done.");
+                    return;
+                }
+                for (java.awt.event.ActionListener l : was) l.actionPerformed(e);
+            });
+        }
+        return items;
+    }
+
     /** The radio's switch: DISCARD LEAD (FL-6) here; CALL RESERVE is the reserves'. Called off the stick thread's back. */
     void onSwitch(int event) {
-        if (host.watchOnly()) return; // GU-8
+        if (host.watchOnly() || closed) return; // GU-8; nothing after close
         if (event == FleetSwitches.CALL_RESERVE) {
             SwingUtilities.invokeLater(this::callReserve);
             return;
@@ -655,6 +828,11 @@ final class FleetOps {
                 start.addActionListener(e -> start(lead));
                 out.add(start);
             }
+            if (lead != null && !phone.equalsIgnoreCase(lead)) { // FL-9: the group's shape and sizes, before it is started
+                JMenuItem d = new JMenuItem("GROUP DESIGN...");
+                d.addActionListener(e -> openDesign());
+                out.add(d);
+            }
         } else {
             JMenuItem up = new JMenuItem("Floor +5 m (now " + Math.round(floorM) + " m)");
             up.addActionListener(e -> floor(floorM + FLOOR_STEP_M));
@@ -666,13 +844,53 @@ final class FleetOps {
             out.add(down);
             out.add(end);
         }
-        return out;
+        return guarded(out);
+    }
+
+    double floorM() {
+        return floorM;
+    }
+
+    /** FL-9: the next group's settings (the PRD's until the pilot changes them in GROUP DESIGN). */
+    private de.droiddrone.pc.air.AirParams design = de.droiddrone.pc.air.AirParams.defaults();
+
+    de.droiddrone.pc.air.AirParams design() {
+        return design.withFloor(floorM);
+    }
+
+    /** FL-9: GROUP DESIGN - the settings the next FOLLOW GROUP is formed with; only ones that fit come back. */
+    void openDesign() {
+        if (host.watchOnly() || active()) return;
+        de.droiddrone.pc.air.AirParams p = host.design(design());
+        if (p == null) return;
+        design = p;
+        floorM = Math.max(FLOOR_MIN_M, p.floorM());
+        host.log("GROUP DESIGN: cells " + Math.round(p.cellM()) + " m, layers " + Math.round(p.layerM()) + " m, keep-out "
+                + Math.round(p.keepOutM()) + " m, leash " + Math.round(p.leashM()) + " m, floor " + Math.round(floorM) + " m, ceiling "
+                + Math.round(de.droiddrone.pc.air.GroupDesign.ceiling(p)) + " m.");
+    }
+
+    /** FL-14: the map label's floor - / + are this PC's to press: a group flown from here, never on a watching PC. */
+    boolean floorControls() {
+        return !host.watchOnly() && active();
+    }
+
+    /** FL-14: the label's figure clicked - the floor as a typed value. */
+    void floorTyped() {
+        if (!floorControls()) return;
+        String s = host.ask("Floor, m above the ground (" + Math.round(FLOOR_MIN_M) + " or more):", Long.toString(Math.round(floorM)));
+        if (s == null || s.isBlank()) return;
+        try {
+            floor(Double.parseDouble(s.trim().replace(',', '.')));
+        } catch (NumberFormatException e) {
+            host.log("Floor: not a number - " + s.trim());
+        }
     }
 
     /** FL-14: one floor for the group, never under 10 m; above 120 m a warning about the airspace limit. */
     void floor(double m) {
         GroupLink l = link;
-        if (l == null) return;
+        if (l == null || host.watchOnly() || Double.isNaN(m)) return;
         floorM = Math.max(FLOOR_MIN_M, m);
         l.setFloor(floorM);
         host.log("Group floor " + Math.round(floorM) + " m above the ground.");
@@ -687,12 +905,20 @@ final class FleetOps {
 
     /** FOLLOW GROUP round this lead; done gets why it failed (null: formed), on Swing's thread. */
     private void start(String lead, List<String> followers, java.util.function.Consumer<String> done) {
+        // FL-9 / AC-13: the designer's settings - and no group whose top layer would be over the ceiling
+        String layers = de.droiddrone.pc.air.GroupDesign.layerProblem(design(), followers.size(), 0);
+        if (layers != null) {
+            host.alert("NO LAYER FREE: " + layers);
+            done.accept(layers);
+            return;
+        }
         try {
             ensureLink();
         } catch (java.io.IOException e) {
             host.alert("FOLLOW GROUP: " + e.getMessage());
             return;
         }
+        link.setParams(design());
         List<String> all = new ArrayList<>(followers);
         all.add(lead);
         for (String d : all) {
@@ -739,6 +965,7 @@ final class FleetOps {
     }
 
     void close() {
+        closed = true;
         launchViews.close();
         GroupLink l = link;
         link = null;

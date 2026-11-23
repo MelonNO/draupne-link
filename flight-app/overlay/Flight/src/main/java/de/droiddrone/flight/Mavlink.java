@@ -677,6 +677,8 @@ public class Mavlink {
     public void missionBlock(de.droiddrone.common.MissionBlock b) {
         if (b == null || !isArduPilot()) return;
         if (uploads.offer(b, android.os.SystemClock.elapsedRealtime())) say(b.blockId);
+        // AC-10: the PC's rally point for a drone it sends out - its RTL goes there, not home
+        if (b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY && !b.items.isEmpty()) setParam("RALLY_INCL_HOME", 0);
     }
 
     /**
@@ -686,7 +688,9 @@ public class Mavlink {
     void rallyPoint(double lat, double lon, double relAltM) {
         if (!isArduPilot() || Double.isNaN(lat) || Double.isNaN(lon)) return;
         java.util.List<de.droiddrone.common.MissionItem> want = java.util.Collections.singletonList(new de.droiddrone.common.MissionItem(0,
-                6, 5100, true, 0, 0, 0, 0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) relAltM)); // NAV_RALLY_POINT, MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+                // NAV_RALLY_POINT in MAV_FRAME_GLOBAL_RELATIVE_ALT (3), whole metres: as ArduPilot keeps it and reads it back
+                // (frame 6 came back as 3; MissionItem.sameFrame takes both, the height it rounds to metres)
+                3, 5100, true, 0, 0, 0, 0, (int) Math.round(lat * 1e7), (int) Math.round(lon * 1e7), (float) Math.round(relAltM)));
         de.droiddrone.common.MissionUpload before = uploads.current();
         uploads.ownRally(want, android.os.SystemClock.elapsedRealtime());
         if (uploads.current() != before && uploads.currentBlock() == de.droiddrone.common.MissionBlockQueue.OWN) {

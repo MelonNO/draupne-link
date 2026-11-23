@@ -109,6 +109,32 @@ public final class ArduTuning {
         return w;
     }
 
+    /**
+     * As {@link #wanted(Choice)}, against what the board has: a mode switch position that is AUTOTUNE now and is not the
+     * chosen one (AUTOTUNE taken off, or moved) gets its own mode back (ArduPlan's DEFAULT_MODES) - left as it was, the
+     * switch kept an AUTOTUNE the pilot had unticked.
+     */
+    public static Map<String, ArduPlan.Wanted> wanted(Choice c, Map<String, Float> now) {
+        Map<String, ArduPlan.Wanted> w = wanted(c);
+        for (int pos = 1; pos <= 6; pos++) {
+            Float m = now.get("FLTMODE" + pos);
+            if (m == null || Math.round(m) != MODE_AUTOTUNE || pos == c.autotunePos()) continue;
+            put(w, "FLTMODE" + pos, ArduPlan.DEFAULT_MODES[pos - 1], "AUTOTUNE off position " + pos);
+        }
+        return w;
+    }
+
+    /**
+     * Why AUTOTUNE can't go on this mode switch position, or null. A 3-position switch lands on 1, 4 and 6: on 1 (the
+     * switch down, where it is armed) ArduPilot can't arm in AUTOTUNE; 6 is LOITER, where AUTOTUNE starts from and where
+     * the pilot goes to drop it.
+     */
+    public static String autotuneRefused(int pos) {
+        if (pos == 1) return "AUTOTUNE on position 1: it can't arm there. Pick 2-5.";
+        if (pos == 6) return "AUTOTUNE on position 6 takes LOITER, where it starts from. Pick 2-5.";
+        return null;
+    }
+
     private static void tune(Map<String, ArduPlan.Wanted> w, Choice c) {
         String start = c.size().label + " start";
         double p = c.size().propInch, gyro = gyroFilterHz(p);

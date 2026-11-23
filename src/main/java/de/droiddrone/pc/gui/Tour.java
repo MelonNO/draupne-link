@@ -578,7 +578,8 @@ final class Tour {
                     TourArdu.markScouts(ardu);
                     de.droiddrone.pc.fleet.ArduShow show = ardu;
                     javax.swing.Timer t = new javax.swing.Timer(2000, e -> { // their reports first: where they stand
-                        if (show.ops() != null) show.ops().dispatch(show.dispatchTarget()[0], show.dispatchTarget()[1]);
+                        // the tour ended (or moved to another show) within the 2 s: nothing more for this one
+                        if (ardu == show && show.ops() != null) show.ops().dispatch(show.dispatchTarget()[0], show.dispatchTarget()[1]);
                     });
                     t.setRepeats(false);
                     t.start();

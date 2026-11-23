@@ -116,9 +116,13 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    else. `LeadHandoverLoopbackTest`: 286-291 ms at a 120 ms round trip. Open: what the radio's mode switch does to the
    new lead at that moment is untried (AC-32's centred pickup is not built); the video waits for its key frame as before.
 4. **Not built yet:** ADS-B of the other drones to the lead's ArduPilot (FD-8, AC-11: only the virtual airspace has
-   it), the rally points sent before take-off (AC-10: the upload exists in `RouteSender`, nothing sends it yet, so RTL
-   goes to each drone's own home), the group's floor - / + on its map label (FL-14: it is in the right-click menu),
-   the group designer (FL-9). The F405 bench test and two real drones (PRD gates) wait for hardware.
+   it). The F405 bench test and two real drones (PRD gates) wait for hardware.
+5. **Built 2026-11-23 (late):** AC-10 - every drone the PC sends out (DISPATCH, CALL RESERVE, a route's GO) gets its own
+   rally point first, read back on the FC (`RallyPlan`, `FleetOps`; on real ArduPilot in `SitlDispatchTest` and
+   `SitlRallyTest`). The follower's own rally upload (exit plans) never read back on real ArduPilot (frame 6 / 3):
+   fixed. FL-14 - the floor's - / + and a typed value on the group's map label. FL-9 - GROUP DESIGN, with the size
+   (AC-35) and layer (AC-13) checks. Rally points of a group's followers come from the group's exit plans; those of
+   drones sent out on their own from `RallyPlan`: the two are not yet checked against each other.
 
 **The pilot GUI (area G), 2026-11-23:**
 - GU-1 - GU-7 built (the merges of `fleet-osd`, `fleet-ardx`, `fleet-tour`): words and FC type, right-click fleet items,

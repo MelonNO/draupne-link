@@ -48,6 +48,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
         this.groundAmsl = groundAmsl;
         this.key = key;
         this.copter = new VirtualCopter(id, e, n, altAmsl, groundAmsl, id.hashCode());
+        this.home = latLon(); // where it is now: ArduPilot's home
         socket = new DatagramSocket(0, bind);
         sender = new de.droiddrone.common.UdpSender(socket);
         session = new de.droiddrone.common.ReceiverBuffer(sender, true, key, null);
@@ -141,7 +142,16 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 }
                 case de.droiddrone.common.MissionBlock.PACKET -> { // a route: kept, "read back" at once (the real phone uploads it over USB)
                     de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
-                    if (b != null) synchronized (copter) {
+                    if (b != null && b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY) synchronized (copter) {
+                        rally = b.items; // AC-10: the FC's rally list - its RTL lands there
+                        rallyBlocks.add(b.blockId);
+                        routeBlock = b.blockId;
+                        if (!b.items.isEmpty()) {
+                            double rLat = b.items.get(0).x / 1e7, rLon = b.items.get(0).y / 1e7;
+                            copter.rallyE = GeoLocal.east(refLat, refLon, rLat, rLon);
+                            copter.rallyN = GeoLocal.north(refLat, refLon, rLat, rLon);
+                        }
+                    } else if (b != null) synchronized (copter) {
                         route = b.items;
                         routeBlock = b.blockId;
                         routeNext = 1;
@@ -221,7 +231,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
             s.battery = (int) Math.round(copter.battery);
             s.homeAmsl = copter.homeAmsl;
             s.routeBlock = routeBlock;
-            s.routeState = route == null ? 0 : de.droiddrone.common.MissionUpload.DONE;
+            s.routeState = route == null && rally == null ? 0 : de.droiddrone.common.MissionUpload.DONE;
             s.routePercent = route == null ? 0 : 100;
             s.mode = auto ? 3 : 5;
             if (armed && !copter.landed) s.flags |= FleetStatus.ARMED;
@@ -241,6 +251,13 @@ public final class VirtualFleetPhone implements AutoCloseable {
     }
 
     // ---- fleet FD-3: a route flown in AUTO (waypoints one after another; at the end it holds, as B5 says)
+
+    /** AC-10: the rally list the PC sent (null: none). */
+    private volatile java.util.List<de.droiddrone.common.MissionItem> rally;
+
+    public java.util.List<de.droiddrone.common.MissionItem> rally() {
+        return rally;
+    }
 
     private java.util.List<de.droiddrone.common.MissionItem> route;
     private int routeBlock, routeNext;
@@ -282,6 +299,8 @@ public final class VirtualFleetPhone implements AutoCloseable {
     private final de.droiddrone.common.launch.LaunchSequence seq = new de.droiddrone.common.launch.LaunchSequence(check);
     /** Every ARM this phone gave, with whether it held a mark then (the AL-12 invariant, for the tests). */
     public final java.util.List<String> arms = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** AC-10: every rally block it was sent (the same one again counts again). */
+    public final java.util.List<Integer> rallyBlocks = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** On the ground, disarmed: a reserve (call before the PC marks it). */
     public void landed() {
@@ -353,7 +372,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
         for (de.droiddrone.common.launch.LaunchIntent i : todo) {
             switch (i.type) {
                 case de.droiddrone.common.launch.LaunchIntent.ARM -> {
-                    arms.add(copter.id + (seq.mark() != null || seq.order() != null ? " marked" : " UNMARKED"));
+                    arms.add(copter.id + (seq.mark() != null || seq.order() != null ? " marked" : " UNMARKED") + (rally == null ? " NO RALLY" : ""));
                     armed = true;
                 }
                 case de.droiddrone.common.launch.LaunchIntent.TAKEOFF -> copter.climbTo(groundAmsl + i.heightM);
@@ -586,6 +605,24 @@ public final class VirtualFleetPhone implements AutoCloseable {
                     p.daos.writeByte(2);
                     sender.sendPacket(p.getData());
                 }
+                case de.droiddrone.common.MissionBlock.PACKET -> sessionBlock(r);
+                case de.droiddrone.common.FcCommand.PACKET -> { // the route window's GO, the mode bar: as Mavlink.command
+                    byte[] c = new byte[1 + r.getRemaining()];
+                    c[0] = name;
+                    r.read(c, 1, c.length - 1);
+                    de.droiddrone.common.FcCommand k = de.droiddrone.common.FcCommand.read(c, c.length);
+                    if (k != null) synchronized (copter) {
+                        if (k.kind == de.droiddrone.common.FcCommand.MISSION_START) {
+                            routeNext = 1;
+                            holding = false;
+                            auto = route != null;
+                        } else if (k.kind == de.droiddrone.common.FcCommand.CONTINUE) {
+                            auto = route != null;
+                        } else if (k.kind == de.droiddrone.common.FcCommand.PAUSE || k.kind == de.droiddrone.common.FcCommand.MODE) {
+                            auto = false;
+                        }
+                    }
+                }
                 default -> {
                     // video, audio, the profile: a fleet phone here has no camera
                 }
@@ -595,23 +632,105 @@ public final class VirtualFleetPhone implements AutoCloseable {
         }
     }
 
+    // ---- fleet RT-8 in the pilot's session: UPLOAD from the route window, as the real phone takes it (Udp's MissionBlock
+    // case, then Mavlink's upload over USB and the status record) - here "read back" at once
+
+    /** The phone app's version as it reports it: pc.58 and up take FcCommand and MissionBlock. */
+    public static final String APP_VERSION = "2.3.0-pc.58-fleet";
+    private final java.util.List<de.droiddrone.common.MissionBlock> sessionBlocks = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** The last block's status, sent with the session's telemetry until the next (the real phone says it again too). */
+    private volatile byte[] blockStatus;
+    /** Where it took off: ArduPilot's home. */
+    private final double[] home;
+
+    /** The blocks the pilot's session sent (routes, fences, rally points), in order. */
+    public java.util.List<de.droiddrone.common.MissionBlock> sessionBlocks() {
+        return java.util.List.copyOf(sessionBlocks);
+    }
+
+    /** Refuses the next session blocks with this reason (null: takes them). */
+    public volatile String refuseBlocks;
+
+    private void sessionBlock(de.droiddrone.common.DataReader r) {
+        byte[] buf = new byte[r.getRemaining()];
+        if (r.read(buf, 0, buf.length) != buf.length) return;
+        de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(buf, 0, buf.length);
+        if (b == null) return;
+        String no = refuseBlocks;
+        if (no == null && b.missionType == de.droiddrone.common.MissionUpload.TYPE_MISSION) synchronized (copter) {
+            route = b.items; // flown at GO (MISSION_START), as a dispatched route is
+            routeBlock = b.blockId;
+            routeNext = 1;
+            holding = false;
+        }
+        if (no == null) sessionBlocks.add(b);
+        blockStatus = de.droiddrone.common.MissionBlock.status(b.blockId, no == null ? de.droiddrone.common.MissionUpload.DONE
+                : de.droiddrone.common.MissionUpload.FAILED, no == null ? 100 : 0, no);
+        sessionTelemetryNow();
+    }
+
     /** In a session: ArduPilot's heartbeat - its mode and armed word - as the phone forwards it, once a second. */
     private void sessionTelemetry(long now) {
         if (now < heartbeatAt) return;
         heartbeatAt += 1000;
         if (now >= heartbeatAt) heartbeatAt = now + 1000;
+        sessionTelemetryNow();
+    }
+
+    /**
+     * The session's telemetry: the mode and armed word, the app's version, GPS, position and home as the phone forwards
+     * ArduPilot's, and the last route block's status.
+     */
+    private void sessionTelemetryNow() {
         if (!inSession() || !linkUp) return;
         try {
+            de.droiddrone.common.UdpPacketData p = new de.droiddrone.common.UdpPacketData(de.droiddrone.common.UdpCommon.TelemetryData);
+            double[] ll;
+            double rel;
+            synchronized (copter) {
+                ll = latLon();
+                rel = copter.u - groundAmsl;
+            }
             de.droiddrone.common.DataWriter w = new de.droiddrone.common.DataWriter(true);
             w.writeInt(auto ? 3 : 5);
             w.writeBoolean(armed && !copter.landed);
-            de.droiddrone.common.UdpPacketData p = new de.droiddrone.common.UdpPacketData(de.droiddrone.common.UdpCommon.TelemetryData);
-            de.droiddrone.common.TelemetryRecords.write(new de.droiddrone.common.TelemetryData(de.droiddrone.common.FcCommon.DD_MAVLINK_MODE,
-                    w.getData()), ARDUCOPTER, p.daos);
+            record(p, de.droiddrone.common.FcCommon.DD_MAVLINK_MODE, w);
+            w = new de.droiddrone.common.DataWriter(true);
+            w.writeByte((byte) 3); // 3D fix
+            w.writeShort((short) 0);
+            w.writeByte((byte) 14);
+            record(p, de.droiddrone.common.FcCommon.DD_MAVLINK_GPS_RAW_INT, w);
+            w = new de.droiddrone.common.DataWriter(true);
+            w.writeInt((int) Math.round(ll[0] * 1e7));
+            w.writeInt((int) Math.round(ll[1] * 1e7));
+            w.writeInt((int) Math.round(rel * 1000));
+            w.writeShort((short) 0);
+            w.writeInt(0);
+            w.writeInt(0);
+            w.writeShort((short) 0);
+            record(p, de.droiddrone.common.FcCommon.DD_MAVLINK_GLOBAL_POSITION_INT, w);
+            w = new de.droiddrone.common.DataWriter(true);
+            w.writeInt((int) Math.round(home[0] * 1e7));
+            w.writeInt((int) Math.round(home[1] * 1e7));
+            record(p, de.droiddrone.common.FcCommon.DD_MAVLINK_HOME_POSITION, w);
+            byte[] status = blockStatus;
+            if (status != null) {
+                w = new de.droiddrone.common.DataWriter(true);
+                w.writeArray(status, 0, status.length);
+                record(p, de.droiddrone.common.MissionBlock.STATUS_RECORD, w);
+            }
+            byte[] v = APP_VERSION.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            p.daos.writeShort(0x40F1); // the phone's own record: its app version (FcTelemetry.PHONE_APP_VERSION)
+            p.daos.writeShort(v.length);
+            p.daos.write(v);
             sender.sendPacket(p.getData());
         } catch (IOException | RuntimeException ignored) {
             // the next heartbeat
         }
+    }
+
+    private static void record(de.droiddrone.common.UdpPacketData p, short code, de.droiddrone.common.DataWriter w) throws IOException {
+        de.droiddrone.common.TelemetryRecords.write(new de.droiddrone.common.TelemetryData(code, w.getData()), ARDUCOPTER, p.daos);
     }
 
     @Override
