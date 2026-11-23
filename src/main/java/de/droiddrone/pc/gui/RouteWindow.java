@@ -76,7 +76,10 @@ final class RouteWindow extends JDialog {
         JButton fence = Theme.secondaryButton("FENCE");
         fence.setToolTipText("Airspace areas near the drone, and rectangles named FENCE, as its own geofence: it stops at the edge (AP-9)");
         fence.addActionListener(e -> fence());
-        for (JButton b : new JButton[]{reverse, save, load, clear, fence, upload, go}) buttons.add(b);
+        JButton masts = Theme.secondaryButton("MASTS");
+        masts.setToolTipText("Power lines, pylons and masts near the route, from OpenStreetMap (not complete). Not while flying.");
+        masts.addActionListener(e -> masts());
+        for (JButton b : new JButton[]{reverse, save, load, clear, fence, masts, upload, go}) buttons.add(b);
         south.add(buttons, BorderLayout.SOUTH);
         root.add(south, BorderLayout.SOUTH);
         setContentPane(root);
@@ -155,6 +158,8 @@ final class RouteWindow extends JDialog {
         mission = null;
         settings.setRoute(r);
         profile.setProfile(null);
+        profile.setObstacles(null);
+        map.setObstacles(null);
         map.setRoute(r, null);
         if (r != null) replan();
         else say("Draw a route: ROUTE, then click points on the map.", Theme.MUTED);
@@ -164,9 +169,45 @@ final class RouteWindow extends JDialog {
     private void edited() {
         settings.setRoute(route);
         mission = null;
+        profile.setObstacles(null); // RT-14: looked up again with MASTS
+        map.setObstacles(null);
         map.setRoute(route, null);
         replan();
         refreshButtons();
+    }
+
+    /** RT-14: power lines and masts near the route (start included), on the click only, never while a drone may fly. */
+    private void masts() {
+        if (de.droiddrone.pc.PossiblyFlying.now()) {
+            say("Not while a drone may be flying.", Theme.WARN);
+            return;
+        }
+        double[] from = start();
+        if (route == null || route.size() == 0 || from == null) return;
+        List<double[]> pts = new java.util.ArrayList<>();
+        pts.add(from);
+        for (Route.Point p : route.points()) pts.add(new double[]{p.lat(), p.lon()});
+        say("Looking up power lines and masts ...", Theme.MUTED);
+        Thread t = new Thread(() -> {
+            try {
+                double[] box = de.droiddrone.pc.route.PowerLines.box(pts, de.droiddrone.pc.route.PowerLines.MARGIN_M);
+                java.nio.file.Path cache = de.droiddrone.pc.AppPaths.dataDir().resolve("powerlines");
+                java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(10)).build();
+                List<de.droiddrone.pc.route.PowerLines.Near> near = de.droiddrone.pc.route.PowerLines.near(pts,
+                        de.droiddrone.pc.route.PowerLines.fetch(box, cache, http), de.droiddrone.pc.route.PowerLines.NEAR_M);
+                SwingUtilities.invokeLater(() -> {
+                    profile.setObstacles(near);
+                    map.setObstacles(near);
+                    if (near.isEmpty()) say("None on the map near the route (the map isn't complete).", Theme.TEXT);
+                    else say(near.size() + " near: " + near.stream().limit(3).map(de.droiddrone.pc.route.PowerLines.Near::word)
+                            .collect(java.util.stream.Collectors.joining("; ")) + (near.size() > 3 ? " ..." : ""), Theme.WARN);
+                });
+            } catch (Exception e) {
+                SwingUtilities.invokeLater(() -> say("Masts: " + e.getMessage(), Theme.BAD));
+            }
+        }, "routeMasts");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** Where the route starts: the drone this PC flies (its GPS), else the route's first point (a plan to look at). */

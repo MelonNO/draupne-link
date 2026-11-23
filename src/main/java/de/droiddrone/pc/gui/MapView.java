@@ -360,6 +360,14 @@ class MapView extends JComponent {
         repaint();
     }
 
+    /** Fleet RT-14: power lines and masts near the route (empty: none). */
+    private volatile List<de.droiddrone.pc.route.PowerLines.Near> obstacles = List.of();
+
+    void setObstacles(List<de.droiddrone.pc.route.PowerLines.Near> near) {
+        obstacles = near == null ? List.of() : List.copyOf(near);
+        repaint();
+    }
+
     void selectRoutePoint(int index) {
         routeSelected = index;
         repaint();
@@ -1836,6 +1844,7 @@ class MapView extends JComponent {
             MapTrackLayer.paintKept(g, kept, keptPaths, proj);
             if (group != null) MapGroupLayer.paint(g, group, proj); // fleet G4
             if (route != null) MapRouteLayer.paint(g, route, routePlanned, routeSelected, proj); // fleet RT-1
+            if (route != null && !obstacles.isEmpty()) MapRouteLayer.paintObstacles(g, obstacles, proj); // fleet RT-14
             MapTrackLayer.paintTrack(g, trackPath, proj);
             if (home != null) MapPlaceLayer.paintHome(g, home, proj);
             FlightTrack.Point last = track == null ? null : track.last();
