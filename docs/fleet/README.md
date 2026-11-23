@@ -18,11 +18,11 @@ Work on [DRAUPNE Fleet & ArduPilot](PRD.md): ArduPilot as a second flight-contro
 
 | # | Phase | Gate | State |
 |---|---|---|---|
-| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | under way: step 1 of 6 done |
-| 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | |
-| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | |
-| 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | |
-| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | |
+| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gate not run (no SITL here) |
+| 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | built; the ridge gate passes on made-up terrain |
+| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback |
+| 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; random overlapping failures still lose separation (open); hand-over is a new session (1-2 s) |
+| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback; the AL-19 cases as unit tests |
 | 6-9 | GNSS-denied (stage 2) | See the PRD | after stage 1 |
 
 Phases 2-4 need only phase 1; phase 5 needs phase 4. Each phase brings its own GUI, setup-guide, tour and docs
@@ -90,3 +90,21 @@ First steps of phase 1, in order:
    SITL needs Windows' Linux part (not installed on this PC).
 
 Nothing here has flown. Every step is tried in SITL before the maintainer's hardware.
+
+## Where stage 1 stands (2026-11-23)
+
+Built on this branch, each piece with tests; nothing flown, no ArduPilot SITL on the PC it was built on (Windows'
+Linux part isn't installed), so every gate ran against virtual phones and a kinematic model of the drones.
+
+**Open, in the order they matter:**
+1. **Separation under overlapping failures (AC-14 random runs):** 18 of 30 random 10-minute runs lost separation when
+   failures overlapped; a follower cut off while the group moved came to 9.4 m sideways and 8.9 m in height
+   (`GroupLinkLoopbackTest`, tagged `finding`). The fix - single drones giving way - is being built. **Don't fly a group
+   before these pass.**
+2. **Real ArduPilot:** every gate again in SITL (needs WSL), then the PRD's bench tests (F405, two real drones).
+3. **Hand-over speed (NFR, FL-6):** a new lead is a new pilot session, 1-2 s; the PRD wants sticks within 500 ms.
+4. **Not built yet:** the launch mini-view (AL-20/21) and the reserves' OSD list (AL-5), HOME NOW (FD-5), the
+   dispatch preview (FD-9), the other drones' pictures on demand (C3), ADS-B to the lead (FD-8), geofence (AP-9),
+   flight logs (AP-10), the Mission Planner bridge (AP-11), go-look (AP-12), the rally point upload (AC-10: RTL goes
+   to each drone's own home), RT-14 power lines, the tour's new steps (area I), flashing ArduPilot onto a Betaflight
+   board (H1/H4).

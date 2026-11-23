@@ -91,6 +91,33 @@ A drone on the ground as a sentry. The phone sleeps with the camera watching (di
 
 ![Overwatch alert on the map](docs/images/overwatch.png)
 
+## ArduPilot and the fleet (the `fleet` branch: not released, not flown)
+
+ArduPilot Copter 4.6 or newer (1 MB flash and up) beside Betaflight. Spec: [docs/fleet/PRD.md](docs/fleet/PRD.md).
+
+**ArduPilot drones**
+- The phone tells ArduPilot from Betaflight by itself. FLEET shows **ARDU** or **BTFL**.
+- Buttons on the video: **LOI**, **RTL**, **LND**, **GO** (start or pause a route). The radio's mode switch first.
+- RC CHECK shows ArduPilot's own reason it won't arm.
+- Link lost: LOITER after 1 s, home after 20 s. No GPS: holds its height and waits.
+- **SETUP > ArduPilot drone setup** (USB, battery off): backup first, then the settings, calibrations, motors, an arm check.
+- Battery never sends it home: a warning only, LAND at 3 %.
+
+**Routes**
+- **MAP TOOLS > ROUTE**: click points, drag to move, right-click to insert, delete or give a height. Right-click: *Fly to here*.
+- Flies a set height above the ground (default 60 m) - above bare ground, not trees or buildings.
+- **UPLOAD** checks every point on the drone; **GO** flies it. At the end it holds and calls you.
+
+**Dispatch**
+- Mark landed drones **SAFE TO AUTOLAUNCH** (right-click). Right-click the map: **DISPATCH ... here**.
+- Each gets its own slot, height layer and route. They launch one by one and hold at their slots: **TAKE CONTROL**.
+
+**Follow group**
+- Fly the lead. Right-click others: **FOLLOW GROUP: add**, then **start**. They keep a block near the lead.
+- **DISCARD LEAD** (radio switch, AUX5): the next drone becomes the lead and you fly it.
+- **CALL RESERVE** (radio switch, AUX6): the marked drone that would be there first launches and joins.
+- A follower cut off holds 2 min, then flies its own way home. Floor: right-click a drone, **Floor +5 m / -5 m**.
+
 ## Latency
 
 - The mobile network (typically 40–100 ms round trip) is the biggest delay. Tailscale should go direct; setup says if relayed.

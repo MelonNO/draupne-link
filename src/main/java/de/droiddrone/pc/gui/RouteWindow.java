@@ -20,7 +20,6 @@ import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
-import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import java.awt.BorderLayout;
@@ -288,7 +287,7 @@ final class RouteWindow extends JDialog {
         try {
             setRoute(Route.load(c.getSelectedFile().toPath()));
         } catch (java.io.IOException | RuntimeException e) {
-            JOptionPane.showMessageDialog(this, "Not a route: " + e.getMessage());
+            Dialogs.message(this, "Not a route: " + e.getMessage());
         }
     }
 

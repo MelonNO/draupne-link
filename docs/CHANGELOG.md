@@ -2,6 +2,32 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Fleet (unreleased, on the `fleet` branch; on top of beta's 1.0.72)
+
+ArduPilot and fleet management, stage 1 of [the fleet PRD](fleet/PRD.md), with the phone app **DRAUPNE Flight
+2.3.0-pc.58-fleet** (sideloaded only). Tested in the PC's tests, on loopback UDP with virtual phones and a kinematic model
+of the drones standing in for ArduPilot; **not flown, not tried on a real flight controller, not in ArduPilot SITL**.
+Where it stands, phase by phase: [fleet/README.md](fleet/README.md).
+
+- **ArduPilot base (phase 1):** the phone tells MAVLink from MSP by the FC's own heartbeat (AUTO); every MAVLink
+  record read on the PC; ArduPilot's modes on the OSD and in recordings; PreArm texts in RC CHECK; LOI / RTL / LND / GO
+  on the video; the phone's own link-loss rule (LOITER after 1 s, Smart RTL / RTL after 20 s, hold without GNSS) with
+  ArduPilot's GCS failsafe as the backstop; SETUP > ArduPilot drone setup over USB (backup, plan, CONFIRM, read-back,
+  calibrations, motor test, arm check); the MAVLink tunnel through the phone (parameters, missions, targets; never
+  sticks or arming); FLEET shows ARDU / BTFL.
+- **Terrain routes (phase 2):** MAP TOOLS > ROUTE, the offline terrain store, the planner (never under the set height,
+  climb limits, smoothing), the profile, the whole route uploaded on the phone over USB and read back, GO.
+- **Dispatch (phase 3):** each marked drone a slot, a layer and a route of its own, staggered launches, YOUR TURN at
+  the slot, TAKE CONTROL.
+- **Follow the leader (phase 4):** FOLLOW GROUP from the right-click menus; the hollow cube, battery order, transit
+  areas, keep-out zone, exit plans, link and GNSS loss on the phones and the PC; DISCARD LEAD on the radio; the group
+  on the map. **Open:** random runs of overlapping failures still lose separation (the single drones' give-way is
+  being built); a follower cut off while the group moves came to 9.4 m / 8.9 m in a loopback test (tagged `finding`).
+- **Safe autolaunch (phase 5):** SAFE TO AUTOLAUNCH, CALL RESERVE on the radio, the reserve's own checks and climb
+  watchdog on its phone, joining the group at the top.
+- **Fleet link:** FleetCmd (0x34) / FleetStatus (0x38) between the PC and drones it doesn't pilot; who may command a
+  drone (its pilot's PC, or its commander; another only on the ground).
+
 ## 1.0.72 (unreleased, on beta)
 
 The test week's first night (2026-11-21 evening to 22), with the phone app **DRAUPNE Flight 2.3.0-pc.57-beta** (versionCode 2030057; pc.56-beta before the bench's first Android 8 run). What readers of the code, a reader of the bench's pictures and test runs found, fixed; the maintainer's answers to four questions, built; small improvements; a test rig for real hardware. The phone app is a sideloaded test build: the PC still offers the released pc.55 (`ApkShare`). Tested with the fast tests, made-up boards and made-up drones; **not flown, not tried on a real flight controller**. Each finding's paragraph and tests: [BENCH-FINDINGS.md](BENCH-FINDINGS.md).

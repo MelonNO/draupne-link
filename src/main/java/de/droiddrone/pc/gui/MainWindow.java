@@ -211,7 +211,7 @@ public class MainWindow extends JFrame {
 
         @Override
         public boolean confirm(String question) {
-            return javax.swing.JOptionPane.showConfirmDialog(MainWindow.this, question, "SAFE TO AUTOLAUNCH",
+            return Dialogs.confirm(MainWindow.this, question, "SAFE TO AUTOLAUNCH",
                     javax.swing.JOptionPane.YES_NO_OPTION) == javax.swing.JOptionPane.YES_OPTION;
         }
 
