@@ -304,7 +304,8 @@ public class FcTelemetry {
             new Blocker("CLI", "CLI open in Betaflight Configurator."),
             new Blocker("CMS", "OSD menu (CMS) open."),
             new Blocker("BST", "BST interface blocks arming."),
-            new Blocker("MSP", "Arming disabled over MSP (Configurator connected). Disconnect it, or power-cycle the FC."),
+            // F-085: since F-078 Drone setup sets it too, before its CLI - a link lost then leaves it until a restart
+            new Blocker("MSP", "Arming blocked over MSP (Drone setup or Configurator). Restart the drone."),
             new Blocker("PARALYZE", "PARALYZE active - power-cycle the FC."),
             new Blocker("GPS", "GPS Rescue needs a GPS fix before arming."),
             new Blocker("RESCUE SW", "GPS Rescue switch on."),

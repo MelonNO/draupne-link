@@ -436,6 +436,14 @@ class FcTelemetryTest {
         for (int i = 0; i < expected.length; i++) assertEquals(expected[i], FcTelemetry.BETAFLIGHT_BLOCKERS[i].osdName(), "bit " + i);
     }
 
+    /** F-085: the block MSP is Drone setup's too (F-078, before its CLI): its words no longer blame Configurator alone. */
+    @Test
+    void theMspBlockNamesDroneSetupAndSaysRestartTheDrone() {
+        List<FcTelemetry.Blocker> msp = FcTelemetry.blockersFor(1 << 16);
+        assertEquals("MSP", msp.get(0).osdName());
+        assertEquals("Arming blocked over MSP (Drone setup or Configurator). Restart the drone.", msp.get(0).explanation());
+    }
+
     @Test
     void unknownRecordStopsParsingInsteadOfGuessing() throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
