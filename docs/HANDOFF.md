@@ -323,7 +323,10 @@ it, copied by `packageApp`). Code in `de.droiddrone.pc.fleet`, its window `gui.F
   clock; MSP at the PC's rate of 255 reads no clock.
 - **The overlay's `Mavlink.java` is a whole copy of upstream's** (the pin, 473608d) with the stick pace changed (marked
   `DRAUPNE Link (F-070d)`) and nothing else. **When the `upstream/` pin moves, take upstream's new `Mavlink.java` and
-  make the same change again**: otherwise the copy hides whatever upstream changed in that file.
+  make the same change again**: otherwise the copy hides whatever upstream changed in that file. On the `fleet`
+  branch it also carries the fleet's changes, each marked `DRAUPNE Link (fleet)` (the FC's system id from its
+  heartbeat, the ground station's heartbeat, FcCommand, the tunnel, the route upload, a ground station's heartbeat
+  on the port ignored): the same applies to them. `Serial.java` has the AUTO protocol's heartbeat sniff (`route()`).
 - **The rig's door in the phone app** (`BenchFc`): in the released app `BUILT_IN` is the constant `false` (release
   sources, also taken by debug builds) and `Serial` asks it before each step that could go to the rig, so those steps
   are not compiled in. The rig's own `BenchFc` is in `flight-app/bench-overlay`; `scan-apk.ps1` stops any APK with it.
