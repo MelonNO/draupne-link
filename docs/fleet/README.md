@@ -139,6 +139,18 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
      heights within one dispatch, not re-planned with later solo drones.
    - **Found in SITL 4.7.3:** Copter 4.7 moved RTL_ALT (cm) to RTL_ALT_M (m); a PARAM_SET of RTL_ALT is not answered.
      The phone now sets both (followers, leads and solo drones alike) and reads back the one there is.
+   - **Parameter names audit (Copter 4.7.3 SITL, `SitlParamNamesTest`, instance 12):** renamed in 4.7 (4.6 name -> 4.7
+     name): SYSID_THISMAV -> MAV_SYSID, SYSID_MYGCS -> MAV_GCS_SYSID, RTL_ALT (cm) -> RTL_ALT_M (m), WPNAV_SPEED /
+     _UP / _DN (cm/s) -> WP_SPD / _UP / _DN (m/s), ATC_ACCEL_R / P / Y_MAX (cdeg/s/s) -> ATC_ACC_R / P / Y_MAX (deg/s/s).
+     Every other name DRAUPNE writes or reads (failsafes, battery, AVD_* / ADSB_TYPE, fence, rally, RC maps and options,
+     flight modes, serial ports, frame, filters, rates, motors, the phone's OSD reads) is there with the same units in
+     4.6.3 and 4.7.3 (checked in both sources). `ArduNames` plans each renamed one under both names: the board has one,
+     the other is listed "left out". ArduPilot hides AVD_* while AVD_ENABLE is 0 and BATT_* while BATT_MONITOR is 0:
+     planned against a fresh board, the avoidance's distances and action looked missing and were never written. Drone
+     setup now writes AVD_ENABLE first and looks for them again (it stops if they don't show); anything nothing on the
+     board stands for is listed first as NOT SET. The phone waited for OSD parameters a board without an OSD never has
+     (any version): with them it never asked for attitude, battery, GPS or position. It now gives up on the OSD after
+     10 s.
    - **Open (not this round):** the phone reads at most 1100 bytes a datagram (`UdpCommon.packetLength`), so a
      dispatch route of more than about 33 items (a steep slope) in one FleetCmd MissionBlock never arrives; the PC
      says nothing and the drone stays on the ground.
