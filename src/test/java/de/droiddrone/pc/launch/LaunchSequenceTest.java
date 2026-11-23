@@ -140,6 +140,33 @@ class LaunchSequenceTest {
         assertEquals(LaunchSequence.NOT_LAUNCHED, again.seq.state());
     }
 
+    /**
+     * A reserve that flew to its group and later landed (disarmed) has finished its launch: it takes a new mark and a
+     * new call. Before, nothing ever moved the sequence on from ON THE WAY on the phone - the drone never launched again.
+     */
+    @Test
+    void aLaunchEndsWhenTheDroneLandsAfterItAndANewMarkLaunchesAgain() {
+        Phone p = new Phone(LaunchChecksTest.mark());
+        p.take(p.seq.order(order(7, 11), p.t));
+        p.seq.fcReady(true);
+        p.run(40_000, false, null);
+        assertEquals(LaunchSequence.ON_THE_WAY, p.seq.state());
+        p.armed = false; // down and disarmed, some time later
+        p.run(500, false, null);
+        assertEquals(LaunchSequence.LAUNCH_FAILED, p.seq.state());
+        assertEquals(LaunchSequence.LANDED, p.seq.reason());
+        assertEquals("LANDED", LaunchSequence.reasonWord(p.seq.reason()));
+        assertTrue(p.seq.finished());
+        assertFalse(p.types().contains(LaunchIntent.BEEPER_SILENT), "no silent beeper for a drone that landed");
+        LaunchMark again = new LaunchMark(9, LaunchChecksTest.LAT, LaunchChecksTest.LON, 90, p.t, 40);
+        p.seq.setMark(again);
+        int arms = count(p.types(), LaunchIntent.ARM);
+        p.height = 0;
+        p.take(p.seq.order(order(9, 12), p.t));
+        p.run(20_000, false, null);
+        assertEquals(arms + 1, count(p.types(), LaunchIntent.ARM), "launched on its new mark");
+    }
+
     private static int count(List<Integer> l, int v) {
         int n = 0;
         for (int i : l) if (i == v) n++;
