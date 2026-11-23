@@ -157,6 +157,20 @@ final class FleetRole {
     /** Fleet area F: this phone's own safe autolaunch. */
     final LaunchRunner launch = new LaunchRunner();
 
+    /**
+     * Fleet AL-20 / C3: this PC commands the drone now (a command within {@link #REPORT_FOR_MS}, a launch or a follower's
+     * group under way) - its camera may go to that PC as an observation, armed or not.
+     */
+    boolean commandedBy(java.net.InetAddress from, long now) {
+        InetSocketAddress c = commander;
+        return c != null && c.getAddress().equals(from) && (now < reportUntil || brain != null || launch.underWay());
+    }
+
+    /** Commanded now by its commander (see commandedBy). */
+    boolean commanded(long now) {
+        return commander != null && (now < reportUntil || brain != null || launch.underWay());
+    }
+
     InetSocketAddress commander() {
         return commander;
     }
