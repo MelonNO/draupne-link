@@ -76,6 +76,14 @@ final class FleetOps {
         default de.droiddrone.pc.map.Elevation elevation() {
             return null;
         }
+
+        /**
+         * GU-8: this PC only watches - a spectator of a pilot PC, or observing idle drones. It shows the fleet (the map,
+         * FLEET, the OSD) and commands none of it: no right-click fleet items, no DISPATCH, no CALL RESERVE.
+         */
+        default boolean watchOnly() {
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------ area C: DISPATCH
@@ -103,6 +111,7 @@ final class FleetOps {
     /** The map's right-click on a place: DISPATCH every drone marked SAFE TO AUTOLAUNCH there (FD-3). */
     List<JMenuItem> placeItems(double lat, double lon) {
         List<JMenuItem> out = new ArrayList<>();
+        if (host.watchOnly()) return out; // GU-8
         int n = 0;
         for (String d : marked.keySet()) if (!dispatched.containsKey(d)) n++;
         if (n == 0) return out;
@@ -114,6 +123,7 @@ final class FleetOps {
 
     /** FD-3: each a slot, a layer and a terrain route of its own, staggered launches; at the slot it holds (YOUR TURN). */
     void dispatch(double lat, double lon) {
+        if (host.watchOnly()) return; // GU-8
         List<de.droiddrone.pc.route.Dispatch.Drone> drones = new ArrayList<>();
         GroupLink l;
         try {
@@ -342,14 +352,15 @@ final class FleetOps {
     /** AC-5: its own approach layer above the group (the group's next), in metres above its take-off point. */
     private double approachFor(String phone) {
         GroupLink l = link;
-        if (l == null || l.controller() == null) return floorM + 20;
+        if (l == null || !l.active() || Double.isNaN(l.nextApproachAlt())) return floorM + 20;
         FleetStatus s = l.status(phone);
         double home = s == null ? 0 : s.homeAmsl;
-        return Math.max(floorM, l.controller().nextApproachAlt() - home);
+        return Math.max(floorM, l.nextApproachAlt() - home);
     }
 
     /** CALL RESERVE (AL-5): each press one more drone - the one that would be there first. */
     void callReserve() {
+        if (host.watchOnly()) return; // GU-8: a watching PC calls nobody
         GroupLink.Picture p = picture();
         if (p == null) {
             host.alert("CALL RESERVE: no follower group to join.");
@@ -424,13 +435,12 @@ final class FleetOps {
         }
         // AC-5 / AL-9: past the floor and on its way: the group takes it (a new cell at the top, through a shaft)
         GroupLink l = link;
-        if (s.passedFloor && !joined.contains(drone) && l != null && l.controller() != null) {
+        if (s.passedFloor && !joined.contains(drone) && l != null && l.active()) {
             FleetStatus st = l.status(drone);
             if (st != null) {
                 joined.add(drone);
                 marked.remove(drone);
-                l.controller().addReserve(drone, st.battery == 255 ? 50 : st.battery,
-                        new de.droiddrone.pc.air.V2(0, 0), l.controller().nextApproachAlt(), System.currentTimeMillis());
+                l.addReserve(drone, st.battery == 255 ? 50 : st.battery, l.nextApproachAlt(), System.currentTimeMillis());
                 host.log(drone + " joins the group.");
             }
         }
@@ -472,11 +482,12 @@ final class FleetOps {
 
     boolean active() {
         GroupLink l = link;
-        return l != null && l.controller() != null;
+        return l != null && l.active();
     }
 
     /** The radio's switch: DISCARD LEAD (FL-6) here; CALL RESERVE is the reserves'. Called off the stick thread's back. */
     void onSwitch(int event) {
+        if (host.watchOnly()) return; // GU-8
         if (event == FleetSwitches.CALL_RESERVE) {
             SwingUtilities.invokeLater(this::callReserve);
             return;
@@ -484,7 +495,7 @@ final class FleetOps {
         if (event != FleetSwitches.DISCARD_LEAD) return;
         SwingUtilities.invokeLater(() -> {
             GroupLink l = link;
-            if (l == null || l.controller() == null) {
+            if (l == null || !l.active()) {
                 host.log("DISCARD LEAD: no follower group.");
                 return;
             }
@@ -496,6 +507,7 @@ final class FleetOps {
     /** The right-click menu's fleet items for a drone. */
     List<JMenuItem> items(String phone) {
         List<JMenuItem> out = new ArrayList<>();
+        if (host.watchOnly()) return out; // GU-8: a spectator or observation PC shows the fleet, commands none of it
         takeControlItems(phone, out); // FD-4
         viewItems(phone, out); // C3
         // AL-1: SAFE TO AUTOLAUNCH on any drone but the one flown
@@ -680,9 +692,8 @@ final class FleetOps {
         if (ls != null && ls.state != de.droiddrone.common.launch.LaunchSequence.IDLE
                 && ls.state != de.droiddrone.common.launch.LaunchSequence.IN_GROUP && !dispatched.containsKey(drone)) {
             word = de.droiddrone.common.launch.LaunchSequence.stateWord(ls.state);
-        } else if (l != null && l.controller() != null && l.controller().members().containsKey(drone)) {
-            de.droiddrone.pc.air.GroupController.Member m = l.controller().members().get(drone);
-            word = switch (m.state) {
+        } else if (l != null && l.memberState(drone) != null) {
+            word = switch (l.memberState(drone)) {
                 case IN_CELL -> st != null && st.phase == de.droiddrone.common.group.FollowerBrain.HOLD ? "HOLDING" : "IN GROUP";
                 case MOVING -> "CATCHING UP";
                 case APPROACH -> "ON THE WAY";
@@ -720,23 +731,31 @@ final class FleetOps {
      * GU-5: the OSD's fleet figures now, for the drone this PC flies (lead: its telemetry). The launch views' alerts go to
      * the alert line once their 10 s are up (AL-21). Called by the window's refresh.
      */
-    /** At most this often worked out again: the OSD asks for its data at the picture's rate, the recorder too. */
+    /**
+     * GU-9: worked out at most this often, on the Swing thread in the window's refresh - 4 a second is what the eye
+     * needs. The OSD asks for its data at the picture's rate (the recorder too): it gets the last figures, no work.
+     */
     static final long OSD_EVERY_MS = 250;
-    private OsdFleet osdCached = OsdFleet.NONE;
+    private volatile OsdFleet osdCached = OsdFleet.NONE;
     private long osdAt = Long.MIN_VALUE / 2;
 
-    synchronized OsdFleet osd(de.droiddrone.pc.FcTelemetry lead, long now) {
-        if (now - osdAt < OSD_EVERY_MS) return osdCached;
+    /** The figures as last worked out: what the paint reads (no work, no lock, any thread). */
+    OsdFleet osd() {
+        return osdCached;
+    }
+
+    /** The window's refresh (Swing thread): the figures again, at most every {@link #OSD_EVERY_MS}. */
+    void refreshOsd(de.droiddrone.pc.FcTelemetry lead, long now) {
+        if (now - osdAt < OSD_EVERY_MS) return;
         osdAt = now;
         osdCached = osdNow(lead, now);
-        return osdCached;
     }
 
     private OsdFleet osdNow(de.droiddrone.pc.FcTelemetry lead, long now) {
         GroupLink l = link;
         if (l != null) {
             for (String d : new ArrayList<>(dispatched.keySet())) feedDrain(l, d, now);
-            if (l.controller() != null) for (String d : l.controller().members().keySet()) feedDrain(l, d, now);
+            for (String d : l.members()) feedDrain(l, d, now);
         }
         String reservesLine = reserves == null ? null : reserves.osdLine(now);
         if (reservesLine != null && reservesLine.isEmpty()) reservesLine = null;
@@ -808,6 +827,26 @@ final class FleetOps {
         return best;
     }
 
+    /** AC-14: the drones this PC's fleet tracks that are in the air now (not landed), with their height. */
+    List<de.droiddrone.pc.flights.ClosestApproach.Other> airborne() {
+        GroupLink l = link;
+        List<de.droiddrone.pc.flights.ClosestApproach.Other> out = new ArrayList<>();
+        if (l == null) return out;
+        for (String d : known()) {
+            FleetStatus s = l.status(d);
+            if (s == null || s.has(FleetStatus.LANDED) || !s.has(FleetStatus.GNSS)) continue;
+            out.add(new de.droiddrone.pc.flights.ClosestApproach.Other(d, s.lat, s.lon, s.altAmsl));
+        }
+        return out;
+    }
+
+    /** A drone's height above sea level from its own fleet report; NaN: not tracked. */
+    double altAmslOf(String drone) {
+        GroupLink l = link;
+        FleetStatus s = l == null || drone == null ? null : l.status(drone);
+        return s == null ? Double.NaN : s.altAmsl;
+    }
+
     static String compass(double bearingDeg) {
         String[] w = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
         return w[(int) Math.round(((bearingDeg % 360) + 360) % 360 / 45.0) % 8];
@@ -820,7 +859,7 @@ final class FleetOps {
         s.addAll(launches.keySet());
         s.addAll(joined);
         GroupLink l = link;
-        if (l != null && l.controller() != null) s.addAll(l.controller().members().keySet());
+        if (l != null) s.addAll(l.members());
         return s;
     }
 
@@ -878,7 +917,7 @@ final class FleetOps {
     /** C3: VIEW a drone this PC commands - its camera, small, in a window of its own. */
     private void viewItems(String phone, List<JMenuItem> out) {
         if (phone.equalsIgnoreCase(String.valueOf(host.flownPhone()))) return;
-        if (!dispatched.containsKey(phone) && !(link != null && link.controller() != null && link.controller().members().containsKey(phone))
+        if (!dispatched.containsKey(phone) && !(link != null && link.memberState(phone) != null)
                 && !marked.containsKey(phone)) return;
         JMenuItem view = new JMenuItem("VIEW " + phone);
         view.addActionListener(e -> host.view(phone));

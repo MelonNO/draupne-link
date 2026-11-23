@@ -69,7 +69,8 @@ final class MapWindow extends JFrame {
     RouteWindow routes() {
         if (routeWindow == null) {
             MainWindow main = getOwner() instanceof MainWindow m ? m : null;
-            routeWindow = new RouteWindow(this, map, elevation, () -> main == null ? null : main.flownLink(), () -> track);
+            routeWindow = new RouteWindow(this, map, elevation, () -> main == null ? null : main.flownLink(), () -> track,
+                    () -> main != null && main.fleetWatchOnly()); // GU-8: a watching PC sends no route
         }
         return routeWindow;
     }

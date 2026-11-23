@@ -55,6 +55,17 @@ public final class GroupLink implements AutoCloseable {
     private double lat0 = Double.NaN, lon0 = Double.NaN;
     private volatile boolean open = true;
     private long trackedAt;
+    /**
+     * GU-9: what the window reads of the group - the map's picture, each member's state, the next reserve's approach
+     * height - made again at the end of every tick and change, on this lock. The window reads it without the lock: the
+     * controller's own maps are the tick thread's, and a tick (with its planner) must never hold up the Swing thread.
+     */
+    private volatile View view = View.NONE;
+
+    /** The group as the window shows it, as of the last tick (at most {@link #TICK_MS} old). */
+    public record View(Picture picture, Map<String, GroupController.State> states, double nextApproachAlt) {
+        static final View NONE = new View(null, Map.of(), Double.NaN);
+    }
 
     public GroupLink(String key, Listener listener) throws IOException {
         this(key, listener, new DatagramSocket());
@@ -88,8 +99,49 @@ public final class GroupLink implements AutoCloseable {
         return lead;
     }
 
+    /** The controller itself: the tick thread's (and the tests'). The window reads {@link #view} instead. */
     public GroupController controller() {
         return group;
+    }
+
+    /** A follower group is formed (as of the last tick or change). */
+    public boolean active() {
+        return view.picture() != null || !view.states().isEmpty();
+    }
+
+    /** A member's state (IN_CELL, MOVING ...), or null: not in the group. No lock: the last tick's. */
+    public GroupController.State memberState(String drone) {
+        return view.states().get(drone);
+    }
+
+    /** The group's members as of the last tick. */
+    public java.util.Set<String> members() {
+        return view.states().keySet();
+    }
+
+    /** AC-5: the approach height (AMSL) for the next reserve, as of the last tick; NaN without a group. */
+    public double nextApproachAlt() {
+        return view.nextApproachAlt();
+    }
+
+    /** AC-5 / AL-9: a reserve past the floor joins (a new cell at the top). On the tick's lock: never while a tick runs. */
+    public synchronized void addReserve(String drone, double battery, double approachAltAmsl, long now) {
+        GroupController g = group;
+        if (g == null) return;
+        g.addReserve(drone, battery, new V2(0, 0), approachAltAmsl, now);
+        refreshView();
+    }
+
+    /** The view made again from the controller (on this lock). */
+    private void refreshView() {
+        GroupController g = group;
+        if (g == null) {
+            view = View.NONE;
+            return;
+        }
+        Map<String, GroupController.State> states = new LinkedHashMap<>();
+        for (Map.Entry<String, GroupController.Member> m : g.members().entrySet()) states.put(m.getKey(), m.getValue().state());
+        view = new View(makePicture(), java.util.Collections.unmodifiableMap(states), g.nextApproachAlt());
     }
 
     /** Asks these drones for their reports (the start of FOLLOW GROUP: where are they?). */
@@ -127,6 +179,7 @@ public final class GroupLink implements AutoCloseable {
         plans.clear();
         planSentAt.clear();
         send(leadDrone, FleetCmd.lead(true, 0));
+        refreshView();
         listener.event("FOLLOW GROUP: " + followers.size() + " followers, lead " + leadDrone);
         return null;
     }
@@ -142,15 +195,18 @@ public final class GroupLink implements AutoCloseable {
             if (was != null) send(was, FleetCmd.lead(false, 0));
             send(next, FleetCmd.disband()); // a lead is no follower: its brain lets go, the pilot flies it
             send(next, FleetCmd.lead(true, 0));
+            refreshView();
             listener.newLead(next);
         }
         return next;
     }
 
-    /** The floor for the group (FL-14), live. */
+    /** A floor asked for and not yet taken by the tick (NaN: none). */
+    private volatile double floorAsked = Double.NaN;
+
+    /** The floor for the group (FL-14), live: taken at the next tick (within {@link #TICK_MS}), on its thread. */
     public void setFloor(double m) {
-        GroupController g = group;
-        if (g != null) g.setFloor(m);
+        floorAsked = m;
     }
 
     /** The group ends: every follower holds (LOITER) and leaves the group. */
@@ -158,6 +214,7 @@ public final class GroupLink implements AutoCloseable {
         GroupController g = group;
         group = null;
         if (g == null) return;
+        refreshView();
         for (String d : phones.keySet()) send(d, FleetCmd.disband());
         listener.event("Group ended: the followers hold where they are.");
     }
@@ -169,7 +226,12 @@ public final class GroupLink implements AutoCloseable {
     public record Picture(double lat, double lon, List<double[]> cells, List<double[]> shafts, double edgeHalfM,
                           double keepOutHalfM, double leashM, double shaftHalfM, double floorM, int followers, String lead) {}
 
-    public synchronized Picture picture() {
+    /** The map's picture as of the last tick or change (no lock: never waits for a tick); null without a group. */
+    public Picture picture() {
+        return view.picture();
+    }
+
+    private Picture makePicture() {
         GroupController g = group;
         if (g == null || Double.isNaN(lat0)) return null;
         AirParams p = g.params();
@@ -213,6 +275,11 @@ public final class GroupLink implements AutoCloseable {
     synchronized void tick(long now) {
         GroupController g = group;
         if (g == null) return;
+        double floor = floorAsked;
+        if (!Double.isNaN(floor)) {
+            floorAsked = Double.NaN;
+            g.setFloor(floor);
+        }
         if (now - trackedAt > 5000) { // the reports keep coming (each command does that too)
             trackedAt = now;
             track(new ArrayList<>(phones.keySet()));
@@ -231,6 +298,7 @@ public final class GroupLink implements AutoCloseable {
             else others.add(new GroupController.Other(e.getKey(), r.pos(), r.altAmsl(), r.vel(), false));
         }
         GroupController.Out out = g.tick(now, reports, leadReport, others, new V2(0, 0));
+        refreshView();
         for (Map.Entry<String, GroupOrder> o : out.orders().entrySet()) send(o.getKey(), FleetCmd.group(o.getValue().encode()));
         Map<String, ExitPlan> made = out.plans() == null ? Map.of() : out.plans(); // null: no plans made this tick
         plans.putAll(made);

@@ -66,12 +66,51 @@ final class LaunchViews {
         }
     }
 
-    private final Map<String, Feed> feeds = new HashMap<>();
+    /**
+     * GU-9: a feed is opened and closed on this thread, never on the caller's (the Swing thread, in the window's refresh):
+     * opening one starts a decoder and a socket, closing one waits for its decoder to end.
+     */
+    private static final java.util.concurrent.ExecutorService FEEDS = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "launchViewFeeds");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        return t;
+    });
+
+    /** One reserve's feed as asked for: opened on {@link #FEEDS}; once let go, a feed that opens after is closed at once. */
+    private static final class Slot {
+        volatile Feed feed;
+        volatile boolean gone;
+
+        void open(String phone, InetSocketAddress at, String key) {
+            FEEDS.execute(() -> {
+                if (gone) return;
+                try {
+                    Feed f = new Feed(phone, at, key);
+                    feed = f;
+                    if (gone) close();
+                } catch (java.io.IOException | RuntimeException e) {
+                    // no picture: the view shows its words and bar on a dark box
+                }
+            });
+        }
+
+        void close() {
+            gone = true;
+            FEEDS.execute(() -> {
+                Feed f = feed;
+                feed = null;
+                if (f != null) f.close();
+            });
+        }
+    }
+
+    private final Map<String, Slot> feeds = new HashMap<>();
     private final Map<String, BufferedImage> last = new HashMap<>();
 
     /**
      * The views now, with their pictures: feeds opened for new live views, closed for views gone or failed (the last
-     * picture kept for a failed one's 10 s).
+     * picture kept for a failed one's 10 s). Returns at once: the feeds open and close on their own thread.
      */
     List<OsdFleet.Mini> update(List<MiniViews.View> views, Function<String, InetSocketAddress> addressOf, String key) {
         List<OsdFleet.Mini> out = new ArrayList<>();
@@ -79,18 +118,16 @@ final class LaunchViews {
         for (MiniViews.View v : views) {
             if (v.livePicture()) {
                 live.add(v.name());
-                Feed f = feeds.get(v.name());
-                if (f == null) {
+                Slot s = feeds.get(v.name());
+                if (s == null) {
                     InetSocketAddress at = addressOf.apply(v.name());
                     if (at != null) {
-                        try {
-                            f = new Feed(v.name(), at, key);
-                            feeds.put(v.name(), f);
-                        } catch (java.io.IOException | RuntimeException e) {
-                            f = null; // no picture: the view shows its words and bar on a dark box
-                        }
+                        s = new Slot();
+                        feeds.put(v.name(), s);
+                        s.open(v.name(), at, key);
                     }
                 }
+                Feed f = s == null ? null : s.feed;
                 BufferedImage p = f == null ? null : f.picture;
                 if (p != null) last.put(v.name(), p);
                 out.add(new OsdFleet.Mini(v.name(), p, v.word(), v.heightM(), v.floorM(), false));
@@ -109,8 +146,13 @@ final class LaunchViews {
         return out;
     }
 
+    /** Feeds asked for and not let go (tests). */
+    int feedsOpen() {
+        return feeds.size();
+    }
+
     void close() {
-        for (Feed f : feeds.values()) f.close();
+        for (Slot s : feeds.values()) s.close();
         feeds.clear();
         last.clear();
     }
