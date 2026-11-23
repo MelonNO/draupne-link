@@ -131,7 +131,7 @@ final class FleetOps {
         JMenuItem go = new JMenuItem("DISPATCH " + n + " marked drone" + (n == 1 ? "" : "s") + " here (" + Math.round(DISPATCH_HEIGHT_M) + " m above ground)");
         go.addActionListener(e -> dispatch(lat, lon));
         out.add(go);
-        return out;
+        return guarded(out);
     }
 
     /** FD-3: each a slot, a layer and a terrain route of its own, staggered launches; at the slot it holds (YOUR TURN). */
@@ -599,6 +599,25 @@ final class FleetOps {
         return l != null && l.active();
     }
 
+    /**
+     * GU-8 at the click, not only when the menu is made: a menu opened on the pilot's PC and clicked after it became a
+     * watcher (the link handed to a spectator's, an observation started) marked, dispatched or took control all the same.
+     */
+    private List<JMenuItem> guarded(List<JMenuItem> items) {
+        for (JMenuItem i : items) {
+            java.awt.event.ActionListener[] was = i.getActionListeners();
+            for (java.awt.event.ActionListener l : was) i.removeActionListener(l);
+            i.addActionListener(e -> {
+                if (host.watchOnly() || closed) {
+                    host.log("Watching only: " + i.getText() + " not done.");
+                    return;
+                }
+                for (java.awt.event.ActionListener l : was) l.actionPerformed(e);
+            });
+        }
+        return items;
+    }
+
     /** The radio's switch: DISCARD LEAD (FL-6) here; CALL RESERVE is the reserves'. Called off the stick thread's back. */
     void onSwitch(int event) {
         if (host.watchOnly() || closed) return; // GU-8; nothing after close
@@ -671,7 +690,7 @@ final class FleetOps {
             out.add(down);
             out.add(end);
         }
-        return out;
+        return guarded(out);
     }
 
     /** FL-14: one floor for the group, never under 10 m; above 120 m a warning about the airspace limit. */
