@@ -318,6 +318,16 @@ class MapView extends JComponent {
     /** Fleet G1: the FOLLOW GROUP items for a drone's right-click (MainWindow.fleetItems); null: none. */
     private volatile java.util.function.Function<String, List<JMenuItem>> fleetItems;
 
+    /** Fleet AP-9: the airspace areas shown and the pilot's drawings, for the drone's geofence. */
+    java.util.List<de.droiddrone.pc.map.Airspace> airspaceShown() {
+        return airspace;
+    }
+
+    java.util.List<MapGraphics.Item> drawings() {
+        MapGraphics g = graphics;
+        return g == null ? java.util.List.of() : g.list();
+    }
+
     void setFleetItems(java.util.function.Function<String, List<JMenuItem>> items) {
         fleetItems = items;
     }

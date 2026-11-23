@@ -73,7 +73,10 @@ final class RouteWindow extends JDialog {
         buttons.setOpaque(false);
         JButton reverse = Theme.secondaryButton("REVERSE"), save = Theme.secondaryButton("SAVE"), load = Theme.secondaryButton("LOAD"),
                 clear = Theme.secondaryButton("CLEAR");
-        for (JButton b : new JButton[]{reverse, save, load, clear, upload, go}) buttons.add(b);
+        JButton fence = Theme.secondaryButton("FENCE");
+        fence.setToolTipText("Airspace areas near the drone, and rectangles named FENCE, as its own geofence: it stops at the edge (AP-9)");
+        fence.addActionListener(e -> fence());
+        for (JButton b : new JButton[]{reverse, save, load, clear, fence, upload, go}) buttons.add(b);
         south.add(buttons, BorderLayout.SOUTH);
         root.add(south, BorderLayout.SOUTH);
         setContentPane(root);
@@ -259,6 +262,48 @@ final class RouteWindow extends JDialog {
                     if (r.done()) mission = m;
                     refreshButtons();
                 }));
+    }
+
+    /**
+     * AP-9: the geofence round the drone this PC flies - the AIRSPACE areas shown and the rectangles named FENCE - up
+     * to it, read back, then FENCE_TYPE polygon, FENCE_ACTION brake or land, FENCE_ENABLE on (through the tunnel).
+     */
+    private void fence() {
+        ControlLink l = link.get();
+        FcTelemetry.Gps g = l == null ? null : l.getTelemetry().getGps();
+        if (l == null || g == null || !g.positionOk()) {
+            say("FENCE: no ArduPilot drone of this PC's own with a GPS fix.", Theme.WARN);
+            return;
+        }
+        java.util.List<de.droiddrone.pc.route.FenceBuilder.Polygon> polys = de.droiddrone.pc.route.FenceBuilder.polygons(map.airspaceShown(),
+                map.drawings(), g.latDeg(), g.lonDeg());
+        java.util.List<MissionItem> items = de.droiddrone.pc.route.FenceBuilder.items(polys);
+        say("FENCE: " + polys.size() + " areas, " + items.size() + " corners ...", Theme.WARN);
+        RouteSender.send(de.droiddrone.common.MissionUpload.TYPE_FENCE, items, l::sendMissionBlock, l.getTelemetry()::getRouteUpload, null,
+                r -> {
+                    if (!r.done()) {
+                        SwingUtilities.invokeLater(() -> say(r.text(), Theme.BAD));
+                        return;
+                    }
+                    String on = fenceOn(l, !items.isEmpty());
+                    SwingUtilities.invokeLater(() -> say(on == null ? r.text() + (items.isEmpty() ? " Fence off." : " Fence on.") : on, on == null ? Theme.OK : Theme.BAD));
+                });
+    }
+
+    /** The fence's parameters through the tunnel; null when all read back, else why not. */
+    static String fenceOn(ControlLink l, boolean on) {
+        de.droiddrone.pc.setup.ardu.TunnelWire wire = new de.droiddrone.pc.setup.ardu.TunnelWire(l);
+        try (de.droiddrone.pc.setup.ardu.MavSession s = new de.droiddrone.pc.setup.ardu.MavSession(wire, false)) {
+            if (on) {
+                if (s.setParam("FENCE_TYPE", 4, 2000) != 4f) return "FENCE_TYPE not taken.";
+                if (s.setParam("FENCE_ACTION", 4, 2000) != 4f) return "FENCE_ACTION not taken.";
+            }
+            float want = on ? 1 : 0;
+            if (s.setParam("FENCE_ENABLE", want, 2000) != want) return "FENCE_ENABLE not taken.";
+            return null;
+        } catch (Exception e) {
+            return "FENCE: " + e.getMessage();
+        }
     }
 
     private void go() {
