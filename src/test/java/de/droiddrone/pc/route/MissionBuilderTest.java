@@ -81,7 +81,7 @@ class MissionBuilderTest {
         assertTrue(pr.along().length <= RouteProfile.CHART_POINTS + 1);
         assertEquals(1000, pr.along()[pr.along().length - 1], 0.5, "the chart reaches the end");
         assertTrue(pr.summary().startsWith("1.0 KM  2:04  OUT 9 %"), pr.summary());
-        assertTrue(pr.summary().endsWith("NO 4G: 1"));
+        assertTrue(pr.summary().endsWith("NO COVERAGE: 1"));
         assertTrue(pr.overBattery(15));
         assertFalse(pr.overBattery(50));
     }

@@ -93,7 +93,7 @@ public record RouteProfile(double outM, double backM, double outS, double backS,
         long s = Math.round(outS);
         return String.format(java.util.Locale.ROOT, "%.1f KM  %d:%02d  OUT %.0f %%  OUT+HOME %.0f %%  LOWEST %.0f M%s",
                 outM / 1000, s / 60, s % 60, outPercent, totalPercent, lowestClearanceM,
-                noCoverage.isEmpty() ? "" : "  NO 4G: " + noCoverage.size());
+                noCoverage.isEmpty() ? "" : "  NO COVERAGE: " + noCoverage.size());
     }
 
     /** More battery than there is (or none left for landing): the upload asks first. */
