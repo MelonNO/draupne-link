@@ -61,8 +61,27 @@ final class Dialogs {
         if (c instanceof java.awt.Container k) for (Component x : k.getComponents()) invalidateAll(x);
     }
 
+    /** The tests' answers in place of the pilot's: (message, title) to the answer (a button's number or option, the input; null: shut). */
+    interface Answers {
+        Object answer(Object message, String title);
+    }
+
+    /** Tests only: every dialog is answered by this, none shown. null (always in the app): shown. */
+    static volatile Answers testAnswers;
+
     /** Shows it (modal) and lets it go. */
     private static void show(Component parent, JOptionPane pane, String title) {
+        Answers a = testAnswers;
+        if (a != null) {
+            Object v = a.answer(pane.getMessage(), title);
+            if (pane.getWantsInput()) {
+                if (v != null) pane.setInputValue(v);
+                pane.setValue(v == null ? null : JOptionPane.OK_OPTION);
+            } else {
+                pane.setValue(v);
+            }
+            return;
+        }
         JDialog d = dialog(parent, pane, title);
         pane.selectInitialValue();
         d.setVisible(true);

@@ -156,11 +156,9 @@ public final class ArduShow implements AutoCloseable {
             } catch (InterruptedException e) {
                 return;
             }
-            VirtualFleetPhone p = phones.get(lead);
-            if (p == null || p.isFollower()) continue;
-            double[] to = legs[leg];
-            p.copter.pilot(to[0], to[1], 85);
-            if (Math.hypot(p.copter.e - to[0], p.copter.n - to[1]) < 8) leg = (leg + 1) % legs.length;
+            // the fleet logic's tick first, every round: calls, rally points (AC-10: a reserve's launch order waits for
+            // its rally point and goes out on a tick) - it was skipped while the lead was a follower still, so after
+            // DISCARD LEAD the tour's CALL RESERVE never launched
             Ops o = ops;
             if (o != null) {
                 try {
@@ -169,6 +167,11 @@ public final class ArduShow implements AutoCloseable {
                     // the show goes on
                 }
             }
+            VirtualFleetPhone p = phones.get(lead);
+            if (p == null || p.isFollower()) continue;
+            double[] to = legs[leg];
+            p.copter.pilot(to[0], to[1], 85);
+            if (Math.hypot(p.copter.e - to[0], p.copter.n - to[1]) < 8) leg = (leg + 1) % legs.length;
         }
     }
 

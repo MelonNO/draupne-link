@@ -21,6 +21,16 @@ final class MapRouteLayer {
     /** A point is hit within this many pixels; a leg within this. */
     static final int POINT_HIT = 9, LEG_HIT = 6;
 
+    /**
+     * Where a place is drawn: its longitude taken the short way from the view's centre - a route over the antimeridian
+     * (179.99 to -179.99) was drawn and hit-tested across the whole world, its far points off the other side.
+     */
+    static Point2D at(MapProjection proj, double lat, double lon) {
+        double d = lon - proj.centerLon();
+        d -= 360 * Math.floor((d + 180) / 360);
+        return proj.toScreen(lat, proj.centerLon() + d);
+    }
+
     private MapRouteLayer() {
     }
 
@@ -32,7 +42,7 @@ final class MapRouteLayer {
             if (planned != null && planned.size() >= 2) {
                 Path2D line = new Path2D.Double();
                 for (int i = 0; i < planned.size(); i++) {
-                    Point2D p = proj.toScreen(planned.get(i)[0], planned.get(i)[1]);
+                    Point2D p = at(proj, planned.get(i)[0], planned.get(i)[1]);
                     if (i == 0) line.moveTo(p.getX(), p.getY());
                     else line.lineTo(p.getX(), p.getY());
                 }
@@ -43,7 +53,7 @@ final class MapRouteLayer {
             Path2D legs = new Path2D.Double();
             List<Route.Point> pts = route.points();
             for (int i = 0; i < pts.size(); i++) {
-                Point2D p = proj.toScreen(pts.get(i).lat(), pts.get(i).lon());
+                Point2D p = at(proj, pts.get(i).lat(), pts.get(i).lon());
                 if (i == 0) legs.moveTo(p.getX(), p.getY());
                 else legs.lineTo(p.getX(), p.getY());
             }
@@ -55,7 +65,7 @@ final class MapRouteLayer {
             g2.draw(legs);
             g2.setFont(Theme.headingFont(11f).deriveFont(Font.BOLD));
             for (int i = 0; i < pts.size(); i++) {
-                Point2D p = proj.toScreen(pts.get(i).lat(), pts.get(i).lon());
+                Point2D p = at(proj, pts.get(i).lat(), pts.get(i).lon());
                 int r = i == selected ? 9 : 7;
                 g2.setColor(i == selected ? Theme.WARN : ROUTE);
                 g2.fillOval((int) p.getX() - r, (int) p.getY() - r, r * 2, r * 2);
@@ -79,7 +89,7 @@ final class MapRouteLayer {
         int best = -1;
         double bestD = POINT_HIT;
         for (int i = 0; i < route.size(); i++) {
-            Point2D p = proj.toScreen(route.point(i).lat(), route.point(i).lon());
+            Point2D p = at(proj, route.point(i).lat(), route.point(i).lon());
             double d = p.distance(x, y);
             if (d <= bestD) {
                 bestD = d;
@@ -93,8 +103,8 @@ final class MapRouteLayer {
     static int legAt(Route route, MapProjection proj, int x, int y) {
         if (route == null) return -1;
         for (int i = 0; i + 1 < route.size(); i++) {
-            Point2D a = proj.toScreen(route.point(i).lat(), route.point(i).lon());
-            Point2D b = proj.toScreen(route.point(i + 1).lat(), route.point(i + 1).lon());
+            Point2D a = at(proj, route.point(i).lat(), route.point(i).lon());
+            Point2D b = at(proj, route.point(i + 1).lat(), route.point(i + 1).lon());
             if (java.awt.geom.Line2D.ptSegDist(a.getX(), a.getY(), b.getX(), b.getY(), x, y) <= LEG_HIT) return i;
         }
         return -1;
@@ -105,7 +115,7 @@ final class MapRouteLayer {
         g.setFont(Theme.headingFont(10f));
         g.setStroke(new BasicStroke(2f));
         for (de.droiddrone.pc.route.PowerLines.Near n : near) {
-            Point2D p = proj.toScreen(n.lat(), n.lon());
+            Point2D p = at(proj, n.lat(), n.lon());
             int x = (int) p.getX(), y = (int) p.getY();
             g.setColor(Theme.BAD);
             g.drawOval(x - 7, y - 7, 14, 14);

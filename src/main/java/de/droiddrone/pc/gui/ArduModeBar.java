@@ -85,6 +85,31 @@ final class ArduModeBar extends JPanel {
         if (!send.test(c)) return;
         paused = a == Action.START && modeNow == ArduModes.AUTO;
         lastSent = a;
+        ackBeforePress = newestAck; // only an answer after this press is this press's
+        pressedAt = lastNow;
+    }
+
+    /** The newest answer seen (its time), and the newest when the last button was pressed. */
+    private long newestAck = Long.MIN_VALUE, ackBeforePress = Long.MIN_VALUE;
+
+    /** MAVLink's command numbers the FC answers for: a mode (DO_SET_MODE), START (MISSION_START), PAUSE / CONTINUE. */
+    static final int CMD_SET_MODE = 176, CMD_MISSION_START = 300, CMD_PAUSE_CONTINUE = 193;
+
+    /** The answer is to what this button sent (not to the route window's GO, nor to a press before). */
+    private boolean answers(Action a, FcTelemetry.CommandAck ack) {
+        if (ack.receivedAt() > pressedAt + ANSWER_MS) return false; // the phone's own mode change much later (its link-loss rule)
+        // GO is a mode (AUTO, or LOITER to pause) and MISSION_START on the phone
+        return ack.command() == CMD_SET_MODE || a == Action.START && (ack.command() == CMD_MISSION_START || ack.command() == CMD_PAUSE_CONTINUE);
+    }
+
+    /** An answer comes within this of the press (the link's round trip and the FC's): later ones are another's. */
+    static final long ANSWER_MS = 5000;
+    /** The window's clock at the press (the last update's). */
+    private long lastNow, pressedAt;
+
+    /** The button shown red now (null: none). */
+    Action refusedNow() {
+        return refused;
     }
 
     /**
@@ -100,14 +125,18 @@ final class ArduModeBar extends JPanel {
      * the mode; the buttons are the pilot's alone.
      */
     void update(FcTelemetry.Status s, int arduMode, FcTelemetry.CommandAck ack, long now, boolean ownDrone) {
+        lastNow = now;
         boolean ardu = ownDrone && s != null && s.isArduPilot();
         if (ardu != isVisible()) setVisible(ardu);
         if (!ardu) return;
         int mode = arduMode;
-        if (ack != null && !ack.accepted() && ack.receivedAt() != refusedAt && lastSent != null) {
+        // a refusal from before the press (an hour old, or the route window's GO) never turns the pressed button red
+        if (ack != null && !ack.accepted() && ack.receivedAt() != refusedAt && lastSent != null
+                && ack.receivedAt() > ackBeforePress && answers(lastSent, ack)) {
             refused = lastSent;
             refusedAt = ack.receivedAt();
         }
+        if (ack != null) newestAck = Math.max(newestAck, ack.receivedAt());
         if (refused != null && now - refusedAt > REFUSED_SHOW_MS) refused = null;
         // GU-4: the radio's mode switch took it out of the paused route's LOITER: the next GO starts the route anew
         if (paused && mode != ArduModes.LOITER && mode != ArduModes.AUTO) paused = false;

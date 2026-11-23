@@ -97,9 +97,10 @@ public final class ArduPlan {
         put(w, "WPNAV_SPEED_UP", Math.round(c.climbMs() * 100), "climb " + fmt(c.climbMs()) + " m/s");
         put(w, "WPNAV_SPEED_DN", Math.round(c.descentMs() * 100), "descend " + fmt(c.descentMs()) + " m/s");
         // switches
-        int armCh = 4 + c.armAux(), modeCh = 4 + c.modeAux();
+        int modeAux = modeAuxBeside(c.armAux(), c.modeAux()); // never ARM and the modes on one channel
+        int armCh = 4 + c.armAux(), modeCh = 4 + modeAux;
         put(w, "RC" + armCh + "_OPTION", RC_OPTION_ARM_DISARM, "ARM on AUX" + c.armAux());
-        put(w, "FLTMODE_CH", modeCh, "mode switch on AUX" + c.modeAux());
+        put(w, "FLTMODE_CH", modeCh, "mode switch on AUX" + modeAux);
         int[] modes = c.flightModes();
         for (int i = 0; i < 6 && i < modes.length; i++) put(w, "FLTMODE" + (i + 1), modes[i], "mode switch position " + (i + 1));
         // the others, kept apart
@@ -127,11 +128,34 @@ public final class ArduPlan {
         return plan(c, Map.of(), now);
     }
 
-    /** With more wanted values (fleet AS-11: frame and board turn carried from Betaflight), after the choices'. */
+    /**
+     * With more wanted values (fleet AS-11: frame and board turn carried from Betaflight), after the choices'. An arm
+     * switch left on another channel by an earlier setup or Mission Planner (ARM moved to another AUX, or the mode
+     * switch now on its channel: every flip of it would arm or disarm) is taken off.
+     */
     public static List<Change> plan(Choices c, Map<String, Wanted> extra, Map<String, Float> now) {
         Map<String, Wanted> all = new LinkedHashMap<>(wanted(c));
+        int armCh = 4 + c.armAux(), modeCh = 4 + modeAuxBeside(c.armAux(), c.modeAux());
+        for (int n = 1; n <= 16; n++) {
+            Float o = now.get("RC" + n + "_OPTION");
+            if (o == null || n == armCh || !armFunction(Math.round(o))) continue;
+            put(all, "RC" + n + "_OPTION", 0, n == modeCh ? "no ARM on the mode switch" : "old ARM switch off");
+        }
         all.putAll(extra);
         return changes(all, now);
+    }
+
+    /** ArduPilot's arm switch functions: ARM/DISARM (153), with AirMode (154), and 4.1's ArmDisarm (41). */
+    static boolean armFunction(int option) {
+        return option == RC_OPTION_ARM_DISARM || option == 154 || option == 41;
+    }
+
+    /**
+     * The mode switch's AUX beside the ARM switch's: the one asked for, or another when both would be one channel (an
+     * ARM carried from Betaflight on the AUX this PC's radio has the modes on) - AUX2, or AUX3 when ARM is on AUX2.
+     */
+    public static int modeAuxBeside(int armAux, int modeAux) {
+        return modeAux != armAux ? modeAux : armAux == 2 ? 3 : 2;
     }
 
     /** Any set of wanted values (AS-6 ports, AS-7 tuning) against the FC's: what changes, the missing ones kept apart. */
