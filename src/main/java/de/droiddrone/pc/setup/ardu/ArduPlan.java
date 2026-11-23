@@ -94,6 +94,7 @@ public final class ArduPlan {
         // routes
         put(w, "TERRAIN_ENABLE", 0, "no terrain data on the drone");
         put(w, "RTL_ALT", Math.round(c.rtlAltM() * 100), "come home " + Math.round(c.rtlAltM()) + " m up");
+        put(w, "RTL_ALT_M", (float) c.rtlAltM(), "come home " + Math.round(c.rtlAltM()) + " m up (Copter 4.7)");
         put(w, "RTL_ALT_TYPE", 0, "home height above take-off");
         put(w, "RALLY_INCL_HOME", 0, "RTL to its own rally point when it has one (AC-10)");
         put(w, "WPNAV_SPEED", Math.round(c.cruiseMs() * 100), "route speed " + fmt(c.cruiseMs()) + " m/s");

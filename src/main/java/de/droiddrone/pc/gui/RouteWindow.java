@@ -493,7 +493,13 @@ final class RouteWindow extends JDialog {
     static String rtlThroughTunnel(ControlLink l, int cm) {
         de.droiddrone.pc.setup.ardu.TunnelWire wire = new de.droiddrone.pc.setup.ardu.TunnelWire(l);
         try (de.droiddrone.pc.setup.ardu.MavSession s = new de.droiddrone.pc.setup.ardu.MavSession(wire, false)) {
-            return s.setParam("RTL_ALT", cm, 2000) == cm ? null : "RTL_ALT not taken.";
+            float m;
+            try { // Copter 4.7 moved RTL_ALT (cm) to RTL_ALT_M (m); 4.6 answers only RTL_ALT
+                m = s.setParam("RTL_ALT_M", cm / 100f, 2000);
+            } catch (java.io.IOException none) {
+                return s.setParam("RTL_ALT", cm, 2000) == cm ? null : "RTL_ALT not taken.";
+            }
+            return Math.round(m * 100) == cm ? null : "RTL_ALT_M not taken.";
         } catch (Exception e) {
             return "RTL_ALT: " + e.getMessage();
         }

@@ -624,6 +624,8 @@ public class Mavlink {
         System.arraycopy(n, 0, id, 0, n.length);
         send(new com.MAVLink.common.msg_param_set((float) Math.round(relM * 100), targetSys(), targetComponent, id, (short) 9,
                 config.getMavlinkGcsSysId(), componentId, isMavlink2).pack());
+        // Copter 4.7 moved RTL_ALT (cm) to RTL_ALT_M (m): both asked, the firmware answers the one it has (found in SITL 4.7.3)
+        setParam("RTL_ALT_M", (float) (Math.round(relM * 10) / 10.0));
     }
 
     // ---- fleet area F: what the launch reads and does
@@ -1007,6 +1009,7 @@ public class Mavlink {
                     case msg_param_value.MAVLINK_MSG_ID_PARAM_VALUE: {
                         msg_param_value message = new msg_param_value(packet);
                         if ("RTL_ALT".equals(message.getParam_Id())) rtlAltCmRead = message.param_value; // DRAUPNE Link (fleet RT-9)
+                        if ("RTL_ALT_M".equals(message.getParam_Id())) rtlAltCmRead = message.param_value * 100; // Copter 4.7
                         if (fcParams == null) break;
                         fcParams.setParam(message.getParam_Id(), message.param_value);
                         break;
