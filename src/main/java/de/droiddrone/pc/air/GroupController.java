@@ -256,9 +256,22 @@ public final class GroupController {
      * along its site's line - its exit plan is made again with it. A drone in both (a reserve that joined keeps its own
      * point) is not checked against itself.
      */
+    /** Followers given their own rally point once (it may be moved later only when it clashes). */
+    private final Set<String> ownTaken = new HashSet<>();
+
     public void setOutsideRallies(Map<String, V2> solo) {
         outsideRallies.clear();
         for (Map.Entry<String, V2> e : solo.entrySet()) if (!members.containsKey(e.getKey())) outsideRallies.put(e.getKey(), e.getValue());
+        // AC-10: a follower that got its own rally point before it left the ground (dispatched, a reserve) keeps it. Before,
+        // every follower's point was laid along a line from where the lead was when the group formed - in the air: on real
+        // ArduPilot SITL a follower's RTL came down right under the old lead, still hovering there (E3)
+        for (Member m : members.values()) {
+            V2 own = solo.get(m.id);
+            if (own != null && (m.rally == null || m.rally.dist(own) > 0.5) && ownTaken.add(m.id)) {
+                m.rally = own;
+                changed = true;
+            }
+        }
         List<V2> taken = new ArrayList<>(outsideRallies.values());
         List<Member> clash = new ArrayList<>();
         for (Member m : members.values()) { // first every one already clear keeps its point ...
