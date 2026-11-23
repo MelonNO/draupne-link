@@ -575,6 +575,43 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
 - **Before the phone:** `-Pphone.adb=emulator-5584` holds the emulator (running already, the app to fly on it) to a
   real phone's rules - the guard, no root, no console but the forwarded port.
 
+## The installer test (`tools\installer-test.ps1`)
+
+By hand, outside the bench, on a PC with a released DRAUPNE Link installed and nothing flying: a newer installer put
+over it as UPDATE puts it, and the pilot's files checked before and after. From a normal PowerShell (Windows asks
+once, as for UPDATE); every run but `-Check` writes into a folder of its own under
+`%LOCALAPPDATA%\DraupneBench\installer-test` (`-Root`): the copy aside, the hash lists, the state of the PC at each
+step, the installer's log, `transcript.txt`, `summary.txt`. Exit code 0 all passed, 1 a check failed, 2 refused
+(nothing installed), 3 stopped after the installer ran. `Get-Help tools\installer-test.ps1 -Full` has the rest.
+
+- `-Check [-Installer <setup.exe>]` - read only: what is installed, what would be copied aside and its size, the
+  firewall rules, the shortcuts, ProgramData's rights. Writes nothing.
+- `-Installer build\release\DRAUPNE-Link-Setup-<version>.exe [-Expect 1.0.69]` - the upgrade: (a) refuses unless
+  DRAUPNE Link `-Expect` is installed as released (one entry, jpackage's product code for that version, Program
+  Files, its jar); (b) copies aside - robocopy, never a move or a delete - `%APPDATA%\DraupneLink` (settings, logs,
+  tiles), `%APPDATA%\DroidDronePC`, `Documents\DRAUPNE Link` (flights, clips, backups), `Videos\DRAUPNE Link`,
+  `%TEMP%\DraupneLink-update`, `ProgramData\DraupneLink`, the shortcuts and the program, with a hash list, the copy
+  checked against it; (c) closes the app if it runs, by its window - never by force, never while its link log is
+  being written; (d) runs the installer with UPDATE's `/passive /norestart` and a log; (e) checks the new version
+  and product code, the old one gone, every user file as it was (none may change: the installer writes none), the
+  link port's firewall rule narrowed to the PC's networks and Tailscale (`FirewallRulesTest`), the Start menu,
+  ProgramData's rights (`PcPrepLogTest`'s rule) and `setup.log` kept with this install's lines; (f) starts the new
+  app (`-AppSeconds`, 20; `-NoAppStart`), reads "started" and "Settings:" in its own log, closes it and compares
+  again - the settings file, `last-known.txt`, today's app log, the map's caches and the app logs beyond the 14
+  newest (`AppLog`, at every start) may change, nothing else; the settings keys compared by name; (g) prints the way
+  back.
+- `-Back [-From <run folder>] [-BackInstaller <file>]` - the released 1.0.69 from its GitHub release (or the file
+  given), checked against its pinned SHA-256 and GitHub's digest, run over what is installed (jpackage's installers
+  take a downgrade); then every file missing since the upgrade run's copy copied back, and the settings files that
+  differ copied back over the one there (that one kept in the run folder). Copies aside first.
+- `-Uninstall` - Windows' uninstall, after a copy aside; it removes the program, the Start menu entry, the
+  installer's desktop shortcut and the two firewall rules, and keeps every setting, log, flight and recording.
+
+A test build installed as a version number that is released later blocks that release's install (the same product
+code: Windows says another version is installed, and UPDATE offers nothing for the same number): `-Back` first.
+`InstallerTestScriptTest` (fast tests) proves what can be proved without installing: the names the app's code gives,
+the folder list, the copy aside on folders of its own, the compare, and the refusal - the whole script sealed.
+
 ## Betaflight as a program
 
 Betaflight's own source built for the PC (SITL) and run in Windows' Linux part (WSL, Ubuntu, as root). Set up on
