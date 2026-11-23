@@ -530,6 +530,35 @@ or power-cycle the FC." **Mended (PC):** "Arming blocked over MSP (Drone setup o
 The FC line ("FC: ARMING BLOCKED BY MSP (TOOLS > RC CHECK)") was right and stays. Test: `FcTelemetryTest` - red
 before.
 
+**F-086 (safety) - Drone setup took ANGLE off the top of the flight mode switch on Betaflight 4.4.** Seen 2026-11-23
+on the bench's 4.4.1 drone, battery out (`runs\1123-1512-hw`, `HwDroneSetupScenario`). The board had ANGLE at the top
+of AUX2 (`aux 5 1 1 1700 2100`). The page's default switch is Acro / Angle / GPS position hold, and GPS position hold
+needs Betaflight 2025.12: CONFIRM wrote Angle in the middle, cleared the top and wrote nothing there - the top flew
+acro. The row said "Partly set ... needs Betaflight 2025.12 or newer" and the page said done (F-087). **Mended (PC):** a
+position whose chosen mode the board can't have keeps the mode the board has there; with none there the row is red
+and the page is not done. On a board older than 2025.12 the lists don't offer GPS position hold (their hint says why)
+and the top is Angle; the pilot's saved choice is kept, so 2025.12 drones still get GPS position hold. The same rule
+stops a 2025.12 drone losing its GPS position hold when its GPS isn't found for a moment. On the real drone again
+(`runs\1123-1604-hw`): "LOW Acro, MIDDLE Angle, HIGH Angle: Set", the switch unchanged. Tests: `ModeSwitchTest`,
+`SetupPlannerTest`, `DroneSetupModesTest`, `HwDroneSetupSelfTest`.
+
+**F-087 - "Betaflight set up - unplug the drone." while a row said not set.** Seen on the made-up board and on the real
+drone: GPS rescue said "No GPS found" and the flight modes "Partly set". Since 1.0.71 a CONFIRM that wrote everything is
+spent, and the page then took every row as still to be written, so none could keep it from done. **Mended (PC):** after
+CONFIRM a row not as chosen counts as not set; done only when every row is set, else the status names the rows in red.
+On the real drone, battery out: "Not set: GPS, GPS rescue." Tests: `DroneSetupDoneTest`, `HwDroneSetupSelfTest`.
+
+**F-088 - BY HAND named 6 cells while the page kept the board's 4S.** BY HAND's words were made when the page opened,
+before the board was read. **Mended (PC):** made when BY HAND is pressed and again when the page takes the board's
+count. Test: `DroneSetupByHandTest`. (The bench's drone forces 6, as its battery: not seen there.)
+
+**F-089 - A Betaflight 4.4 or 4.5 built without a GPS was taken to have switched it on.** Those versions answer
+"feature GPS" with "unavailable", small letters, on its own line (cli.c); the app knew only 2025.12's "Unavailable GPS"
+at the very start, so CONFIRM went on and saved the rest. Found by the reader of the board restore's fix. **Mended
+(PC):** the word on any line of the answer, in any case, is a refusal: the write stops, nothing is saved, and the GPS
+row says "Not in this Betaflight (built without GPS). Answer No." Tests: `BetaflightTest` (red before),
+`FakeFlightBoardTest`.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
