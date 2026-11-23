@@ -250,6 +250,16 @@ public class MainWindow extends JFrame {
         }
 
         @Override
+        public String ask(String question, String now) {
+            return Dialogs.input(MainWindow.this, question, now); // FL-14: the floor typed
+        }
+
+        @Override
+        public de.droiddrone.pc.air.AirParams design(de.droiddrone.pc.air.AirParams now) {
+            return GroupDesignPanel.show(MainWindow.this, now); // FL-9
+        }
+
+        @Override
         public void view(String phone) {
             if (DroneViewWindow.open(MainWindow.this, phone, addressOf(phone), config.getKey()) == null) logLine("VIEW " + phone + ": not reachable now.");
         }

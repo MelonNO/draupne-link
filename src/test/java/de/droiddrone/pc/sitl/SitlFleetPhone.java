@@ -135,8 +135,9 @@ final class SitlFleetPhone implements AutoCloseable {
                         de.droiddrone.common.MissionBlock b = de.droiddrone.common.MissionBlock.read(c.data, c.at + 1, c.length - 1);
                         if (b != null && b.blockId != routeBlock) {
                             routeBlock = b.blockId;
-                            upload = new de.droiddrone.common.MissionUpload(b.items, SitlMission.link(fc));
+                            upload = new de.droiddrone.common.MissionUpload(b.items, SitlMission.link(fc, b.missionType), b.missionType);
                             upload.start(now);
+                            if (b.missionType == de.droiddrone.common.MissionUpload.TYPE_RALLY) rallyInclHomeOff(); // as the phone: RTL to the rally point
                         }
                     }
                     default -> {
@@ -150,6 +151,21 @@ final class SitlFleetPhone implements AutoCloseable {
     }
 
     private volatile de.droiddrone.common.MissionUpload upload;
+    /** AC-10: the rally list ArduPilot read back (null: none yet), and RALLY_INCL_HOME as ArduPilot answered it. */
+    volatile java.util.List<de.droiddrone.common.MissionItem> rallyRead;
+    volatile float rallyInclHome = Float.NaN;
+
+    private void rallyInclHomeOff() {
+        Thread t = new Thread(() -> {
+            try {
+                rallyInclHome = fc.setParam("RALLY_INCL_HOME", 0, 3000);
+            } catch (Exception ignored) {
+                // asked again with the next rally block
+            }
+        }, "sitlRallyInclHome");
+        t.setDaemon(true);
+        t.start();
+    }
     private volatile int routeBlock = -1;
 
     private void mark(byte[] d, int at, int len) {
@@ -173,6 +189,7 @@ final class SitlFleetPhone implements AutoCloseable {
                 synchronized (this) {
                     de.droiddrone.common.MissionUpload u = upload;
                     if (u != null) u.tick(now);
+                    if (u != null && u.done() && u.missionType() == de.droiddrone.common.MissionUpload.TYPE_RALLY) rallyRead = u.items();
                     launchTick(now);
                     FollowerBrain b = brain;
                     double[] p = fc.position();
