@@ -96,6 +96,10 @@ final class ArduSetupPages {
         private final State state;
         private final JLabel result = Theme.label(" ", Theme.font(Font.BOLD, 15f), Theme.MUTED);
         private boolean searching;
+        /** Fleet AS-1: ArduPilot firmware onto this board (its own bootloader), on the pilot's click only. */
+        private final JButton fwFile = Theme.secondaryButton("Firmware file...");
+        private final JButton fwNewest = Theme.secondaryButton("Newest Copter");
+        private volatile boolean flashing;
 
         FindPage(State state) {
             this.state = state;
@@ -109,8 +113,8 @@ final class ArduSetupPages {
         @Override
         String hint() {
             return "Plug the drone's flight controller into this PC by USB, battery off. Mission Planner closed. "
-                    + "A Betaflight board is left alone. Putting ArduPilot onto a Betaflight board is not done here yet: "
-                    + "flash it once with ArduPilot's own tools.";
+                    + "A Betaflight board is left alone. Firmware: new ArduPilot onto a board that runs ArduPilot. "
+                    + "Betaflight to ArduPilot (DFU) is not built: flash it once with ArduPilot's own tools.";
         }
 
         @Override
@@ -122,6 +126,14 @@ final class ArduSetupPages {
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
             Theme.transparent(row);
             row.add(again);
+            row.add(javax.swing.Box.createHorizontalStrut(8));
+            row.add(fwFile);
+            row.add(javax.swing.Box.createHorizontalStrut(8));
+            row.add(fwNewest);
+            fwFile.addActionListener(e -> firmwareFromFile());
+            fwNewest.addActionListener(e -> firmwareNewest());
+            fwFile.setEnabled(state.found != null);
+            fwNewest.setEnabled(state.found != null);
             p.add(result, BorderLayout.NORTH);
             p.add(row, BorderLayout.CENTER);
             return p;
@@ -153,6 +165,8 @@ final class ArduSetupPages {
                 if (f != null) {
                     result.setText("ArduPilot on " + f.port().systemName() + ", system id " + f.session().fcSysId());
                     result.setForeground(Theme.OK);
+                    fwFile.setEnabled(true);
+                    fwNewest.setEnabled(true);
                     log("ArduPilot setup: board on " + f.port().systemName());
                 } else {
                     result.setText(failure == null ? "Not found." : failure);
@@ -161,9 +175,93 @@ final class ArduSetupPages {
             });
         }
 
+        private void firmwareFromFile() {
+            javax.swing.JFileChooser c = new javax.swing.JFileChooser();
+            c.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("ArduPilot firmware (.apj)", "apj"));
+            if (c.showOpenDialog(result) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+            java.nio.file.Path f = c.getSelectedFile().toPath();
+            flash(() -> java.nio.file.Files.readAllBytes(f));
+        }
+
+        private void firmwareNewest() {
+            flash(() -> {
+                MavSession fc = state.fc();
+                if (fc == null) throw new java.io.IOException("no board");
+                int id = de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.boardId(fc);
+                if (id < 0) throw new java.io.IOException("the board doesn't say its id");
+                java.net.http.HttpClient http = java.net.http.HttpClient.newBuilder()
+                        .followRedirects(java.net.http.HttpClient.Redirect.NORMAL).build();
+                say("Looking up Copter for board " + id + " ...");
+                String url = de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.latestCopter(id, http);
+                if (url == null) throw new java.io.IOException("no Copter firmware for board " + id);
+                say("Downloading ...");
+                return de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.download(url, http);
+            });
+        }
+
+        interface Source {
+            byte[] get() throws Exception;
+        }
+
+        /** Read, confirmed, board to its bootloader, written. Disarmed only (the session says). */
+        private void flash(Source source) {
+            if (flashing || state.found == null) return;
+            MavSession fc0 = state.fc();
+            if (fc0 == null || fc0.armed()) {
+                say("Armed, or not known: firmware only on the bench, disarmed.");
+                return;
+            }
+            if (Dialogs.confirm(result, "Write new ArduPilot firmware onto this board?\nBattery off. Don't unplug until it says Done.",
+                    "Firmware", javax.swing.JOptionPane.OK_CANCEL_OPTION) != javax.swing.JOptionPane.OK_OPTION) return;
+            flashing = true;
+            fwFile.setEnabled(false);
+            fwNewest.setEnabled(false);
+            background(() -> {
+                try {
+                    de.droiddrone.pc.setup.ardu.ArduFirmware.Apj fw = de.droiddrone.pc.setup.ardu.ArduFirmware.parseApj(source.get());
+                    MavSession fc = state.fc();
+                    if (fc == null) return "Firmware: the board went away.";
+                    int id = de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.boardId(fc);
+                    if (id >= 0 && id != fw.boardId()) return "This firmware is for board " + fw.boardId() + ", this board is " + id + ".";
+                    say("Restarting into the bootloader ...");
+                    String own = state.found.port().systemName();
+                    java.util.Set<String> before = de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.portsNow();
+                    de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.rebootToBootloader(fc);
+                    state.close();
+                    state.found = null;
+                    try (de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.SerialWire w = de.droiddrone.pc.setup.ardu.ArduFirmwareFlow.findBootloader(15_000, own, before)) {
+                        de.droiddrone.pc.setup.ardu.ArduFirmware.upload(w, fw, this::say);
+                    }
+                    log("ArduPilot setup: firmware written, " + fw.summary());
+                    return null;
+                } catch (Exception e) {
+                    return "Firmware: " + e.getMessage();
+                }
+            }, failure -> {
+                flashing = false;
+                fwFile.setEnabled(state.found != null);
+                fwNewest.setEnabled(state.found != null);
+                if (failure != null) {
+                    result.setText(failure);
+                    result.setForeground(Theme.WARN);
+                    log("ArduPilot setup: " + failure);
+                } else {
+                    result.setText("Done. Search again once the board has restarted.");
+                    result.setForeground(Theme.OK);
+                }
+            });
+        }
+
+        private void say(String text) {
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                result.setText(text);
+                result.setForeground(Theme.MUTED);
+            });
+        }
+
         @Override
         boolean canContinue() {
-            return state.found != null;
+            return state.found != null && !flashing;
         }
 
         @Override
