@@ -56,4 +56,14 @@ public final class BenchAccess {
     public static boolean isMainWindow(java.awt.Window w) {
         return w instanceof MainWindow;
     }
+
+    /** A setup guide's check row's light (OK, WARN, BAD, PENDING, INFO, TODO); null for anything that is no check row. Read only. */
+    public static String rowState(java.awt.Component c) {
+        return c instanceof CheckRow r ? r.getState().name() : null;
+    }
+
+    /** Drone setup's two settings for the battery: the cell count, and that the pilot confirmed it (DroneSetup.BetaflightPage). */
+    public static String[] droneCellKeys() {
+        return new String[]{DroneSetup.BetaflightPage.CELLS_KEY, DroneSetup.BetaflightPage.CELLS_CONFIRMED_KEY};
+    }
 }

@@ -346,6 +346,52 @@ the made-up pieces only (`gradlew test --tests *HwLinkMatrix*`); not yet run on 
   each cell's phone log and the board's word look by look in `matrix\logs`, a check line in the film for each thing
   held or not.
 
+### Every Drone setup row on the real board (`HwDroneSetupScenario`)
+
+The app's own Drone setup on the real flight controller, as a pilot opens it - SETUP > Set up a new drone, the drone's
+two steps - through the keeper's lease for Drone setup. Battery out, propellers off; no phone needed. Built 2026-11-23
+and proved on the made-up board behind a real keeper only (`gradlew test --tests *HwDroneSetupTest*`; `benchSelf
+--tests *HwDroneSetupSelfTest*`, the same run in the sealed app); not yet run on the board.
+
+```
+.\bench.ps1 hw -Tests *HwDroneSetup*     about five minutes: each CLI visit restarts the board, and the keeper reads it again
+```
+
+- **Before anything:** the keeper has the board (taken, disarmed, locked, no window, not tripped), and the board's
+  settings as they are - the R1 snapshot: the MSP facts, `diff all`, `dump all` - go into the run's folder
+  (`board\<id>\<time>-before-drone-setup`, the copy for a paste by hand beside it). The way back:
+  `gradlew boardRestore -Psnapshot=<that folder>` once the keeper has ended.
+- **The questions a pilot answers for this drone** are answered as the snapshot has them, so CONFIRM writes what Drone
+  setup would write on this drone: GPS Yes with `feature GPS` on (its UART the one with the GPS function), the compass
+  Yes unless `mag_hardware` is NONE, the cells as Betaflight forces them. A board that counts its cells itself gets the
+  hardware file's `battery.cells`; without one CONFIRM is not pressed (it would force the page's 6S). The rest is the
+  page's own default: flight modes on AUX2, ARM on AUX1, PREARM on AUX3, GPS rescue on AUX4 and as the failsafe.
+- **Every row's words** go into the film and `drone-setup-rows.txt`: the USB row (port, Betaflight's version, board and
+  craft name), RECEIVER, STICK DELAY, BATTERY, GPS and its PORT, COMPASS, FLIGHT MODES, ARM, PREARM, GPS RESCUE,
+  SIGNAL LOST, ESCS, what CONFIRM would write, BY HAND's text; on the second step the accelerometer, the motors, the
+  orientation and the live view's reading; the motor test window's rows (the board, its layout and props direction,
+  the battery, spin directions offered or not), read and closed. The motor protocol, bidirectional DShot, props
+  direction and motor order are said from the snapshot.
+- **Pressed:** BY HAND, NEXT, BACK, CHECK NOW (the motor test window, to read it) and its Close, CONFIRM, the guide's
+  Close - and CALIBRATE only on a drone that reads still and flat within the app's own 3 degrees: Betaflight levels
+  its accelerometer where the drone sits and saves it (`acc_calibration`).
+- **Never pressed**, and said in the film: the motor test's box, sliders and motors, REORDER MOTORS, PROPS IN / OUT and
+  the spin directions (they turn motors or need the battery), READ ESCS and BEACON OFF (F-080's own probes and rules),
+  FIND GPS, CALIBRATE COMPASS and the orientation's CHECK IT (the drone turned by hand), USE MEASURED, READ AGAIN and
+  DISCONNECT. Checked from the requests themselves (`SetupTap`; all of them in `drone-setup-tap.tsv`): no
+  passthrough, no DShot command, no motor order or props write, no EEPROM write or MSP reboot, every motor value STOP.
+- **After CONFIRM** Drone setup must rest saying "Betaflight set up - unplug the drone.", or be held only by what waits
+  for a GPS that did not answer with the battery out (said, no failure). The guide closed, the board is read again the
+  same way; each difference from the snapshot goes into the film and `drone-setup-compare.txt` and must be one Drone
+  setup said it made: a command its log says it wrote ("Betaflight CLI: ...") and named in its "Betaflight: ..." line,
+  CALIBRATE's accelerometer, the receiver switched over MSP. Anything else is WRONG, and so is a CLI line the board
+  was sent that the app's log does not have. On a board Drone setup has set up before with the same choices the page
+  shows nothing "Set on Confirm.": CONFIRM writes and saves nothing, and only CALIBRATE's line may differ.
+- **The end:** the keeper has the board back (taken, locked, disarmed, no window) and says SAFE; the rig asks it once
+  more at its end, and `bench.ps1 hw` ends with fcKeeperEnd and boardSafe as always.
+- **Battery out:** the board reads near 0 V; what the page says of the battery, the GPS and the ESCs is in the film,
+  and none of it fails the run by itself.
+
 ### The phone run (`.\bench.ps1 phone`)
 
 The emulator's phone scenarios against the one real phone - USB debugging on, no root, the model that flies - through

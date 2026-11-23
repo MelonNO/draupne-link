@@ -13,6 +13,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 report -Root <folder> the report of a run's folder written again
   .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
   .\bench.ps1 hw -Tests *HwLinkMatrix* -Quick   the bad-network box on the real phone, a few cells only (-Quick: any suite's quick cut)
+  .\bench.ps1 hw -Tests *HwDroneSetup*          every Drone setup row on the real board, then CONFIRM (battery out, props off)
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.

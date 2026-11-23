@@ -31,6 +31,17 @@ public final class AppWrites {
      * @return the CLI commands written
      */
     public static List<String> droneSetup(BetaflightUsb.Port port, BoardPort.Timing timing, Consumer<String> log) throws IOException {
+        List<String> commands = new ArrayList<>();
+        for (BetaflightPlan.Change c : droneSetupChanges(port, timing, log)) commands.addAll(c.commands());
+        return commands;
+    }
+
+    /**
+     * The same round, and what it changed as Drone setup describes it (its log's "Betaflight: ..." line is these
+     * descriptions): for a test that holds a board's differences to Drone setup's own words.
+     * @return the plan's changes, written and saved
+     */
+    public static List<BetaflightPlan.Change> droneSetupChanges(BetaflightUsb.Port port, BoardPort.Timing timing, Consumer<String> log) throws IOException {
         try (BetaflightUsb fc = BoardPort.open(port, timing, log)) {
             Set<Integer> modes = fc.boxIds();
             int mask = fc.featureMask();
@@ -44,7 +55,7 @@ public final class AppWrites {
             CliWrite.Result written = CliWrite.run(fc::command, commands, log);
             if (!written.complete()) throw new IOException(written.stopped()); // closing says exit: nothing saved
             fc.saveAndReboot();
-            return commands;
+            return round.plan();
         }
     }
 
