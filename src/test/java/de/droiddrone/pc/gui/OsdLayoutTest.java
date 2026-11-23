@@ -20,7 +20,9 @@ class OsdLayoutTest {
             OsdElement.BATTERY, OsdElement.EFFICIENCY, OsdElement.PING, OsdElement.NETWORK, OsdElement.VIDEO, OsdElement.PHONE_BATTERY,
             OsdElement.PICTURE_AGE, OsdElement.STICKS_AGE, OsdElement.BANNER,
             OsdElement.ARMED, OsdElement.FLIGHT_MODE, OsdElement.FLY_TIME, OsdElement.CORE_TEMP, OsdElement.GPS_SATS,
-            OsdElement.SPEED, OsdElement.ALTITUDE, OsdElement.HOME, OsdElement.WARNINGS, OsdElement.DEBUG);
+            OsdElement.SPEED, OsdElement.ALTITUDE, OsdElement.HOME, OsdElement.WARNINGS, OsdElement.DEBUG,
+            // fleet GU-5 / GU-6: the critical ones and the launch views - drawn only while there is something to say
+            OsdElement.TRAFFIC, OsdElement.HOME_NOW, OsdElement.LEAD_DOWN, OsdElement.MINI_VIEWS);
 
     @Test
     void defaultsAreTheStandardOsdWithTheExtrasOff() {

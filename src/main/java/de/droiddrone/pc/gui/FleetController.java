@@ -59,6 +59,11 @@ final class FleetController {
             return own;
         }
 
+        /** Fleet FD-2 / FL-10: the drone's fleet state - TRANSIT, YOUR TURN, IN GROUP, CLIMBING ... - or null. */
+        default String fleetState(String phone) {
+            return null;
+        }
+
         /** The phone's camera pose when this PC was last connected to it, standing (null: none known). */
         default CameraFootprint.Pose lastPose(String phone) {
             return null;
@@ -528,6 +533,7 @@ final class FleetController {
             if (build < 0) build = FleetProtocol.pcBuild(e.version());
             // the phone this PC flies takes its modes too (2026-11-10, the pilot: "not possible to select standby from the map")
             String note = !here && build >= 0 && build < FleetProtocol.MIN_PC_BUILD ? "Needs phone app pc." + FleetProtocol.MIN_PC_BUILD : null;
+            if (note == null) note = host.fleetState(e.name()); // fleet FD-2: TRANSIT, YOUR TURN, IN GROUP ...
             if (store != null) store.battery(e.name(), pct, cellAge >= 0 && cellAge < 60_000 ? cell : Double.NaN, now);
             cards.add(new FleetCards.Card(e.name(), e.isVirtual(), badge.kind(), badge.text(), cell, cellAge, pct, charging, next, interval,
                     heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,

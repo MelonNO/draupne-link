@@ -53,7 +53,16 @@ enum OsdElement {
     STICKS_RIGHT("sticksRight", "Right stick", "Right stick (mode 2: pitch and roll).", false, 720 / 1280.0, y(600), true, true),
     G2G("g2g", "Picture delay", "Camera to screen, estimated. Needs phone app pc.53.", false, right(), y(218), true, true),
     // I-011: under the picture delay; y is its label's baseline, the strip under it
-    LINK_HISTORY("linkHistory", "Link history", "Ping (line) and lost video frames (marks), the last 30 s.", false, right(), y(244), true, true);
+    LINK_HISTORY("linkHistory", "Link history", "Ping (line) and lost video frames (marks), the last 30 s.", false, right(), y(244), true, true),
+    // fleet PRD GU-5: the fleet's elements - they draw only while there is something to say (an ArduPilot drone, a group)
+    TRAFFIC("traffic", "Traffic", "Another DRAUPNE drone close: distance, direction, height.", true, 0.5, y(232), true, true),
+    HOME_NOW("homeNow", "Home now", "Time left on the battery; HOME NOW when the trip home needs the rest.", true, 0.5, y(256), true, true),
+    LEAD_DOWN("leadDown", "Lead down", "The lead landed or disarmed: the group holds. DISCARD LEAD.", true, 0.5, y(280), true, true),
+    RESERVES("reserves", "Reserves", "Reserves called, in arrival order, with their times.", false, left(), y(162), true, true),
+    GROUP("group", "Group", "Follower group and the distance to its edge.", false, left(), y(186), true, true),
+    FLOOR("floor", "Floor", "The group's floor above the ground.", false, left(), y(210), true, true),
+    GNSS("gnss", "GNSS", "GNSS, NO FIX or GNSS LOST (ArduPilot).", false, right(), y(592), true, true),
+    MINI_VIEWS("miniViews", "Launch views", "A launching reserve's camera, small, until it is over the floor.", true, left(), y(448), true, true);
 
     final String key;
     final String title;

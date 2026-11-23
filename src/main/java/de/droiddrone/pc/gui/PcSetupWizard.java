@@ -439,6 +439,18 @@ final class PcSetupWizard {
                 wizard.update();
             });
             WizardDialog.addRow(col, calibration);
+            // fleet GU-7: DISCARD LEAD (AUX5) and CALL RESERVE (AUX6) on the radio - calibrated with the other switches
+            javax.swing.JCheckBox fleet = new javax.swing.JCheckBox("FLEET SWITCHES: DISCARD LEAD (AUX5), CALL RESERVE (AUX6)");
+            fleet.setOpaque(false);
+            fleet.setForeground(Theme.TEXT);
+            fleet.setSelected(de.droiddrone.pc.FleetSwitches.onRadio(main.config()));
+            fleet.setToolTipText("On: Calibrate asks for these two switches too. For ArduPilot fleets.");
+            fleet.addActionListener(e -> {
+                main.save(de.droiddrone.pc.FleetSwitches.settings(fleet.isSelected()));
+                main.save(Map.of(DroneSetup.RADIO_REDO_KEY, "true")); // the switches changed: calibrate again
+                wizard.update();
+            });
+            col.add(fleet);
             return col;
         }
 

@@ -242,7 +242,10 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         }
         if (frame.width() != w || frame.height() != h) return; // the stream changed size: a new file comes with it
         boolean flipX = view.mirror() != view.upsideDown(), flipY = view.upsideDown(); // as the screen shows it
-        frame.draw(decoder, flipX, flipY, view.osdData(), view.osdLayout(), view.displayMs());
+        OsdRenderer.Data osd = view.osdData();
+        // fleet AL-21: the lead's recording leaves the launch views out (each reserve's phone records its own launch)
+        if (osd != null && osd.fleet() != null) osd = osd.withFleet(osd.fleet().withoutMinis());
+        frame.draw(decoder, flipX, flipY, osd, view.osdLayout(), view.displayMs());
         writer.write(frame.pixels(), ptsMs);
         written++;
     }

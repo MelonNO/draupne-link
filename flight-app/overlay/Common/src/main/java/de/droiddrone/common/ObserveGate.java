@@ -77,6 +77,22 @@ public final class ObserveGate {
      * @return {@link Observe#STREAMING} while the observation goes on; else why it ends for all of them: ENDED_PILOT,
      * REFUSED_ARMED or REFUSED_POWER
      */
+    /**
+     * Fleet AL-20: a launching reserve streams its launch to its commander's mini-view - armed, as it climbs - while no
+     * pilot session is up; the launch over, the ordinary rules again.
+     */
+    public static int request(boolean pilotConnected, long pilotSilentMs, boolean fromLastPc, BooleanSupplier disarmed,
+                              boolean normalPower, boolean overwatching, boolean launchView) {
+        if (launchView && !pilotConnected && !overwatching) return Observe.STREAMING;
+        return request(pilotConnected, pilotSilentMs, fromLastPc, disarmed, normalPower, overwatching);
+    }
+
+    /** Fleet AL-20: as {@link #ended(boolean, boolean, boolean, boolean)}, a launch under way keeping its view. */
+    public static int ended(boolean pilotConnected, boolean disarmed, boolean normalPower, boolean overwatching, boolean launchView) {
+        if (launchView && !pilotConnected && !overwatching) return Observe.STREAMING;
+        return ended(pilotConnected, disarmed, normalPower, overwatching);
+    }
+
     public static int ended(boolean pilotConnected, boolean disarmed, boolean normalPower, boolean overwatching) {
         boolean armed = !disarmed;
         boolean power = !normalPower || overwatching; // pc.38
