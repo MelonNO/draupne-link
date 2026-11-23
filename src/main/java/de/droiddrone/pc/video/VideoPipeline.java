@@ -1042,7 +1042,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 b == null ? -1 : b.mahDrawn(), gps == null ? -1 : gps.sats(), gps == null ? -1 : gps.fix(),
                 gps == null ? Double.NaN : gps.latDeg(), gps == null ? Double.NaN : gps.lonDeg(), gps == null ? Double.NaN : gps.speedKmh(),
                 gps == null ? -1 : gps.distanceHomeM(), alt == null ? Double.NaN : alt.meters(), alt == null ? Double.NaN : alt.varioMetersPerSecond(),
-                s == null ? "" : FcTelemetry.flightMode(s.activeModes()), s != null && s.armed(),
+                s == null ? "" : FcTelemetry.flightMode(s), s != null && s.armed(),
                 att == null ? Double.NaN : att.rollDeg(), att == null ? Double.NaN : att.pitchDeg(), heading(t));
     }
 

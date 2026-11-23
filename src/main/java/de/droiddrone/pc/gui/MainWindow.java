@@ -551,6 +551,8 @@ public class MainWindow extends JFrame {
     /** The connected phone's name (or the watched PC's), big on the LINK card while connected (the pilot, 1.0.51). */
     private final JLabel connectedNameLabel = Theme.label("", Theme.headingFont(20f), Theme.TEXT);
     private String connectedName;
+    /** The connected real phone's name, whose flight controller type LastKnown keeps (fleet PRD AP-1); null: a made-up one. */
+    private String fcPhone;
     private final JLabel phoneValue = statValue();
     private final JLabel phoneAppValue = statValue();
     private final JLabel phoneBatteryValue = statValue();
@@ -1922,6 +1924,7 @@ public class MainWindow extends JFrame {
             connection.getLink().setNameReply(nameService::replyPacket);
             connection.getLink().setEvents(this::logLine);
             connectedName = target.name() + (target.isVirtual() ? " (VIRTUAL)" : "");
+            fcPhone = target.isVirtual() ? null : target.name();
             startLiveAudio(connection.getLink(), video, target.name());
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
@@ -6034,6 +6037,10 @@ public class MainWindow extends JFrame {
         showConnectedName(link.isSpectator() ? "WATCHING " + connectedName : connectedName);
         FcInfo fc = link.getFcInfo();
         fcValue.setText(fc == null ? "-" : fc.getFcName() + " " + fc.getFcVersionStr());
+        // fleet PRD AP-1 / GU-1: FLEET shows each drone's FC type (ARDU / BTFL) from its last connection
+        if (fc != null && fcPhone != null && !link.isSpectator()) {
+            lastKnown.fc(fcPhone, de.droiddrone.pc.LastKnown.fcWord(fc.getFcVariant()), System.currentTimeMillis());
+        }
         refreshPhoneApp(state == ControlLink.State.READY ? link.getTelemetry() : null);
     }
 

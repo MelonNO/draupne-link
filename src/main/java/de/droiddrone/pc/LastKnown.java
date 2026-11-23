@@ -31,16 +31,42 @@ public final class LastKnown {
     /**
      * One phone. lat / lon NaN: no place known; phonePercent -1, cellVolts NaN: not known; mode "": none confirmed yet.
      * @param mode the word the pilot reads: PILOTED, IDLE, STANDBY, DEEP SLEEP, OVERWATCH
+     * @param fc the drone's flight controller as last connected (fleet PRD AP-1): ARDU, BTFL, INAV, PX4; "" not known
      */
     public record Entry(String name, double lat, double lon, long placeAt, int phonePercent, double cellVolts, long batteryAt,
-                        String mode, long modeAt) {
+                        String mode, long modeAt, String fc) {
+        /** One with no flight controller known (the tests, a file from before 1.0.72-fleet). */
+        public Entry(String name, double lat, double lon, long placeAt, int phonePercent, double cellVolts, long batteryAt,
+                     String mode, long modeAt) {
+            this(name, lat, lon, placeAt, phonePercent, cellVolts, batteryAt, mode, modeAt, "");
+        }
+
         public boolean hasPlace() {
             return !Double.isNaN(lat) && !Double.isNaN(lon);
         }
 
         static Entry of(String name) {
-            return new Entry(name, Double.NaN, Double.NaN, 0, -1, Double.NaN, 0, "", 0);
+            return new Entry(name, Double.NaN, Double.NaN, 0, -1, Double.NaN, 0, "", 0, "");
         }
+    }
+
+    /** The short word for a flight controller type (FcInfo's variant): ARDU, BTFL, INAV, PX4, or "" for none. */
+    public static String fcWord(int fcVariant) {
+        return switch (fcVariant) {
+            case de.droiddrone.common.FcInfo.FC_VARIANT_ARDUPILOT -> de.droiddrone.common.FcInfo.ARDUPILOT_ID;
+            case de.droiddrone.common.FcInfo.FC_VARIANT_BETAFLIGHT -> de.droiddrone.common.FcInfo.BETAFLIGHT_ID;
+            case de.droiddrone.common.FcInfo.FC_VARIANT_INAV -> de.droiddrone.common.FcInfo.INAV_ID;
+            case de.droiddrone.common.FcInfo.FC_VARIANT_PX4 -> "PX4";
+            default -> "";
+        };
+    }
+
+    /** The flight controller this phone's drone reported when it was connected (ARDU, BTFL, ...); "" leaves it. */
+    public synchronized void fc(String name, String fc, long now) {
+        if (name == null || name.isBlank() || fc == null || fc.isBlank()) return;
+        Entry e = entry(name);
+        if (fc.equals(e.fc())) return;
+        put(new Entry(e.name(), e.lat(), e.lon(), e.placeAt(), e.phonePercent(), e.cellVolts(), e.batteryAt(), e.mode(), e.modeAt(), fc), now);
     }
 
     private final Path file;
@@ -83,7 +109,7 @@ public final class LastKnown {
         Entry e = entry(name);
         if (e.hasPlace() && atMs <= e.placeAt()) return;
         if (e.hasPlace() && e.lat() == lat && e.lon() == lon && atMs - e.placeAt() < 60_000) return; // standing still: once a minute
-        put(new Entry(e.name(), lat, lon, atMs, e.phonePercent(), e.cellVolts(), e.batteryAt(), e.mode(), e.modeAt()), atMs);
+        put(new Entry(e.name(), lat, lon, atMs, e.phonePercent(), e.cellVolts(), e.batteryAt(), e.mode(), e.modeAt(), e.fc()), atMs);
     }
 
     /** The batteries as last read; -1 / NaN leaves what is held. */
@@ -93,7 +119,7 @@ public final class LastKnown {
         int phone = phonePercent >= 0 ? phonePercent : e.phonePercent();
         double cell = Double.isNaN(cellVolts) ? e.cellVolts() : Math.round(cellVolts * 100) / 100.0;
         if (phone == e.phonePercent() && Double.compare(cell, e.cellVolts()) == 0) return;
-        put(new Entry(e.name(), e.lat(), e.lon(), e.placeAt(), phone, cell, atMs, e.mode(), e.modeAt()), atMs);
+        put(new Entry(e.name(), e.lat(), e.lon(), e.placeAt(), phone, cell, atMs, e.mode(), e.modeAt(), e.fc()), atMs);
     }
 
     /** The mode the phone is confirmed in now (never UNKNOWN or LOST). The time moves on at most once a minute. */
@@ -102,7 +128,7 @@ public final class LastKnown {
         Entry e = entry(name);
         if (mode.equals(e.mode()) && atMs - e.modeAt() < 60_000) return;
         if (atMs < e.modeAt()) return;
-        put(new Entry(e.name(), e.lat(), e.lon(), e.placeAt(), e.phonePercent(), e.cellVolts(), e.batteryAt(), mode, atMs), atMs);
+        put(new Entry(e.name(), e.lat(), e.lon(), e.placeAt(), e.phonePercent(), e.cellVolts(), e.batteryAt(), mode, atMs, e.fc()), atMs);
     }
 
     /** What is known of this phone, or null: nothing. */
@@ -122,7 +148,7 @@ public final class LastKnown {
         if (from == null || to == null || from.equalsIgnoreCase(to)) return;
         Entry e = byId.remove(id(from));
         if (e == null) return;
-        put(new Entry(to.trim(), e.lat(), e.lon(), e.placeAt(), e.phonePercent(), e.cellVolts(), e.batteryAt(), e.mode(), e.modeAt()), now);
+        put(new Entry(to.trim(), e.lat(), e.lon(), e.placeAt(), e.phonePercent(), e.cellVolts(), e.batteryAt(), e.mode(), e.modeAt(), e.fc()), now);
     }
 
     public synchronized void forget(String name, long now) {
@@ -182,7 +208,8 @@ public final class LastKnown {
 
     static String format(Entry e) {
         return String.join("\t", e.name().replace('\t', ' '), num(e.lat(), 7), num(e.lon(), 7), Long.toString(e.placeAt()),
-                Integer.toString(e.phonePercent()), num(e.cellVolts(), 2), Long.toString(e.batteryAt()), e.mode().replace('\t', ' '), Long.toString(e.modeAt()));
+                Integer.toString(e.phonePercent()), num(e.cellVolts(), 2), Long.toString(e.batteryAt()), e.mode().replace('\t', ' '), Long.toString(e.modeAt()),
+                e.fc().replace('\t', ' '));
     }
 
     private static String num(double v, int decimals) {
@@ -196,7 +223,7 @@ public final class LastKnown {
         try {
             return new Entry(c[0].trim(), c[1].isEmpty() ? Double.NaN : Double.parseDouble(c[1]), c[2].isEmpty() ? Double.NaN : Double.parseDouble(c[2]),
                     Long.parseLong(c[3]), Integer.parseInt(c[4]), c[5].isEmpty() ? Double.NaN : Double.parseDouble(c[5]), Long.parseLong(c[6]),
-                    c[7], Long.parseLong(c[8]));
+                    c[7], Long.parseLong(c[8]), c.length > 9 ? c[9].trim() : ""); // the 10th column since 1.0.72-fleet
         } catch (NumberFormatException e) {
             return null;
         }

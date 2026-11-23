@@ -290,8 +290,8 @@ final class OsdRenderer {
                 put(s.armed() ? "ARMED" : "DISARMED", ex, ey, s.armed() ? GREEN : YELLOW, a);
             });
             element(OsdElement.FLIGHT_MODE, (ex, ey, a) -> {
-                // only once Betaflight's mode names are known: without them ACRO could be wrong
-                if (s != null && t.hasBoxNames()) flightMode(ex, ey, a, s);
+                // only once Betaflight's mode names are known (without them ACRO could be wrong); ArduPilot names its own
+                if (s != null && (t.hasBoxNames() || s.isArduPilot())) flightMode(ex, ey, a, s);
             });
             element(OsdElement.FLY_TIME, (ex, ey, a) -> {
                 int fly = t == null ? -1 : t.flySeconds(now);
@@ -932,8 +932,8 @@ final class OsdRenderer {
 
     /** The flight mode big, the other active switches small after it. */
     private void flightMode(float x, float y, OsdLayout.Align a, FcTelemetry.Status s) {
-        String mode = FcTelemetry.flightMode(s.activeModes());
-        String others = String.join("  ", FcTelemetry.otherModes(s.activeModes()));
+        String mode = FcTelemetry.flightMode(s);
+        String others = String.join("  ", FcTelemetry.otherModes(s));
         Font big = Theme.headingFont(22 * unit), small = Theme.headingFont(15 * unit);
         float mw = g.getFontMetrics(big).stringWidth(mode);
         float total = mw + (others.isEmpty() ? 0 : 12 * unit + g.getFontMetrics(small).stringWidth(others));

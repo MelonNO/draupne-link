@@ -843,6 +843,12 @@ final class FleetManagementPanel extends JPanel {
         int x = fm.stringWidth(c.name()) + 8;
         g.setFont(Theme.headingFont(10f));
         FontMetrics bf = g.getFontMetrics();
+        // fleet PRD AP-1 / GU-1: the drone's flight controller type, as last connected (ARDU / BTFL)
+        if (c.fc() != null) {
+            g.setColor(Theme.MUTED);
+            g.drawString(c.fc(), x, fm.getAscent());
+            x += bf.stringWidth(c.fc()) + 8;
+        }
         // 1.0.64: "OVERWATCH - BLIND" in the warning colour while its camera gives the motion detection no pictures
         String badge = c.badgeText();
         g.setColor(c.blind() ? Theme.WARN : kindColor(c.kind()));

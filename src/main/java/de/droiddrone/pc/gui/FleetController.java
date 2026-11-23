@@ -279,6 +279,12 @@ final class FleetController {
     /** 1.0.71: what this PC last knew of every phone, on disk (null: not kept - the tests). */
     private volatile de.droiddrone.pc.LastKnown lastKnown;
 
+    /** Fleet PRD AP-1: the drone's flight controller type as last connected (ARDU, BTFL ...), or null: never connected here. */
+    static String fcOf(de.droiddrone.pc.LastKnown store, String phone) {
+        de.droiddrone.pc.LastKnown.Entry k = store == null ? null : store.get(phone);
+        return k == null || k.fc().isEmpty() ? null : k.fc();
+    }
+
     void setLastKnown(de.droiddrone.pc.LastKnown store) {
         lastKnown = store;
         // an OUT OF ACTION drone's deep sleep stays queued until its phone is heard, however long that takes
@@ -526,7 +532,8 @@ final class FleetController {
             cards.add(new FleetCards.Card(e.name(), e.isVirtual(), badge.kind(), badge.text(), cell, cellAge, pct, charging, next, interval,
                     heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,
                     wanted == null ? null : FleetManager.modeName(wanted.mode()), note,
-                    wanted == null || wanted.queuedAt() <= 0 ? -1 : Math.max(0, now - wanted.queuedAt())).withWas(marked ? null : was));
+                    wanted == null || wanted.queuedAt() <= 0 ? -1 : Math.max(0, now - wanted.queuedAt())).withWas(marked ? null : was)
+                    .withFc(fcOf(store, e.name())));
         }
         return cards;
     }

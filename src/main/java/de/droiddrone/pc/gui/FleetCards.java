@@ -41,7 +41,16 @@ final class FleetCards {
     record Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
                 boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
                 int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs,
-                boolean blind, String was) {
+                boolean blind, String was, String fc) {
+        /** Up to 1.0.71: no flight controller type said (fleet PRD AP-1). */
+        Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
+             boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
+             int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs,
+             boolean blind, String was) {
+            this(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs, signal,
+                    gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, blind, was, null);
+        }
+
         /** Up to 1.0.70: an UNKNOWN phone's last mode is not said. */
         Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
              boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
@@ -71,7 +80,7 @@ final class FleetCards {
             boolean b = on && "OVERWATCH".equals(badge);
             if (b == blind) return this;
             return new Card(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs,
-                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, b, was);
+                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, b, was, fc);
         }
 
         /**
@@ -82,7 +91,15 @@ final class FleetCards {
             String w = kind == MapView.Kind.UNKNOWN ? text : null;
             if (java.util.Objects.equals(w, was)) return this;
             return new Card(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs,
-                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, blind, w);
+                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, blind, w, fc);
+        }
+
+        /** Fleet PRD AP-1 / GU-1: this card with its drone's flight controller type as last connected (ARDU, BTFL ...), or null. */
+        Card withFc(String type) {
+            String t = type == null || type.isBlank() ? null : type;
+            if (java.util.Objects.equals(t, fc)) return this;
+            return new Card(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs,
+                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, blind, was, t);
         }
 
         /**

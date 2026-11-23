@@ -18,7 +18,7 @@ Work on [DRAUPNE Fleet & ArduPilot](PRD.md): ArduPilot as a second flight-contro
 
 | # | Phase | Gate | State |
 |---|---|---|---|
-| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | next |
+| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | under way: step 1 of 6 done |
 | 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | |
 | 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | |
 | 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | |
@@ -41,9 +41,23 @@ parts and passes the separation suite (AC-14) for what it adds.
 
 First steps of phase 1, in order:
 
-1. **AP-1 / AP-2:** the PC decodes every `DD_MAVLINK_*` record into the objects the HUD, map, FLEET and STANAG already
-   use; an unknown record is skipped by its length. FLEET and Drone setup show `ARDU` / `BTFL`. Tests on recorded and
-   made-up records.
+1. **AP-1 / AP-2 (done, PC only, not tried on a drone):** `FcTelemetry` reads all thirteen records the phone makes
+   from ArduPilot's MAVLink (mode and armed, battery, GPS, position, home, status texts, timers, RSSI, throttle;
+   the OSD config, VTX power and barometer records are read past) into the objects the HUD, map, FLEET and STANAG
+   already use. Before, the PC read the attitude only and the first other MAVLink record ended the packet.
+   - Armed: ArduPilot's heartbeat flag is its own word (`armedKnown`); armed still needs two reports in a row. No status
+     until the phone has read the FC's parameters and sends its first mode record: until then the guards ask.
+   - Flight mode: `ArduModes` (Copter's numbers and names); `Status.fcMode`, shown on the OSD and in recordings.
+   - Distance and direction home are counted on the PC from the filtered position and ArduPilot's home (the phone
+     counts them only while armed). Cell count: `CellCount` from the voltage, not the phone's mV / 4.1 V guess.
+   - FC type: `LastKnown` keeps each drone's type from its last connection (a check-in carries none); FLEET's detail
+     strip writes it beside the name (ARDU / BTFL). The LINK card already said "ArduPilot 4.6.0". The window title is
+     left alone (the bench finds windows by it).
+   - **Not as the PRD says:** "an unknown record is skipped by its length" needs a length on every record - a change
+     of the phone's telemetry format for both apps. Not done: every record the phone can send is now known, which
+     covers it until a new record is added. Decide when one is.
+   - Tests: `FcTelemetryMavlinkTest` (records made as `Mavlink.java` makes them, through the phone's
+     `TelemetryRecords`), `FleetFcTypeTest`.
 2. **AP-3:** armed state, ArduPilot flight-mode names and PreArm texts in RC CHECK.
 3. **AP-4 / AP-6:** sticks as `RC_CHANNELS_OVERRIDE` through the same stick path and guards as MSP; OSD buttons
    LOITER, RTL, LAND, START/PAUSE.

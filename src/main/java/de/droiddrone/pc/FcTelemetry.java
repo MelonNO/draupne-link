@@ -31,10 +31,21 @@ public class FcTelemetry {
      * happen to an armed drone asks armedKnown first ({@link ArmedCheck}).
      */
     public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent,
-                         int coreTempC, long receivedAt, boolean armedKnown) {
+                         int coreTempC, long receivedAt, boolean armedKnown, String fcMode) {
+        /** A Betaflight / INAV status: the flight mode is found among activeModes (box names). */
+        public Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent,
+                      int coreTempC, long receivedAt, boolean armedKnown) {
+            this(armed, activeModes, blockers, cpuLoadPercent, coreTempC, receivedAt, armedKnown, null);
+        }
+
         /** A status whose armed flag is the flight controller's own word (read with the mode names). */
         public Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent, int coreTempC, long receivedAt) {
             this(armed, activeModes, blockers, cpuLoadPercent, coreTempC, receivedAt, true);
+        }
+
+        /** fcMode: ArduPilot's own flight mode name (fleet PRD AP-3); null for Betaflight / INAV. */
+        public boolean isArduPilot() {
+            return fcMode != null;
         }
 
         public boolean coreTempKnown() {
@@ -280,6 +291,27 @@ public class FcTelemetry {
     /** The phone's mobile network: "LTE", "5G", ... and signal 0-100 %. */
     public record Network(String name, int strengthPercent) {}
 
+    /**
+     * One ArduPilot text (STATUSTEXT): severity as MAVLink's MAV_SEVERITY (0 emergency ... 3 error, 4 warning, 6 info),
+     * the text, when it came. PreArm texts say why the drone won't arm (fleet PRD AP-3).
+     */
+    public record StatusText(int severity, String text, long receivedAt) {}
+
+    /** ArduPilot's home position (HOME_POSITION). */
+    public record Home(double latDeg, double lonDeg, long receivedAt) {}
+
+    static final int MAX_STATUS_TEXTS = 32;
+    private final java.util.ArrayDeque<StatusText> statusTexts = new java.util.ArrayDeque<>();
+    private volatile Home home;
+    private volatile int throttlePercent = -1;
+    private volatile int arduMode = -1;
+    /** The last GPS_RAW_INT's figures, for the GLOBAL_POSITION_INT that follows (fix as Betaflight counts it). */
+    private volatile int mavFixBf, mavSats;
+    private volatile double mavKmh;
+    /** The last BATTERY_STATUS' current and drawn mAh, for the SYS_STATUS that brings the voltage. */
+    private volatile double mavAmps;
+    private volatile int mavMah;
+
     /** Betaflight's cell voltage limits (Power & Battery tab). */
     public record BatteryLimits(double minCell, double maxCell, double warningCell) {}
 
@@ -384,7 +416,7 @@ public class FcTelemetry {
                     unknownCodes++;
                     return;
                 }
-                if (code < FcCommon.DD_TIMERS || code == FcCommon.DD_MAVLINK_ATTITUDE) lastFcDataAt = MonoClock.ms();
+                if (code < FcCommon.DD_TIMERS || isFromArduPilot(code)) lastFcDataAt = MonoClock.ms();
                 if (firstRecordAt == 0) firstRecordAt = MonoClock.ms();
             }
         } catch (RuntimeException e) {
@@ -395,6 +427,83 @@ public class FcTelemetry {
     private boolean parseRecord(short code, DataReader b, FcInfo fc) {
         boolean inav = fc != null && fc.getFcVariant() == FcInfo.FC_VARIANT_INAV;
         switch (code) {
+            case FcCommon.DD_MAVLINK_MODE -> mavlinkMode(b.readInt(), b.readBoolean(), fc);
+            case FcCommon.DD_MAVLINK_BATTERY_STATUS -> {
+                int centiAmps = b.readShort();            // -1: not measured
+                int mah = b.readInt();                    // -1: not measured
+                b.readByte();                             // remaining %, ArduPilot's own estimate
+                b.readInt();                              // fault bits
+                mavAmps = centiAmps < 0 ? 0 : centiAmps / 100.0;
+                mavMah = Math.max(mah, 0);
+                Battery old = battery;
+                if (old != null) battery = new Battery(old.volts(), old.cells(), mavMah, mavAmps, old.fcCells());
+            }
+            case FcCommon.DD_MAVLINK_SYS_STATUS -> {
+                b.readByte();                             // the phone's cell guess (mV / 4.1 V): not used, see Battery
+                int mv = b.readShort() & 0xffff;          // 65535: not measured
+                b.readByte();                             // remaining %
+                if (mv != 0xffff) battery = battery(mv / 1000.0, 0, mavMah, mavAmps);
+            }
+            case FcCommon.DD_MAVLINK_STATUS_TEXT -> {
+                int severity = b.readUnsignedByteAsInt();
+                String text = b.readUTF();
+                if (text != null) addStatusText(severity, text);
+            }
+            case FcCommon.DD_MAVLINK_GPS_RAW_INT -> {
+                int mavFix = b.readUnsignedByteAsInt();
+                int cmPerS = b.readShort() & 0xffff;      // 65535: not known
+                int sats = b.readUnsignedByteAsInt();     // 255: not known
+                // as Betaflight counts: 0 none, 1 2D, 2 3D (MAVLink: 0 no GPS, 1 no fix, 2 2D, 3 3D and better)
+                int fix = mavFix >= 3 ? 2 : mavFix == 2 ? 1 : 0;
+                mavFixBf = fix;
+                mavSats = sats == 255 ? 0 : sats;
+                mavKmh = cmPerS == 0xffff ? 0 : cmPerS * 0.036;
+                Gps old = gps;
+                gps = old == null ? new Gps(fix, mavSats, mavKmh, 0, -1, 0, 0, 0, -1, 0, 0, MonoClock.ms(), false, false)
+                        : new Gps(fix, mavSats, mavKmh, old.altM(), old.distanceHomeM(), old.directionHomeDeg(), old.latDeg(),
+                        old.lonDeg(), old.travelledM(), old.courseDeg(), old.hdop(), old.receivedAt(), old.positionOk(), old.heldBack());
+            }
+            case FcCommon.DD_MAVLINK_GLOBAL_POSITION_INT -> {
+                double lat = b.readInt() / 1e7, lon = b.readInt() / 1e7;
+                int relAltMm = b.readInt();
+                int vzCmPerS = b.readShort();             // MAVLink's z points down
+                int travelled = b.readInt();
+                b.readInt();                              // the phone's distance home: counted only while armed
+                b.readShort();                            // and its direction; both from here instead
+                long now = MonoClock.ms();
+                altitude = new Altitude(relAltMm / 1000.0, -vzCmPerS / 100.0);
+                int taken = gpsFilter.offer(lat, lon, PositionFilter.usableFc(mavFixBf, mavSats, lat, lon), Double.NaN, now);
+                Home h = home;
+                boolean placed = gpsFilter.has();
+                double atLat = placed ? gpsFilter.lat() : 0, atLon = placed ? gpsFilter.lon() : 0;
+                boolean homeKnown = placed && h != null;
+                gps = new Gps(mavFixBf, mavSats, mavKmh, (int) Math.round(relAltMm / 1000.0),
+                        homeKnown ? (int) Math.round(de.droiddrone.pc.map.Mercator.distanceM(atLat, atLon, h.latDeg(), h.lonDeg())) : -1,
+                        homeKnown ? de.droiddrone.pc.map.Mercator.bearingDeg(atLat, atLon, h.latDeg(), h.lonDeg()) : 0,
+                        atLat, atLon, travelled, 0, 0, now, taken == PositionFilter.TAKEN, taken == PositionFilter.HELD_BACK);
+            }
+            case FcCommon.DD_MAVLINK_HOME_POSITION -> {
+                double lat = b.readInt() / 1e7, lon = b.readInt() / 1e7;
+                if (PositionFilter.onGlobe(lat, lon)) home = new Home(lat, lon, MonoClock.ms());
+            }
+            case FcCommon.DD_MAVLINK_SYSTEM_TIME -> {
+                int bootMs = b.readInt();
+                int flightMs = b.readInt();
+                int armedMs = b.readInt();
+                timers = new Timers(bootMs / 1000, flightMs / 1000, armedMs / 1000);
+            }
+            case FcCommon.DD_MAVLINK_RC_CHANNELS -> {
+                int rssi = b.readUnsignedByteAsInt();     // 0-254, 255: not known
+                rssiPercent = rssi == 255 ? -1 : Math.round(rssi * 100 / 254f);
+            }
+            case FcCommon.DD_MAVLINK_SCALED_PRESSURE -> b.readShort(); // barometer temperature, cdegC
+            case FcCommon.DD_MAVLINK_VFR_HUD -> throttlePercent = b.readUnsignedByteAsInt();
+            case FcCommon.DD_AP_VTX_POWER -> b.readShort();
+            case FcCommon.DD_AP_OSD_CONFIG -> {
+                // OSD1_ENABLE, TXT_RES, UNITS, MSG_TIME, W_RSSI, W_NSAT, W_BATVOLT (f32), W_AVGCELLV (f32), CELL_COUNT
+                skip(b, 6 + 4 + 4 + 1);
+                skip(b, b.readUnsignedByteAsInt() * 3); // per item: enabled, x, y
+            }
             case FcCommon.MSP_ATTITUDE, FcCommon.DD_MAVLINK_ATTITUDE -> {
                 double roll = b.readShort() / 10.0;  // decidegrees
                 double pitch = b.readShort() / 10.0;
@@ -630,6 +739,57 @@ public class FcTelemetry {
         return phoneAppVersion == null && first != 0 && nowMs - first >= PHONE_APP_SILENT_MS;
     }
 
+    /** A record the phone made from the flight controller's MAVLink (ArduPilot / PX4), not one of its own. */
+    static boolean isFromArduPilot(short code) {
+        return code >= FcCommon.DD_AP_OSD_CONFIG && code <= FcCommon.DD_MAVLINK_VFR_HUD;
+    }
+
+    /**
+     * The heartbeat's mode and armed flag (record DD_MAVLINK_MODE). The flag is ArduPilot's own word: armedKnown, and
+     * "not armed" means disarmed (no mode names needed as with Betaflight). The phone sends it only once it has read
+     * the FC's parameters it needs; until then there is no status, and the guards take the drone as not known.
+     */
+    private void mavlinkMode(int customMode, boolean armed, FcInfo fc) {
+        int mavType = fc == null ? 0 : fc.getPlatformType();
+        String mode = ArduModes.name(customMode, mavType);
+        long now = MonoClock.ms();
+        trackArmed(armed, now);
+        armedStreak = armed ? Math.min(armedStreak + 1, 1000) : 0;
+        statusHadNames = true;
+        arduMode = customMode;
+        status = new Status(armed, armed ? List.of("ARM", mode) : List.of(mode), List.of(), 0, 0, now, true, mode);
+    }
+
+    private void addStatusText(int severity, String text) {
+        StatusText t = new StatusText(severity, text.trim(), MonoClock.ms());
+        synchronized (statusTexts) {
+            if (statusTexts.size() == MAX_STATUS_TEXTS) statusTexts.removeFirst();
+            statusTexts.addLast(t);
+        }
+    }
+
+    /** ArduPilot's latest texts (STATUSTEXT), oldest first, at most {@link #MAX_STATUS_TEXTS}. */
+    public List<StatusText> recentStatusTexts() {
+        synchronized (statusTexts) {
+            return List.copyOf(statusTexts);
+        }
+    }
+
+    /** ArduPilot's home (HOME_POSITION), or null: none yet, or a Betaflight drone. */
+    public Home getHome() {
+        return home;
+    }
+
+    /** The throttle in % as ArduPilot reports it (VFR_HUD), -1 before the first report or on Betaflight. */
+    public int getThrottlePercent() {
+        return throttlePercent;
+    }
+
+    /** ArduPilot Copter's mode number (see {@link ArduModes}), -1 before the first heartbeat or on Betaflight. */
+    public int getArduMode() {
+        return arduMode;
+    }
+
     private void parseBetaflightStatus(DataReader b) {
         b.readByte(); // pid profile
         int load = b.readShort();
@@ -734,6 +894,16 @@ public class FcTelemetry {
             if (on.contains(m[0])) return m;
         }
         return null;
+    }
+
+    /** The flight mode to show: ArduPilot's own name, else Betaflight's from the active mode switches. */
+    public static String flightMode(Status s) {
+        return s.fcMode() != null ? s.fcMode() : flightMode(s.activeModes());
+    }
+
+    /** The active modes beside the flight mode: none for ArduPilot (its mode is one number), else {@link #otherModes(List)}. */
+    public static List<String> otherModes(Status s) {
+        return s.fcMode() != null ? List.of() : otherModes(s.activeModes());
     }
 
     /** The flight mode as Betaflight's own OSD shows it, from the active mode switches (box names); see FLIGHT_MODES. */
