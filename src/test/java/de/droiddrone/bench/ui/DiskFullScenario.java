@@ -138,12 +138,19 @@ class DiskFullScenario {
         pilot.throttle(HOVER);
         rig.check(alt1 < alt0 - 1 && alt2 > alt1 + 1, String.format("the drone follows the sticks with the disk full: down %.1f -> %.1f m, up again to %.1f m", alt0, alt1, alt2));
         Ui.pause(8000); // the recording's tries, and the picture going on meanwhile
+        // F-105: the recording gives up after five tries - and the window says so, once (before, only the app's log file did)
+        ui.until("RECORDING STOPPED in the window's log", 30_000, () -> windowLog(ui).contains("RECORDING STOPPED"));
         long fullUntil = System.currentTimeMillis();
         ui.shot("the disk full for " + (fullUntil - fullFrom) / 1000 + " s");
         List<String> appLog = rig.log();
         rig.film.remark("The app's log, the recording, while the disk was full: " + matching(appLog, "RECORDING", "OSD recording", "Recording"));
-        rig.film.remark("The window's log, the disk full: " + lines(windowLog(ui), "SAVED", "Could not", "stopped", "Link log", "LOW DISK"));
+        rig.film.remark("The window's log, the disk full: " + lines(windowLog(ui), "SAVED", "Could not", "stopped", "STOPPED", "empty", "Link log", "LOW DISK"));
         rig.film.remark("The OSD's REC mark with the disk full: " + (recordingNow(rig) ? "shown (a file is open)" : "gone (no file is being written)"));
+        List<String> stopped = linesOf(windowLog(ui), "RECORDING STOPPED");
+        rig.check(stopped.size() == 1 && stopped.get(0).contains("VIDEO > RECORD VIDEO off and on"),
+                "the window's log says once that the recording stopped, and how to start it again: " + stopped);
+        // F-107: the reason in Windows' words, no "IOException:" before it
+        rig.check(!windowLog(ui).contains("IOException:"), "no \"IOException:\" in the window's words: " + lines(windowLog(ui), "IOException"));
 
         // ---------------------------------------------------------------- 3. room again
         Files.delete(filler);
@@ -227,6 +234,24 @@ class DiskFullScenario {
             }
         }
         rig.film.remark("Files of no byte the full disk left in Videos: " + empty.size() + " " + empty);
+        // F-106: a part that got nothing on the disk is deleted when it ends, and is no part of the flight
+        rig.check(empty.isEmpty(), "no file of no byte left in Videos: " + empty);
+        List<String> namedEmpty = new ArrayList<>();
+        for (String f : FlyScenario.names(tracks)) {
+            if (!f.endsWith(".record")) continue;
+            de.droiddrone.pc.flights.FlightRecord flight = de.droiddrone.pc.flights.FlightRecord.read(tracks.resolve(f));
+            for (Path v : flight == null ? List.<Path>of() : flight.videos()) {
+                Path there = keptVideos.resolve(v.getFileName().toString());
+                try {
+                    if (!Files.exists(there) || Files.size(there) == 0) namedEmpty.add(v.getFileName().toString());
+                } catch (java.io.IOException e) {
+                    namedEmpty.add(v.getFileName() + " (" + e.getMessage() + ")");
+                }
+            }
+            rig.film.remark("The flight's record names " + (flight == null ? "nothing (unreadable)" : flight.videos().size() + " part(s): "
+                    + flight.videos().stream().map(p -> p.getFileName().toString()).toList()));
+        }
+        rig.check(namedEmpty.isEmpty(), "the flight's record names only parts with something in them: " + (namedEmpty.isEmpty() ? "yes" : namedEmpty));
 
         // what the pilot finds of this flight afterwards
         ui.front(ui.window("DRAUPNE Link map"));
@@ -247,6 +272,9 @@ class DiskFullScenario {
         rig.film.remark("PREVIOUS FLIGHTS shows: " + shown);
         rig.check(shown.contains("DURATION") && !shown.contains("No armed flights yet."), "PREVIOUS FLIGHTS has the flight");
         ui.closeWindow(ui.window("Previous flights"));
+        List<String> stoppedAll = linesOf(windowLog(ui), "RECORDING STOPPED");
+        rig.check(stoppedAll.size() == 1, "RECORDING STOPPED said once in the whole flight: " + stoppedAll);
+        rig.check(!windowLog(ui).contains("IOException:"), "no \"IOException:\" in the window's words, the whole flight: " + lines(windowLog(ui), "IOException"));
 
         // the link log of the flight (on the normal disk): the picture and the sticks before, while full, after
         rig.film.remark("The link log, second by second: " + linkLogSummary(rig, fullFrom, fullUntil, roomFrom));
@@ -414,6 +442,10 @@ class DiskFullScenario {
                 for (String l : all) if (l.contains(name)) after.add(l.strip());
                 rig.film.remark("Room again: " + (clip ? "the clip came" : "NO clip within 90 s") + ". The window's log of " + name + ": "
                         + (after.size() > 30 ? after.subList(after.size() - 30, after.size()) : after));
+                // F-108: the phone announces its clip every 5 s; that it can't be stored is said once
+                List<String> cantStore = linesOf(windowLog(ui), name + ": clip can't be stored");
+                rig.check(cantStore.size() == 1, "the window's log says once that the clip can't be stored: " + cantStore);
+                rig.check(!windowLog(ui).contains("IOException:"), "no \"IOException:\" in the window's words: " + lines(windowLog(ui), "IOException"));
                 List<String> stored = new ArrayList<>();
                 Path overwatch = rig.sandbox.documents().resolve("Overwatch");
                 if (Files.isDirectory(overwatch)) {
@@ -492,6 +524,13 @@ class DiskFullScenario {
             break;
         }
         return out.toString();
+    }
+
+    /** The lines that have this in them, each stripped. */
+    private static List<String> linesOf(String text, String part) {
+        List<String> out = new ArrayList<>();
+        for (String l : text.split("\\R")) if (l.contains(part)) out.add(l.strip());
+        return out;
     }
 
     private static List<String> matching(List<String> log, String... parts) {
