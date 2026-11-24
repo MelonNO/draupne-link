@@ -242,6 +242,8 @@ public final class StreamRecorder implements AutoCloseable {
      * frame comes, so an app killed in flight lost up to the last 5 s of picture, not one - and the flush ran only
      * when a frame was shown, so once the link was lost and the picture stood, the frames just before the loss (the
      * ones that show where the drone went) stayed in memory until the recording was closed properly.
+     * <p>
+     * A disk that refused the bytes is said here (2026-11-24): until then only the next frame's write did.
      */
     public void flush() throws IOException {
         flushedAt = System.nanoTime();
@@ -252,6 +254,8 @@ public final class StreamRecorder implements AutoCloseable {
         av_interleaved_write_frame(oc, null); // what waited to be interleaved
         av_write_frame(oc, null); // the cluster in hand ends here; the next frame begins one
         avio_flush(oc.pb());
+        int error = oc.pb().error();
+        if (error < 0) check(error, "write to the disk");
     }
 
     private static final long FLUSH_EVERY_NS = 1_000_000_000L;

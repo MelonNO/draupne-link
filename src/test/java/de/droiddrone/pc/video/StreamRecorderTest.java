@@ -121,9 +121,10 @@ class StreamRecorderTest {
     }
 
     /**
-     * A disk that keeps refusing (F-105, the test bench's full disk, 2026-11-24): the recording ends after five failed
-     * writes and the window is told once, in the pilot's words, with what starts it again. Before, only the app's log
-     * file said it; the pilot saw the REC mark go without a word.
+     * A disk that keeps refusing (F-105, the test bench's full disk, 2026-11-24): the recording stops after five failed
+     * writes and the window is told once, in the pilot's words. Before, only the app's log file said it; the pilot saw
+     * the REC mark go without a word. Since I-017 it says it starts again by itself, and waits for room: no file is
+     * written, no sixth try within the first wait, and RECORD VIDEO off ends the waiting (RecordingAgainTest).
      */
     @Test
     void aRecordingThatStopsByItselfIsSaidOnceInThePilotsWords(@TempDir Path dir) throws Exception {
@@ -140,20 +141,50 @@ class StreamRecorderTest {
         pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
         feed(pipeline, s, 0, 16, 1);
         long end = System.currentTimeMillis() + 3000;
-        while (pipeline.isRecording() && System.currentTimeMillis() < end) Thread.sleep(10);
-        assertFalse(pipeline.isRecording(), "given up");
-        assertEquals(VideoRecording.MAX_WRITE_FAILURES, files.size(), "tried five times: " + files);
-        assertEquals(java.util.List.of("RECORDING STOPPED: There is not enough space on the disk - VIDEO > RECORD VIDEO off and on to record again."), said);
+        while (said.isEmpty() && System.currentTimeMillis() < end) Thread.sleep(10);
+        Thread.sleep(300); // the frames after the stop: within the first wait for room
+        assertTrue(pipeline.isRecording(), "waiting for room, not given up");
+        assertNull(pipeline.recordingFile(), "no file is being written (no REC mark)");
+        assertEquals(VideoRecording.MAX_WRITE_FAILURES, files.size(), "tried five times, then waits: " + files);
+        assertEquals(java.util.List.of("RECORDING STOPPED: There is not enough space on the disk - starts again when there is room."), said);
+        pipeline.stopRecording();
+        assertFalse(pipeline.isRecording(), "RECORD VIDEO off");
         pipeline.close();
-        assertEquals("RECORDING STOPPED: could not write a frame (No space left on device) - VIDEO > RECORD VIDEO off and on to record again.",
+        assertEquals("RECORDING STOPPED: could not write a frame (No space left on device) - starts again when there is room.",
                 VideoRecording.stoppedLine(new java.io.IOException("Recording: could not write a frame (No space left on device)")), "FFmpeg's words");
+        assertEquals("RECORDING STOPPED: IllegalStateException: a fault - VIDEO > RECORD VIDEO off and on to record again.",
+                VideoRecording.endedLine(new IllegalStateException("a fault")), "a fault that ends it says how to start it again");
+    }
+
+    /**
+     * A flush whose bytes the disk refused says so at once (2026-11-24): before, only the next frame's write did - and
+     * the first picture of a new part, flushed at once, is the test of room (I-017). Windows' lock refuses every byte,
+     * as a full disk does.
+     */
+    @Test
+    void aFlushTheDiskRefusesIsSaidAtOnce(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"), "a lock that stops a write is Windows' way");
+        TestStreams.Stream s = TestStreams.h264(320, 240, 2, 10);
+        Path file = dir.resolve("flight.mkv");
+        StreamRecorder r = new StreamRecorder(file, false, 320, 240, s.codecConfig());
+        try (java.nio.channels.FileChannel c = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.WRITE)) {
+            c.lock(0, Long.MAX_VALUE, false);
+            r.write(s.packets().get(0).data(), true, 1000);
+            java.io.IOException e = assertThrows(java.io.IOException.class, r::flush);
+            assertTrue(e.getMessage().startsWith("Recording: could not write to the disk ("), e.getMessage());
+        } finally {
+            r.close();
+        }
+        assertEquals(0, Files.size(file), "nothing of it on the disk");
     }
 
     /**
      * F-106 (the test bench's full disk, 2026-11-24): each try of the recording on a full disk left an empty MKV in
      * Videos, named in the flight's record - 15 files of no byte for one full disk. A part that got nothing on the disk
      * is deleted when it ends and the listener told (the record leaves it out); the part after it stays. The full disk
-     * is played by Windows' lock on the first part's file: every write into it fails, as on a disk with no room.
+     * is played by Windows' lock on the first part's file: every write into it fails, as on a disk with no room. Since
+     * a part's first picture is flushed at once (I-017) the first part fails at once, and the next part may be begun in
+     * the same second - under the same name, free again.
      */
     @Test
     void aPartThatGotNothingOnTheDiskIsDeletedAndThePartAfterItStays(@TempDir Path dir) throws Exception {
@@ -177,7 +208,7 @@ class StreamRecorderTest {
         try {
             pipeline.startRecording(dir);
             pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
-            // at the phone's pace: the first part's bytes go to the disk at its once-a-second flush, which fails
+            // at the phone's pace: the first part's bytes go to the disk with its first picture, which fails
             int i = 0, more = -1;
             for (; i < s.packets().size() && (more < 0 || i < more); i++) {
                 feed(pipeline, s, i, i + 1, i + 1);
@@ -191,7 +222,8 @@ class StreamRecorderTest {
         }
         assertTrue(files.size() >= 2, "a second part after the failed one: " + files);
         assertEquals(java.util.List.of(files.get(0)), empty, "the empty part is told, the other is not");
-        assertFalse(Files.exists(files.get(0)), "the part that got nothing is deleted");
+        java.util.List<Path> left = mkvFiles(dir);
+        assertEquals(java.util.List.of(files.get(1)), left, "the part that got nothing is deleted, the one after it stays");
         assertTrue(Files.size(files.get(1)) > 0 && framesAndWidth(files.get(1))[0] > 0, "the part after it stays and plays");
     }
 

@@ -213,7 +213,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         recording.setEmptyListener(listener);
     }
 
-    /** Told once, in the pilot's words, when the recording stops by itself (a disk that keeps refusing). */
+    /** Told once, in the pilot's words, when the recording stops by itself (a disk that keeps refusing) and when it records again. */
     public void setRecordingProblemListener(Consumer<String> listener) {
         recording.setProblemListener(listener);
     }
