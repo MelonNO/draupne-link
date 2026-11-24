@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import javax.swing.JComboBox;
 import javax.swing.SwingUtilities;
 import java.awt.Component;
+import java.awt.Window;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -90,6 +91,23 @@ class PhoneFleetScenario {
         return r == null ? "" : r.badge();
     }
 
+    /**
+     * The main window in front, as a pilot clicks it: CHECK EVERY, PILOT UAV, DEEP SLEEP and STANDBY MODE are there, and
+     * the map window popped out for FLEET lies over it - the bench presses nothing another window covers (the first run,
+     * 2026-11-24: "the window DRAUPNE Link map is in front of it"). FLEET's rows are read whatever window is in front.
+     */
+    private static void mainInFront(AppRig rig, Ui ui) {
+        ui.front(rig.main());
+    }
+
+    /** A picture of FLEET: the map window in front for it, the main window back in front after. */
+    private static void fleetShot(AppRig rig, Ui ui, String what) {
+        Window map = ui.window("DRAUPNE Link map");
+        if (map != null) ui.front(map);
+        ui.shot(what);
+        mainInFront(rig, ui);
+    }
+
     @Test
     void theRealPhoneAmongMadeUpDronesInFleet() throws Exception {
         PhoneRig.Target target = PhoneRig.Target.ofRun(); // the emulator; in a hardware run this bench's real phone
@@ -133,7 +151,7 @@ class PhoneFleetScenario {
                 ui.until("FLEET's four rows, each with its card", 30_000, () -> FleetRows.read(ui).size() >= 4);
                 List<FleetRows.Row> rows = FleetRows.read(ui);
                 rig.film.remark("FLEET at the start: " + rows);
-                ui.shot("FLEET: the real phone " + real + " among three made-up drones");
+                fleetShot(rig, ui, "FLEET: the real phone " + real + " among three made-up drones"); // and the main window in front again
                 FleetRows.Row row = FleetRows.of(rows, real);
                 rig.check(row != null, "FLEET has a row for the real phone, by its name: " + real);
                 rig.check(row != null && PhoneFleet.ACTIVE.equals(row.badge()), "its row says " + PhoneFleet.ACTIVE + " (heard, awake): " + (row == null ? "-" : row.badge()));
@@ -158,17 +176,19 @@ class PhoneFleetScenario {
                 };
 
                 // ---- PILOT UAV: CONNECTED
+                mainInFront(rig, ui);
                 ui.choose(checkEvery(rig, ui), "1 min");
                 pilot.connect();
                 rig.check(Waits.until(() -> PhoneFleet.CONNECTED.equals(badge(ui, real)), 15_000), "PILOT UAV: its row says " + PhoneFleet.CONNECTED + " (" + badge(ui, real) + ")");
                 look.run();
-                ui.shot("FLEET: " + real + " flown from this PC");
+                fleetShot(rig, ui, "FLEET: " + real + " flown from this PC");
 
                 // ---- DEEP SLEEP from the LINK card, a check every minute: ASLEEP
                 int presses = 0, linesBefore = rig.log().size();
                 boolean asked = false;
                 while (!asked) {
                     ui.until("the link up for DEEP SLEEP", 30_000, pilot::linkUp);
+                    mainInFront(rig, ui);
                     ui.click(inMain(rig, ui, "DEEP SLEEP"));
                     presses++;
                     int seen = linesBefore;
@@ -181,7 +201,7 @@ class PhoneFleetScenario {
                 }
                 ui.until("the link ended, the phone asleep", 120_000, () -> ui.has("PILOT UAV"));
                 rig.check(Waits.until(() -> PhoneFleet.ASLEEP.equals(badge(ui, real)), 20_000), "DEEP SLEEP: its row says " + PhoneFleet.ASLEEP + " (" + badge(ui, real) + ")");
-                ui.shot("FLEET: " + real + " asleep");
+                fleetShot(rig, ui, "FLEET: " + real + " asleep");
                 if (phone.sleepsOnBattery()) phone.onBattery(); // a real phone on its cable would not doze: pretended off it
 
                 // ---- through two of its checks: the rows read every 2 s
@@ -208,7 +228,7 @@ class PhoneFleetScenario {
                     Ui.pause(READ_EVERY_MS);
                 }
                 Files.writeString(rig.film.dir().resolve("fleet-while-asleep.tsv"), table.toString(), StandardCharsets.UTF_8);
-                ui.shot("FLEET: " + real + " after two of its checks");
+                fleetShot(rig, ui, "FLEET: " + real + " after two of its checks");
                 long checks = PhoneFleet.count(phone.logSince(from), PhoneWords.SLEEP_CHECK);
                 rig.check(checks >= 1, "asleep for two minutes the phone woke itself to check at least once (" + checks + " time(s))");
                 List<String> awake = asleepBadges.stream().filter(b -> !PhoneFleet.WHILE_ASLEEP.contains(b)).distinct().toList();
@@ -227,6 +247,7 @@ class PhoneFleetScenario {
                 }
 
                 // ---- PILOT UAV: back at its next check, CONNECTED
+                mainInFront(rig, ui);
                 long pressed = System.currentTimeMillis();
                 ui.click("PILOT UAV");
                 ui.until("the sleeping phone back at its next check", 150_000, pilot::linkUp);
@@ -235,14 +256,15 @@ class PhoneFleetScenario {
                 if (phone.sleepsOnBattery()) phone.plugged();
                 rig.check(Waits.until(() -> PhoneFleet.CONNECTED.equals(badge(ui, real)), 15_000), "woken: its row says " + PhoneFleet.CONNECTED + " again (" + badge(ui, real) + ")");
                 look.run();
-                ui.shot("FLEET: " + real + " back, flown from this PC");
+                fleetShot(rig, ui, "FLEET: " + real + " back, flown from this PC");
 
                 // ---- STANDBY MODE: STANDBY (the phone ends as after the other phone scenarios)
                 Ui.pause(5000);
+                mainInFront(rig, ui);
                 pilot.standby();
                 rig.check(Waits.until(() -> PhoneFleet.STANDBY.equals(badge(ui, real)), 45_000), "STANDBY MODE: its row says " + PhoneFleet.STANDBY + " (" + badge(ui, real) + ")");
                 look.run();
-                ui.shot("FLEET: " + real + " in standby");
+                fleetShot(rig, ui, "FLEET: " + real + " in standby");
 
                 // ---- the made-up drones, nothing armed, the phone
                 rig.check(changes.isEmpty(), "the made-up drones' rows said what they said at the start all through: " + (changes.isEmpty() ? "yes" : changes));
