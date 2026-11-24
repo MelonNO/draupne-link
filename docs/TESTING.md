@@ -576,7 +576,8 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   (`phone-logcat.txt`: the app's lines and Android's word on what ended it). Its battery is read once a minute:
   hotter than 42 degrees the scenario waits until it is 40 (half an hour at most), below 15 % it stops.
 - **Which scenarios** (tag `hwphone` beside `emulator`): `PhoneScenario`, `PhoneAndWindowsScenario`,
-  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneFleetScenario`, `PhoneNightScenario`. `PhoneUpdateScenario` skips itself with the
+  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneFleetScenario`, `PhoneNightScenario`, `PhoneHardeningScenario`
+  (below). `PhoneUpdateScenario` skips itself with the
   bench build: that one is test-only, and Android lets a test-only app be installed by adb alone, not by the app's own
   updater. It runs on the released app's package (`phone.package`) with the word that it may be changed, and only
   with its two test builds in `build\update-test-hw` (the emulator's: `build\update-test`). **Those builds must take
@@ -589,6 +590,51 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   the emulator's Wi-Fi, read with root.
 - **Before the phone:** `-Pphone.adb=emulator-5584` holds the emulator (running already, the app to fly on it) to a
   real phone's rules - the guard, no root, no console but the forwarded port.
+
+### The phone app's hardening (`PhoneHardeningScenario`)
+
+Four of the security review's bench tests by hand, as scenarios: each a test of its own with a film of its own, on the
+emulator and on the real phone. They read; none changes the phone's settings or its lock, none starts a backup. On a
+real phone the app there is opened as a hand opens it (`am start`): nothing is cleared, granted or stopped.
+
+```
+.\bench.ps1 emulator -Tests *PhoneHardening*                 all four in the emulator, the flood a 3-minute try
+.\bench.ps1 emulator -Tests *PhoneHardening* -Flood 30       the flood for the 30 minutes the check asks for
+.\bench.ps1 phone -Tests *PhoneHardening*                    on the real phone
+.\bench.ps1 phone -Tests *PhoneHardening*aFlood* -Flood 30   the flood alone, 30 minutes
+```
+
+- **What the phone listens on** (`whatThePhoneListensOn`): the app's sockets from the kernel's tables
+  (`/proc/net/udp`, `udp6`, `tcp`, `tcp6`, by the uid of its process) and the phone's interfaces (`ip -o addr show`).
+  The released rule (Tailscale only, Q-006): whatever takes packets from anyone is on the phone's Tailscale address of
+  a VPN's interface (tunN) or parked on its own loopback; nothing on every address or on another address; no TCP
+  listener off the phone. On a real phone the bench build holds that rule (`BenchNet` widens it in the emulator alone)
+  and opens its sockets with the released app's code; the other DRAUPNE Flight is read too where it runs. Not on
+  Tailscale at that moment: the parked state is checked and the Tailscale half skipped by name. In the emulator the
+  bench build's link on every address is said as by design, not judged; the released build of this PC
+  (`build\flight`, `flight-app\build.ps1`) is installed beside it, started, read - parked on loopback, the emulator has
+  no Tailscale - and stopped again. The film names kinds of address and interfaces, never the phone's addresses.
+- **A WAKE from outside** (`aWakeFromOutsideStaysBehindTheLockScreen`): with the lock screen up, the app's WAKE is
+  started from adb's shell without the app's token and with a made-up one; the lock screen must still show with
+  nothing in front of it, the window in front must not be the app's, and its log must say it was a plain start. The
+  app's own WAKE (PILOT UAV waking a sleeping phone) is `PhoneNightScenario`'s, every round. The emulator's swipe lock
+  comes with its sleep key; a real phone's lock is never touched: one found unlocked is waited for two minutes while a
+  hand locks it with its power button, else the check is skipped by name.
+- **Storage and backup** (`noBackupOfTheAppAndNoClipInTheGallery`): no `bmgr backupnow` - it would send the app's data
+  off the phone. Read instead: each DRAUPNE Flight's flags (`dumpsys package`: no ALLOW_BACKUP), what Android's backup
+  holds or queues of it (`dumpsys backup`), the gallery's index of videos, pictures and sound (`content query` of
+  `content://media/external/...`: nothing of DRAUPNE's). Kept of those: the lines that name the app, the gallery's
+  counts and its DRAUPNE entries. The data extraction rules are not shown by Android; `NoBackupNoGalleryTest` holds the
+  manifest to them.
+- **Floods** (`aFloodOfNameQueriesHoldsNothingUp`): the keyed name query of a PC's scan, for `-Flood` minutes
+  (BENCH_FLOOD_MIN; without it a 3-minute try; `-Flood` also gives the scenario that much more time), at a made-up
+  drone from 1 024 addresses of this PC's loopback (200 kB/s both ways) and at the phone from one address of this PC -
+  over Tailscale to the real phone - held to 4 kB/s both ways. A minute before, the flood, half a minute after; the
+  PC's real link flies both, hands-off sticks to the phone (50 a second) and no picture asked of it. Judged: the sticks'
+  age as before (a phone without a flight controller: the gap between stick packets arriving there), the links never
+  lost, the memory flat over the flood (this PC's heap; the phone app's PSS), the threads capped, the made-up drone's
+  book of askers at its cap (256), the phone app's process the same. The film says what the run took of the phone's
+  network; about a megabyte a minute with Tailscale's own wrapping, some 35 MB for `-Flood 30`.
 
 ## The installer test (`tools\installer-test.ps1`)
 
