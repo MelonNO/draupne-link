@@ -13,6 +13,7 @@ import org.bytedeco.javacpp.PointerPointer;
 import java.nio.ByteOrder;
 import java.nio.IntBuffer;
 
+import static de.droiddrone.common.Log.log;
 import static org.bytedeco.ffmpeg.global.avcodec.*;
 import static org.bytedeco.ffmpeg.global.avutil.*;
 import static org.bytedeco.ffmpeg.global.swscale.*;
@@ -66,6 +67,12 @@ public final class VideoDecoder implements AutoCloseable {
     /** One thread only: FFmpeg's own threads would run at normal priority, beside the live video's. */
     private final boolean oneThread;
 
+    /**
+     * F-093: the most pixels a picture may have - 4096 x 4096, eight times the phone's largest (1920 x 1080). FFmpeg
+     * refuses a bigger one before making room for it; the stream goes on at its next picture that fits.
+     */
+    static final long MAX_PIXELS = 4096L * 4096;
+
     private VideoDecoder(boolean hevc, byte[] codecConfig, boolean hardware, boolean oneThread) {
         this.oneThread = oneThread;
         AVCodec codec = avcodec_find_decoder(hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
@@ -80,6 +87,7 @@ public final class VideoDecoder implements AutoCloseable {
         ctx.flags2(ctx.flags2() | AV_CODEC_FLAG2_FAST | AV_CODEC_FLAG2_SHOW_ALL);
         ctx.thread_type(AVCodecContext.FF_THREAD_SLICE);
         ctx.thread_count(oneThread ? 1 : 0);
+        ctx.max_pixels(MAX_PIXELS);
         if (codecConfig != null && codecConfig.length > 0) {
             // freed by avcodec_free_context
             BytePointer extra = new BytePointer(av_mallocz(codecConfig.length + AV_INPUT_BUFFER_PADDING_SIZE))
@@ -136,8 +144,15 @@ public final class VideoDecoder implements AutoCloseable {
             av_frame_move_ref(frame, spare);
             got = true;
         }
+        if (!got && !tooBigSaid && (long) ctx.width() * ctx.height() > MAX_PIXELS) {
+            tooBigSaid = true;
+            log("Video: a picture of " + ctx.width() + " x " + ctx.height() + " left out - larger than any phone sends");
+        }
         return got;
     }
+
+    /** The log has said once that this stream's pictures are too big. */
+    private boolean tooBigSaid;
 
     /** Decoding on the GPU (the last picture came from it). */
     public boolean isHardware() {

@@ -68,6 +68,39 @@ class OverwatchVideoTest {
     }
 
     /**
+     * F-093: a damaged preview whose pictures would be 640 x 196480 (the decoder fuzz's, 2026-11-24) shows nothing and
+     * takes no room; the card goes on at the next good stream. Before, the card's copy of such a picture alone was
+     * 479 MB, and where it did not fit, the hub's thread ended: every overwatch card stood still until a restart.
+     */
+    @Test
+    void aDamagedPreviewsOversizedPictureIsLeftOutAndTheNextGoodOneShown(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(640, 360, 6, 3, true);
+        byte[] damaged = java.util.HexFormat.of().parseHex("000000016742c01e8c8d40500017fc6a840f08b000000168ce3c80");
+        OverwatchHub hub = new OverwatchHub(new ClipIndex(dir), p -> { });
+        hub.watch("MobileAlpha", TOKEN, new CameraFootprint.Pose(59.9, 10.7, 100, 90, 0, 0, 0, 70, 42));
+        InetAddress lo = InetAddress.getLoopbackAddress();
+        hub.nowOverride = 1000;
+        hub.handleNow(OverwatchProtocol.alert(new OverwatchProtocol.Alert(TOKEN, 1, 0, 0, 1_762_500_000_000L, 0.5f, 0.5f, 0.1f, 0.1f,
+                0, 70, 0, 0, 0xffff, 255, "MobileAlpha")), lo, 5000);
+        int unit = 0;
+        long t = 1000;
+        for (byte[] config : new byte[][]{damaged, s.codecConfig()}) {
+            for (byte[] p : OverwatchProtocol.fragments(TOKEN, 1, unit++, OverwatchProtocol.UNIT_CONFIG, config)) hub.handleNow(p, lo, 5000);
+            for (TestStreams.Packet f : s.packets()) {
+                hub.nowOverride = t += 400;
+                int type = f.keyFrame() ? OverwatchProtocol.UNIT_KEY_FRAME : OverwatchProtocol.UNIT_FRAME;
+                for (byte[] p : OverwatchProtocol.fragments(TOKEN, 1, unit++, type, f.data())) hub.handleNow(p, lo, 5000);
+            }
+            if (config == damaged) assertNull(hub.views().get(0).picture(), "no picture from the damaged stream");
+        }
+        OverwatchHub.View v = hub.views().get(0);
+        assertNotNull(v.picture(), "the next good stream's picture");
+        assertEquals(640, v.picture().getWidth());
+        assertEquals(360, v.picture().getHeight());
+        hub.close();
+    }
+
+    /**
      * A clip player (and its decoder) closed twice: the second close does nothing. It freed the colour converter and
      * the picture buffer again - the whole app ended (2026-11-20: an overwatch clip's next part that failed to open).
      */
