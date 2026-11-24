@@ -122,6 +122,7 @@ final class MapDownloadDialog extends JDialog {
         start.setToolTipText("Fetch the tiles not saved yet");
         start.addActionListener(e -> start());
         pause.setToolTipText("Hold; RESUME continues");
+        pause.addActionListener(e -> togglePause()); // it had none: PAUSE did nothing, the download went on
         cancel.setToolTipText("Stop; saved tiles stay");
         // HIDE, PAUSE and CANCEL only mean something while a download runs: they appear with START
         hide.setVisible(false);
