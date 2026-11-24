@@ -1051,13 +1051,80 @@ class ControlLinkTest {
     void aDamagedAnswerStartsNothingAndTheAnswersAfterItAreTaken() throws Exception {
         PcConfig config = PcConfig.defaults();
         ControlLink link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
-        long id = 0x1234_5678L;
-        byte[] damaged = answer(config.getKey(), id + 1000);
+        long[] id = triesOf(link, 4); // the answers are to this link's own tries
+        byte[] damaged = answer(config.getKey(), id[1]);
         damaged[6] ^= 0x01; // a letter of the key
-        byte[] cut = java.util.Arrays.copyOf(answer(config.getKey(), id + 2000), 7); // the key cut short
-        List<byte[]> datagrams = List.of(answer(config.getKey(), id), cut, damaged, answer(config.getKey(), id + 1), answer(config.getKey(), id + 2),
-                answer(config.getKey(), id + 3));
+        byte[] cut = java.util.Arrays.copyOf(answer(config.getKey(), id[2]), 7); // the key cut short
+        List<byte[]> datagrams = List.of(answer(config.getKey(), id[0]), cut, damaged, answer(config.getKey(), id[1]), answer(config.getKey(), id[2]),
+                answer(config.getKey(), id[3]));
         List<Long> startsAfter = new java.util.ArrayList<>();
+        List<String> logged = receiveOnly(link, config, datagrams, i -> startsAfter.add(link.getSessionStarts()));
+        assertEquals(List.of(1L, 1L, 1L, 2L, 3L, 4L), startsAfter, "the phone's answers each start the session, the damaged two nothing; logged: " + logged);
+        assertTrue(logged.stream().noneMatch(l -> l.contains("Exception")), "nothing thrown on the receive thread: " + logged);
+    }
+
+    /**
+     * 2026-11-24: an answer that says the phone told the session by the id is taken only when the id is one this PC
+     * gave out lately (its last eight tries). Any other id starts nothing and changes nothing: not the session's id,
+     * not when the phone last answered, not the count of starts, not the receive buffer. An answer without the mark
+     * (an older phone app) is taken as ever.
+     */
+    @Test
+    void aMarkedAnswerCountsOnlyForAnIdThisPcGaveOut() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        ControlLink link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        String key = config.getKey();
+        long[] id = triesOf(link, 2); // two tries, the first given up unanswered
+        long notYet = (id[1] + 1) & 0xFFFFFFFFL; // the next this PC would give: not given out
+        byte[] unmarked = answer(key, notYet);
+        unmarked[unmarked.length - 1] = 0; // as the PC sent it: a phone app that tells sessions by the clock
+        List<byte[]> datagrams = List.of(
+                answer(key, notYet),                                   // 0: no try of this PC's: refused
+                answer(key, id[1]),                                    // 1: the try in hand: taken
+                answer(key, (id[1] + 5) & 0xFFFFFFFFL),                // 2: newer than the session's, never given out: refused
+                answer(key, id[1] ^ 0x8000_0000L),                     // 3: far off: refused
+                unmarked,                                              // 4: no mark: taken as ever, whatever its id
+                answer(key, id[0]));                                   // 5: the older try, given out: taken
+        java.lang.reflect.Field answeredId = ControlLink.class.getDeclaredField("answeredId");
+        java.lang.reflect.Field answeredAt = ControlLink.class.getDeclaredField("connectAnsweredAt");
+        java.lang.reflect.Field buffer = ControlLink.class.getDeclaredField("receiverBuffer");
+        for (java.lang.reflect.Field f : List.of(answeredId, answeredAt, buffer)) f.setAccessible(true);
+        List<List<Long>> after = new java.util.ArrayList<>();
+        after.add(List.of(0L, de.droiddrone.common.SessionGate.NO_ID, 0L, 0L)); // before the first
+        List<String> logged = receiveOnly(link, config, datagrams, i -> {
+            try {
+                after.add(List.of(link.getSessionStarts(), answeredId.getLong(link), answeredAt.getLong(link),
+                        ((ReceiverBuffer) buffer.get(link)).isConnected() ? 1L : 0L));
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        String said = "after each answer [starts, the session's id, answered at, buffer up]: " + after + "; logged: " + logged;
+        for (int refused : new int[]{0, 2, 3}) assertEquals(after.get(refused), after.get(refused + 1), "answer " + refused + " changed nothing - " + said);
+        assertEquals(List.of(0L, 1L, 1L, 1L, 2L, 3L), after.subList(1, after.size()).stream().map(s -> s.get(0)).toList(), said);
+        assertEquals(id[1], after.get(2).get(1), "the try in hand's answer is the session's - " + said);
+        assertNotEquals(after.get(1).get(2), after.get(2).get(2), "and it counts as the phone's answer - " + said);
+        assertEquals(1L, after.get(2).get(3), "its buffer up - " + said);
+        assertEquals(id[0], after.get(6).get(1), "an older try of this PC's, after an unmarked answer: taken - " + said);
+        assertTrue(logged.stream().noneMatch(l -> l.contains("Exception")), "nothing thrown on the receive thread: " + logged);
+    }
+
+    /** The ids of n tries of this link's: a Connect each, every one after the last was given up unanswered. */
+    private static long[] triesOf(ControlLink link, int n) throws java.io.IOException {
+        long[] ids = new long[n];
+        for (int i = 0; i < n; i++) {
+            byte[] c = link.buildConnectPacket(1_000_000L + i * 10_000L, 0);
+            ids[i] = de.droiddrone.common.SessionGate.sessionId(c, c.length);
+        }
+        return ids;
+    }
+
+    /**
+     * The link's own receive thread (never started: no session thread, no Connects of its own) on a socket that hands it
+     * these datagrams one by one, from the phone's address and port, a few ms apart; after each, step gets its index.
+     * Returns what the thread logged.
+     */
+    private List<String> receiveOnly(ControlLink link, PcConfig config, List<byte[]> datagrams, java.util.function.IntConsumer step) throws Exception {
         List<String> logged = new CopyOnWriteArrayList<>();
         java.lang.reflect.Field running = ControlLink.class.getDeclaredField("running");
         running.setAccessible(true);
@@ -1070,7 +1137,12 @@ class ControlLinkTest {
 
             @Override
             public void receive(DatagramPacket p) throws java.io.IOException {
-                if (next > 0) startsAfter.add(link.getSessionStarts());
+                if (next > 0) step.accept(next - 1);
+                try {
+                    Thread.sleep(2); // the link's clock moves on between two datagrams
+                } catch (InterruptedException e) {
+                    throw new java.io.InterruptedIOException();
+                }
                 if (next == datagrams.size()) {
                     try {
                         running.set(link, false);
@@ -1120,8 +1192,7 @@ class ControlLinkTest {
             sender.close();
             socket.close();
         }
-        assertEquals(List.of(1L, 1L, 1L, 2L, 3L, 4L), startsAfter, "the phone's answers each start the session, the damaged two nothing; logged: " + logged);
-        assertTrue(logged.stream().noneMatch(l -> l.contains("Exception")), "nothing thrown on the receive thread: " + logged);
+        return logged;
     }
 
     /** The phone's answer: this link's Connect as buildConnectPacket writes it, marked "told by the id" as the phone marks it. */

@@ -374,6 +374,24 @@ class SessionGateIdTest {
         assertTrue(SessionGate.answeredById(more, more.length));
     }
 
+    /** 2026-11-24: the PC knows the ids of its last eight tries - an answer can be to one of them only. */
+    @Test
+    void theIdsOfTheLastEightTriesAreKnownAsGivenOut() {
+        SessionGate.Ids ids = new SessionGate.Ids(-6); // across the wrap of the 32-bit id
+        assertFalse(ids.givenLately(ids.current()), "none given out yet: not even the seed's");
+        long[] tried = new long[10];
+        for (int i = 0; i < tried.length; i++) tried[i] = ids.next(i * 2000L, 0);
+        assertEquals(0xFFFFFFFBL, tried[0]);
+        assertEquals(4L, tried[9]);
+        for (int i = 2; i < tried.length; i++) assertTrue(ids.givenLately(tried[i]), "try " + i + ": id " + tried[i]);
+        assertFalse(ids.givenLately(tried[0]), "the tenth try back: no longer known");
+        assertFalse(ids.givenLately(tried[1]), "nor the ninth");
+        assertFalse(ids.givenLately(5), "the next: not given out yet");
+        assertFalse(ids.givenLately(SessionGate.NO_ID));
+        ids.sessionUp();
+        assertTrue(ids.givenLately(tried[9]), "the session's own id, once up");
+    }
+
     @Test
     void anOlderTrysAnswerKeepsTheIdsLonger() {
         SessionGate.Ids ids = new SessionGate.Ids(99);

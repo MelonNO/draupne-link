@@ -676,7 +676,7 @@ public final class LinkFuzzTargets {
     // ================================================================================================ the PC's link
 
     private static final Method RECEIVER_RUN, PROCESS_DATA;
-    private static final Field SOCKET, SENDER, BUFFER, RUNNING;
+    private static final Field SOCKET, SENDER, BUFFER, RUNNING, SESSION_IDS, ANSWERED_ID, ANSWERED_AT;
     private static volatile PcConfig pcConfig;
 
     static {
@@ -687,11 +687,33 @@ public final class LinkFuzzTargets {
             SENDER = ControlLink.class.getDeclaredField("udpSender");
             BUFFER = ControlLink.class.getDeclaredField("receiverBuffer");
             RUNNING = ControlLink.class.getDeclaredField("running");
-            for (java.lang.reflect.AccessibleObject a : new java.lang.reflect.AccessibleObject[]{RECEIVER_RUN, PROCESS_DATA, SOCKET, SENDER, BUFFER, RUNNING}) {
+            SESSION_IDS = ControlLink.class.getDeclaredField("sessionIds");
+            ANSWERED_ID = ControlLink.class.getDeclaredField("answeredId");
+            ANSWERED_AT = ControlLink.class.getDeclaredField("connectAnsweredAt");
+            for (java.lang.reflect.AccessibleObject a : new java.lang.reflect.AccessibleObject[]{RECEIVER_RUN, PROCESS_DATA, SOCKET, SENDER, BUFFER, RUNNING,
+                    SESSION_IDS, ANSWERED_ID, ANSWERED_AT}) {
                 a.setAccessible(true);
             }
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("ControlLink changed: the protocol fuzz reaches its receive thread by these names", e);
+        }
+    }
+
+    /**
+     * The session ids of the PC's link in the PC_LINK target, the seeds' (PcSender's) and the model's alike: a phone
+     * answers its PC's own Connects, so the seeds' answers carry ids the model's link gave out. From a fixed seed,
+     * not SecureRandom, just below the wrap of the 32-bit id: the ids given are 0xFFFFFFFE, 0xFFFFFFFF and 0.
+     */
+    static final int PC_LINK_IDS_SEED = -3;
+    /** The tries the model's link made before the input (the seeds' answers are to the first): its ids given out. */
+    static final int PC_LINK_TRIES = 3;
+
+    /** A link's session ids set to these: the same ids, in the same order, wherever they are given out. */
+    static void sharedIds(ControlLink link, int seed) {
+        try {
+            SESSION_IDS.set(link, new SessionGate.Ids(seed));
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -726,6 +748,8 @@ public final class LinkFuzzTargets {
         Set<Short> delivered = new HashSet<>();
         long lastMarkedId = -1;
         long starts;
+        /** The session ids the link gave out (its Connects of PC_LINK_TRIES tries, before the input). */
+        final Set<Long> given = new HashSet<>();
 
         PcModel(LinkInput in, Report report) {
             this.in = in;
@@ -737,6 +761,15 @@ public final class LinkFuzzTargets {
             link.setForeignSleepHandler((from, hello) -> Boolean.TRUE);
             link.setFleetHello((from, hello) -> null);
             link.setEvents(msg -> { });
+            sharedIds(link, PC_LINK_IDS_SEED);
+            try {
+                for (int i = 0; i < PC_LINK_TRIES; i++) { // each try given up unanswered before the next
+                    byte[] c = link.buildConnectPacket(40_000 + i * 10_000L, 0);
+                    given.add(SessionGate.sessionId(c, c.length));
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
         }
 
         void run() {
@@ -782,11 +815,23 @@ public final class LinkFuzzTargets {
         }
 
         boolean wasConnected;
-        long startsBefore;
+        long startsBefore, answeredIdBefore, answeredAtBefore;
+        int unansweredBefore;
 
         void before(Packet q) {
             wasConnected = buffer.isConnected();
             startsBefore = link.getSessionStarts();
+            answeredIdBefore = field(ANSWERED_ID);
+            answeredAtBefore = field(ANSWERED_AT);
+            unansweredBefore = buffer.getUnansweredStarts();
+        }
+
+        long field(Field f) {
+            try {
+                return f.getLong(link);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
         }
 
         void after(Packet q) {
@@ -796,10 +841,20 @@ public final class LinkFuzzTargets {
             boolean keyedAnswer = len > 0 && d[0] == UdpCommon.Connect && (keyBytes(d, len, 4) || keyRead(d, len, 4));
             if (!wasConnected && buffer.isConnected()) {
                 if (!fromPhone || !keyedAnswer) report.broken("the PC's buffer took a session without the key, or from another address", q.from() + ": " + hex(d, len));
-                delivered = new HashSet<>();
                 report.count("pc session up");
-            } else if (fromPhone && keyedAnswer && buffer.isConnected()) {
-                delivered = new HashSet<>(); // the answer restarted the numbering
+            }
+            // the buffer's numbering started over: the session up, an answer taken (the link counts it, and only then
+            // hands it to the buffer, which starts over on it), or the phone's new session without its answer (F-057)
+            if (!wasConnected && buffer.isConnected() || link.getSessionStarts() != startsBefore || buffer.getUnansweredStarts() != unansweredBefore) {
+                delivered = new HashSet<>();
+            }
+            if (fromPhone && len > 0 && d[0] == UdpCommon.Connect && SessionGate.answeredById(d, len) && !given.contains(SessionGate.sessionId(d, len))) {
+                // an answer told by the id counts only for an id this PC gave out lately: any other changes nothing
+                report.count("pc answer to no try of its own");
+                if (link.getSessionStarts() != startsBefore || field(ANSWERED_ID) != answeredIdBefore || field(ANSWERED_AT) != answeredAtBefore
+                        || !wasConnected && buffer.isConnected()) {
+                    report.broken("an answer to no Connect of this PC's changed the link", "id " + SessionGate.sessionId(d, len) + ": " + hex(d, len));
+                }
             }
             long s = link.getSessionStarts();
             if (s != startsBefore) {
@@ -1472,6 +1527,7 @@ public final class LinkFuzzTargets {
     /** The phone's side of a session: the answer, the stream's config, FcInfo, telemetry, video, sound, pongs. */
     static LinkInput pcLink(Random r, int kind) throws IOException {
         PcSender pc = new PcSender(r);
+        sharedIds(pc.link, PC_LINK_IDS_SEED); // the model's link's ids: the answer is to its first try
         PhoneSender phone = new PhoneSender();
         byte[] answer = pc.link.buildConnectPacket(pc.clockMs, 0);
         if (kind != 3) SessionGate.markAnswer(answer, answer.length); // a phone that tells sessions by the id (pc.53 on)

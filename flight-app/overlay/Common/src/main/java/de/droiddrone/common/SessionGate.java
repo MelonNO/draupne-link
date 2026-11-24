@@ -422,6 +422,17 @@ public final class SessionGate {
             return -1;
         }
 
+        /**
+         * Whether sessionId is one of the last ids given out ({@link #PAST}, the one in use among them): an answer that
+         * says it was told by the id can only be to one of this side's own recent Connects. False before any is given.
+         */
+        public synchronized boolean givenLately(long sessionId) {
+            for (int i = Math.min(given, PAST) - 1; i >= 0; i--) {
+                if ((pastId[i] & 0xFFFFFFFFL) == sessionId) return true;
+            }
+            return false;
+        }
+
         /** The id of the last Connect sent - the session's, once it is up (an answer carrying another is an older try's). */
         public synchronized long current() {
             return id & 0xFFFFFFFFL;

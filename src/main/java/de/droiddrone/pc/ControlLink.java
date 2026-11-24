@@ -1157,6 +1157,9 @@ public class ControlLink {
      * <li>With the link up (no Connects going out), an answer starts this side over only if its session is newer
      * than the one this side is in: the phone has gone on, and no other answer may come to say so. One this side
      * has had, or an older one still (a copy on the network, a try's late answer), starts nothing.</li>
+     * <li>2026-11-24: and only an answer to one of this side's own recent tries - its id one of the last this side
+     * gave out (SessionGate.Ids keeps eight). Any other id answers no Connect of this PC's (one of an earlier run
+     * of the app, say): it starts nothing and changes nothing here.</li>
      * </ul>
      */
     private boolean answerOfAnOlderTry(byte[] d, int len, long now) {
@@ -1166,6 +1169,7 @@ public class ControlLink {
             answeredId = SessionGate.NO_ID;
             return false;
         }
+        if (!sessionIds.givenLately(id)) return true; // no try of this side's: nothing counted from it
         // the session this side is in, or an older one still (a copy on the network, an older try's answer after it)
         if (answeredId != SessionGate.NO_ID && (int) (id - answeredId) <= 0) return true;
         if (trying && id != sessionIds.current()) {
