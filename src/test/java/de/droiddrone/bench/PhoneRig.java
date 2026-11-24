@@ -822,6 +822,14 @@ public final class PhoneRig implements AutoCloseable {
         return k;
     }
 
+    /**
+     * What Android says of the lock screen this moment - read only: the screen is not woken and no lock screen is sent
+     * away, whatever kind it is (unlike {@link #lookAtTheLock}). On the emulator too: its lock screen as it is.
+     */
+    public Keyguard keyguardAsItIs() {
+        return keyguardNow();
+    }
+
     private Keyguard keyguardNow() {
         String window = shell("dumpsys window");
         if (lockSettings == null) {

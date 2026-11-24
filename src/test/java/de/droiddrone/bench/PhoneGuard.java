@@ -16,7 +16,9 @@ import java.util.function.Function;
  * <li><b>Read</b>: getprop, pidof, ps, ss, date '+...', wm size / density, uiautomator dump, screencap -p, logcat (read
  * or followed), dumpsys of battery, deviceidle, package, activity, meminfo, window, lock_settings (which kind of lock
  * the phone has - read, never changed) and the other services named in {@link #DUMPS}, pm path / list, appops get,
- * settings get, cat of /sys and /proc, the airplane switch asked.</li>
+ * settings get, cat of /sys and /proc, the airplane switch asked; the phone's addresses ({@code ip addr show}), the
+ * media store's index ({@code content query --uri content://media/...}) and Android's backup state ({@code dumpsys
+ * backup}, nothing after it) - read, never changed.</li>
  * <li><b>A hand's work</b>: input tap / swipe, the keys WAKEUP, BACK and HOME, wm dismiss-keyguard, am start of the
  * run's own app. No text and no other key is ever typed: nothing the bench sends can enter a PIN.</li>
  * <li><b>Changes to the app</b> - pm clear / grant / revoke, appops set, dpm set-active-admin / remove-active-admin,
@@ -33,7 +35,8 @@ import java.util.function.Function;
  * back to kept on the phone meanwhile ({@link #NET_NOTE}: settings put global draupne_bench_net_was wifi-on | wifi-off,
  * settings delete global draupne_bench_net_was).</li>
  * <li><b>Never</b>: adb root / su, locksettings, install -d (a version down), kill and rm (root's; the bench receiver
- * does that work), a file written on the phone, the clock set, and everything not named above.</li>
+ * does that work), a file written on the phone, the clock set, a backup started (bmgr), and everything not named
+ * above.</li>
  * </ul>
  */
 final class PhoneGuard {
@@ -320,6 +323,10 @@ final class PhoneGuard {
                 if (a.size() == 2 && a.get(0).equals("keyevent") && KEYS.contains(a.get(1))) return Verdict.ok(Kind.HAND);
                 return Verdict.no("input " + String.join(" ", a) + ": the bench taps and swipes and presses " + new java.util.TreeSet<>(KEYS)
                         + " - it types no text and no other key, so nothing it sends can enter a PIN");
+            case "ip":
+                return ip(a, w);
+            case "content":
+                return content(a, w);
             case "am":
                 return am(t, a, w);
             case "pm":
@@ -446,6 +453,11 @@ final class PhoneGuard {
             if (more.equals(List.of("reset"))) return Verdict.ok(Kind.PHONE);
             return Verdict.no("battery " + String.join(" ", more) + ": the bench pretends one thing about the battery - unplug - and takes it back with reset");
         }
+        if (service.equals("backup")) {
+            // which apps Android's backup holds or queues, read as it is; nothing after it - and never bmgr, which starts one
+            if (more.isEmpty()) return Verdict.ok(Kind.READ);
+            return Verdict.no("dumpsys backup " + String.join(" ", more) + ": the bench reads Android's backup state as it is (dumpsys backup, nothing after it)");
+        }
         if (service.equals("deviceidle")) {
             if (more.isEmpty() || more.get(0).equals("get")) return Verdict.ok(Kind.READ);
             if (more.get(0).equals("force-idle") && more.size() <= 2) return new Verdict(Kind.PHONE, null, Set.of(), Set.of(), true);
@@ -457,6 +469,60 @@ final class PhoneGuard {
             if (m.equals("write") || m.startsWith("--reset") || m.startsWith("--clear") || m.startsWith("--write") || m.startsWith("--enable") || m.startsWith("--disable")) {
                 return Verdict.no("dumpsys " + service + " " + m + " is an order, not a look");
             }
+        }
+        return Verdict.ok(Kind.READ);
+    }
+
+    /** ip's options the bench may give before "addr": which family, one line per address. */
+    private static final Set<String> IP_OPTIONS = Set.of("-4", "-6", "-o");
+
+    /**
+     * The phone's addresses, read: {@code ip [-4|-6] [-o] addr [show [[dev] <interface>]]}. Nothing else of ip - the same
+     * program sets addresses, links and routes ({@code ip addr add}, {@code ip link set}, {@code ip route}): a word other
+     * than show after addr is refused, so no order can pass for an interface's name.
+     */
+    private static Verdict ip(List<String> a, List<String> w) {
+        int i = 0;
+        while (i < a.size() && IP_OPTIONS.contains(a.get(i))) i++;
+        List<String> rest = a.subList(i, a.size());
+        String why = "ip " + String.join(" ", a) + ": the bench reads the phone's addresses (ip addr show) and nothing else of ip - it also sets addresses, links and routes";
+        if (rest.isEmpty() || !(rest.get(0).equals("addr") || rest.get(0).equals("address"))) return Verdict.no(why);
+        List<String> more = rest.subList(1, rest.size());
+        if (more.isEmpty()) return Verdict.ok(Kind.READ);
+        if (!more.get(0).equals("show")) return Verdict.no(why);
+        more = more.subList(1, more.size());
+        if (!more.isEmpty() && more.get(0).equals("dev")) {
+            more = more.subList(1, more.size());
+            if (more.isEmpty()) return Verdict.no(why);
+        }
+        if (more.isEmpty() || more.size() == 1 && more.get(0).matches("[A-Za-z][A-Za-z0-9_.-]{0,14}")) return Verdict.ok(Kind.READ);
+        return Verdict.no(why);
+    }
+
+    /**
+     * The media store's index read (whether the gallery lists anything of the app's): {@code content query --uri
+     * content://media/... [--projection <columns>] [--user <n>]}. Nothing else of content - it also inserts, updates,
+     * deletes, writes files and calls into any app's provider - and no other provider: the settings are one.
+     */
+    private static Verdict content(List<String> a, List<String> w) {
+        if (a.isEmpty() || !a.get(0).equals("query")) {
+            return Verdict.no("content " + (a.isEmpty() ? "" : a.get(0)) + ": the bench only reads the media store's index (content query --uri content://media/...)");
+        }
+        String uri = null;
+        for (int i = 1; i < a.size(); i++) {
+            String option = a.get(i), value = i + 1 < a.size() ? a.get(i + 1) : null;
+            boolean fits = switch (option) {
+                case "--uri" -> value != null && uri == null;
+                case "--projection" -> value != null && value.matches("[A-Za-z0-9_:]+");
+                case "--user" -> value != null && value.matches("\\d{1,3}");
+                default -> false;
+            };
+            if (!fits) return Verdict.no("content query " + option + (value == null ? "" : " " + value) + ": not on the bench's list (--uri, --projection <columns>, --user <n>)");
+            if (option.equals("--uri")) uri = value;
+            i++;
+        }
+        if (uri == null || !uri.matches("content://media/[A-Za-z0-9_/]+")) {
+            return Verdict.no("content query of " + uri + ": the bench reads the media store's index (content://media/...) and no other provider");
         }
         return Verdict.ok(Kind.READ);
     }

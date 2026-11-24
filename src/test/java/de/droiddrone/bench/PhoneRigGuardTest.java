@@ -139,6 +139,40 @@ class PhoneRigGuardTest {
             new String[]{"uninstall", "com.example.vpn"},
             new String[]{"shell", "cmd wifi start-scan"},
             new String[]{"shell", "content delete --uri content://settings/system"},
+            // the hardening checks read the phone's addresses, the media store's index and Android's backup state - and
+            // nothing more of ip, content, dumpsys backup or bmgr: they set addresses and routes, write, call, back up
+            new String[]{"shell", "ip addr add 192.0.2.9/24 dev wlan0"},
+            new String[]{"shell", "ip -o addr add 192.0.2.9/24 dev wlan0"},
+            new String[]{"shell", "ip addr del 192.0.2.9/24 dev wlan0"},
+            new String[]{"shell", "ip addr flush dev wlan0"},
+            new String[]{"shell", "ip addr show dev"},
+            new String[]{"shell", "ip addr show tun0 extra"},
+            new String[]{"shell", "ip addr show tun0; ip addr add 192.0.2.9/24 dev tun0"},
+            new String[]{"shell", "ip link set eth0 up"},
+            new String[]{"shell", "ip route add default via 192.0.2.1"},
+            new String[]{"shell", "ip netns exec router iptables -L"},
+            new String[]{"shell", "ip -batch /sdcard/x"},
+            new String[]{"shell", "ip rule"},
+            new String[]{"shell", "content insert --uri content://media/external/video/media --bind _data:s:/sdcard/x"},
+            new String[]{"shell", "content update --uri content://media/external/video/media --bind _data:s:/sdcard/x"},
+            new String[]{"shell", "content delete --uri content://media/external/video/media"},
+            new String[]{"shell", "content call --uri content://media/none --method x"},
+            new String[]{"shell", "content read --uri content://media/external/file/1"},
+            new String[]{"shell", "content write --uri content://media/external/file/1"},
+            new String[]{"shell", "content query --uri content://settings/secure"},
+            new String[]{"shell", "content query --uri content://com.android.contacts/contacts"},
+            new String[]{"shell", "content query --uri content://media/external/video/media --where 1=1"},
+            new String[]{"shell", "content query --uri content://media/external/video/media --projection _data,_id"},
+            new String[]{"shell", "content query --projection _data"},
+            new String[]{"shell", "content query --uri content://media/external/video/media --uri content://settings/secure"},
+            new String[]{"shell", "dumpsys backup --enable false"},
+            new String[]{"shell", "dumpsys backup users"},
+            new String[]{"shell", "bmgr backupnow " + RELEASED},
+            new String[]{"shell", "bmgr backupnow --all"},
+            new String[]{"shell", "bmgr enable true"},
+            new String[]{"shell", "bmgr restore 1"},
+            new String[]{"shell", "input keyevent KEYCODE_SLEEP"},
+            new String[]{"shell", "input keyevent KEYCODE_POWER"},
             new String[]{"shell", "cat /data/data/" + RELEASED + "/shared_prefs/settings.xml"},
             new String[]{"shell", "getprop $(su)"},
             new String[]{"shell", "getprop `reboot`"},
@@ -417,7 +451,28 @@ class PhoneRigGuardTest {
                 new String[]{"shell", "settings put global draupne_bench_net_was wifi-on"},
                 new String[]{"shell", "settings put global draupne_bench_net_was wifi-off"},
                 new String[]{"shell", "settings delete global draupne_bench_net_was"},
-                new String[]{"shell", "logcat -d -v time -T '" + stamp + "'"}));
+                new String[]{"shell", "logcat -d -v time -T '" + stamp + "'"},
+                // the hardening checks (PhoneHardeningScenario): what the app listens on, a WAKE from outside, backup and gallery, a flood
+                new String[]{"shell", "cat /proc/4711/status"},
+                new String[]{"shell", "cat /proc/net/udp 2>/dev/null"},
+                new String[]{"shell", "cat /proc/net/udp6 2>/dev/null"},
+                new String[]{"shell", "cat /proc/net/tcp 2>/dev/null"},
+                new String[]{"shell", "cat /proc/net/tcp6 2>/dev/null"},
+                new String[]{"shell", "ip -o addr show 2>&1"},
+                new String[]{"shell", "ip -4 -o addr show wlan0"},
+                new String[]{"shell", "ip -6 addr show dev tun0"},
+                new String[]{"shell", "ip addr"},
+                new String[]{"shell", "am start -n " + app + "/de.droiddrone.flight.MainActivity -a " + PhoneWords.WAKE_ACTION},
+                new String[]{"shell", "am start -n " + app + "/de.droiddrone.flight.MainActivity -a " + PhoneWords.WAKE_ACTION + " --es " + PhoneWords.WAKE_TOKEN_EXTRA
+                        + " 0123456789abcdef0123456789abcdef"},
+                new String[]{"shell", "dumpsys package " + RELEASED},
+                new String[]{"shell", "pm path " + RELEASED},
+                new String[]{"shell", "pidof " + RELEASED},
+                new String[]{"shell", "dumpsys backup"},
+                new String[]{"shell", "content query --uri content://media/external/video/media --projection _id 2>&1 | grep -c -e Row:"},
+                new String[]{"shell", "content query --uri content://media/external/images/media --projection _id 2>&1 | grep -v -e Row: | head -2"},
+                new String[]{"shell", "content query --uri content://media/external/audio/media --projection _data 2>&1 | grep -i -e droiddrone -e draupne"},
+                new String[]{"shell", "content query --uri content://media/external/video/media --projection _data --user 0"}));
         for (String action : BenchControl.ACTIONS) {
             commands.add(new String[]{"shell", "am broadcast -n " + BenchControl.component(app) + " -a " + action});
         }
@@ -442,6 +497,22 @@ class PhoneRigGuardTest {
         assertFalse(PhoneGuard.judge(t, List.of("shell", "dumpsys battery reset"), p -> null).pretends());
         assertEquals(EnumSet.of(PhoneGuard.Undo.WIFI), PhoneGuard.judge(t, List.of("shell", "svc wifi disable"), p -> null).sets());
         assertEquals(EnumSet.of(PhoneGuard.Undo.WIFI), PhoneGuard.judge(t, List.of("shell", "svc wifi enable"), p -> null).clears());
+    }
+
+    /** The hardening checks' new commands are looks, each refusal says what the bench does with that program instead. */
+    @Test
+    void theHardeningChecksOnlyRead() {
+        PhoneRig.Target t = phone(CABLE, RELEASED, false); // the released app, without the word that it may be changed: reads go all the same
+        for (String line : List.of("ip -o addr show", "ip addr show dev tun0", "dumpsys backup", "cat /proc/net/udp6",
+                "content query --uri content://media/external/video/media --projection _id:_data 2>&1 | grep -c -e Row:")) {
+            assertEquals(PhoneGuard.Kind.READ, PhoneGuard.judge(t, List.of("shell", line), p -> null).kind(), line);
+        }
+        assertTrue(refused(t, "shell", "ip link set wlan0 down").contains("nothing else of ip"));
+        assertTrue(refused(t, "shell", "content delete --uri content://media/external/video/media").contains("only reads the media store"));
+        assertTrue(refused(t, "shell", "content query --uri content://settings/secure").contains("no other provider"));
+        assertTrue(refused(t, "shell", "content query --uri content://media/external/video/media --where x").contains("--where"));
+        assertTrue(refused(t, "shell", "dumpsys backup users").contains("nothing after it"));
+        assertTrue(refused(t, "shell", "bmgr backupnow " + RELEASED).contains("not on the list"));
     }
 
     @Test

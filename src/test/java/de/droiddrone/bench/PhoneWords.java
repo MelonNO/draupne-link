@@ -44,6 +44,14 @@ public final class PhoneWords {
     public static final String SLEEP_CHECK = "Sleep check alarm fired";
     /** The app put itself in front of the lock screen: woken by a PC, or opened again after it was ended. */
     public static final String OPENED_OVER_LOCK = "Opened to wake the phone";
+    /** A WAKE that did not carry the app's own token: opened as a plain start, behind the lock screen. */
+    public static final String WAKE_NOT_ITS_OWN = "A WAKE not from this app";
+    /** One of the app's capped queues or books was full and its oldest went (the end of its line, said at most once a minute). */
+    public static final String OLDEST_DROPPED = " waiting - the oldest dropped";
+    /** The bench build, once a process: in the Android emulator its link takes every address ... */
+    public static final String BENCH_NET_WIDE = "the Android emulator - the link answers every address";
+    /** ... on a real phone it holds the released app's rule. */
+    public static final String BENCH_NET_TAILSCALE = "a real phone - the link answers over Tailscale only";
     /** An error nobody caught, as the app's crash guard writes it down before the process ends. */
     public static final String FATAL = "FATAL on thread";
     /** ... and that it opens itself again. */
@@ -82,6 +90,13 @@ public final class PhoneWords {
     public static final String CAMERA_CLOSED = "Camera device closed";
     public static final String ENCODER_STARTED = "onOutputFormatChanged";
 
+    // ------------------------------------------------------------------ its intents
+
+    /** The action of the app's WAKE: opens its main screen - over the lock screen only with the app's own token. */
+    public static final String WAKE_ACTION = "de.droiddrone.flight.pc.WAKE";
+    /** The extra that carries that token. */
+    public static final String WAKE_TOKEN_EXTRA = "de.droiddrone.flight.pc.WAKE_TOKEN";
+
     // ------------------------------------------------------------------ the bench build's answer (STATS)
 
     /** In the bench build's one line of figures: a PC is connected; its service runs; no flight controller (status 1). */
@@ -114,6 +129,8 @@ public final class PhoneWords {
     private static final String MAIN = "overlay/Flight/src/main/java/de/droiddrone/flight/";
     private static final String STRINGS = "overlay/Flight/src/main/res/values/strings.xml";
     private static final String RECEIVER = "bench-overlay/Flight/src/bench/java/de/droiddrone/flight/BenchControlReceiver.java";
+    private static final String BENCH_NET = "bench-overlay/Flight/src/bench/java/de/droiddrone/flight/BenchNet.java";
+    private static final String COMMON = "overlay/Common/src/main/java/de/droiddrone/common/";
 
     static final List<Origin> ORIGINS = List.of(
             new Origin(SCREEN_TITLE, STRINGS, "<string name=\"version\">%1$s · " + SCREEN_TITLE + "</string>"),
@@ -126,6 +143,13 @@ public final class PhoneWords {
             new Origin(SLEEP_LOCKED_SCREEN, MAIN + "DDService.java", "dpm.lockNow();", "log(\"" + SLEEP_LOCKED_SCREEN + "\");"),
             new Origin(SLEEP_CHECK, MAIN + "PowerAlarmReceiver.java", "log(\"" + SLEEP_CHECK + "\");"),
             new Origin(OPENED_OVER_LOCK, MAIN + "MainActivity.java", "log(\"" + OPENED_OVER_LOCK + ": over the lock screen\");", "setShowWhenLocked(true);", "setTurnScreenOn(true);"),
+            new Origin(WAKE_NOT_ITS_OWN, MAIN + "MainActivity.java", "log(\"" + WAKE_NOT_ITS_OWN + ": opened as a plain start, behind the lock screen\");",
+                    "if (!de.droiddrone.common.WakeIntent.own(wakeToken(this), intent.getStringExtra(EXTRA_WAKE_TOKEN))) {"),
+            new Origin(WAKE_ACTION, MAIN + "MainActivity.java", "public static final String ACTION_WAKE = \"" + WAKE_ACTION + "\";"),
+            new Origin(WAKE_TOKEN_EXTRA, MAIN + "MainActivity.java", "static final String EXTRA_WAKE_TOKEN = \"" + WAKE_TOKEN_EXTRA + "\";"),
+            new Origin(OLDEST_DROPPED, COMMON + "DropOldest.java", "\"" + OLDEST_DROPPED + " (\""),
+            new Origin(BENCH_NET_WIDE, BENCH_NET, "\": " + BENCH_NET_WIDE + ", as before Q-006"),
+            new Origin(BENCH_NET_TAILSCALE, BENCH_NET, "\": " + BENCH_NET_TAILSCALE + ", as the released app\""),
             new Origin(FATAL, MAIN + "CrashGuard.java", "log(\"" + FATAL + " \" + thread.getName()"),
             new Origin(OPENING_AGAIN, MAIN + "CrashGuard.java", "log(\"" + OPENING_AGAIN + " in \" + CrashRestarts.DELAY_MS"),
             new Origin(NOT_OPENED_AGAIN, MAIN + "CrashGuard.java", "log(\"" + NOT_OPENED_AGAIN + ": \" + CrashRestarts.MAX"),
