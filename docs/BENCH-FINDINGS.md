@@ -636,6 +636,31 @@ not the page scrolls; in the top row the name (and FLIGHT UNIT on its side) give
 pill keep their room. Checked: the same pictures and screen dumps on pc.60 - every line and button reachable in all
 eight cases; at 200 % with the largest display size the pill is still cut at the right edge (the rest whole).
 
+**The map tools against the outside world (2026-11-24, F-095 - F-101).** Plan section 7 beyond the map suites and
+`mapProbe`: each tool fed real-world input or read back by a reader that is not the app's own. STANAG 4609: the
+stream read back with a byte-level transport stream reader, FFmpeg's own demuxer and H.264 decoder and an ST 0601
+reader written for the test (`StanagReadBackTest`): tables, KLV as stream type 0x06 with 'KLVA', one whole ST 0601
+packet a PES, keys, BER and item lengths, tag 1's checksum, rising tag 2, positions south and west within the
+standard's precision, 90 of 90 pictures decoded, each KLV packet with its own picture's PTS, a player joining
+mid-stream - all right. Open: FFmpeg 7.1 marks the KLV PES as stream id 0xFC (metadata stream); a reader that goes by
+that id rather than the stream table could miss it - to be tried with a real ground station (nothing on this PC).
+NOTAM paste: about 25 real-world shapes; no crash, times right as UTC; found **F-095** (no-break, thin and zero-width
+spaces from a web page: the NOTAM left out, or its E) area lost to the Q) circle), **F-096** (radius before its word,
+or in feet: the Q) circle drawn instead - 500 m as 5.5 km) and **F-097** (ICAO's brackets in the ceiling and the
+text). Not fixed, small: a NOTAM across 180 degrees is drawn across the world; a D) schedule is text only; "F)GND"
+with no space leaves F) and G) in the text; a NOTAMR and the NOTAM it replaces, pasted together, are both kept. KML:
+the app's output read with the JDK's XML reader against KML 2.2's element order (`KmlStandardTest`) - **F-098**
+(ExtendedData before Style); imports shaped like Google Earth Pro, My Maps and QGIS with BOM, CRLF, UTF-16 and
+ISO-8859-1 (`KmlFromOtherProgramsTest`) - **F-099** (spaces after a tuple's commas dropped every point); 5,000 areas
+of 70 points read in 0.3 s and 74 MB, painted in 260 - 280 ms with all in view (proposal I-016); not read: KMZ,
+every part of a MultiGeometry after the first, gx:Track, shared styles (proposal I-015). Radio horizon: the 4/3-earth
+figure within 0.04 % of 4.12 x (root h1 + root h2), the path losses at the textbook's figures; real terrain tiles at
+known places (Galdhopiggen 2,441 m at the point, 2,454 m within 150 m, 2,469 known; Mjosa 123 m; the fjords 0) -
+**F-101** (all ground above 3,276.7 m cut flat there: heights in decimetres in a short; now half-metres). Out at
+sea the tiles give the sea floor (-305 m off Jaeren): question Q-011. DOWNLOAD AREA: one real download, 13 Kartverket
+topo tiles over Aker Brygge, levels 12 - 16, 1.0 s, all whole, drawn from disk with no network - **F-100** (PAUSE had
+no action). Small: the size shown assumes 20 KB a tile, town tiles were 86 - 111 KB. Fast tests after: 2,555 of 2,555.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
