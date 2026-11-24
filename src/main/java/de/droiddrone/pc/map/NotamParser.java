@@ -100,6 +100,11 @@ public final class NotamParser {
             while (id.find()) at = back + id.start();
             Matcher head = HEAD.matcher(before); // its own id, not the one it replaces (which comes after it)
             while (head.find()) at = back + head.start();
+            // ICAO's brackets round a NOTAM, "(A1234/26 NOTAMN ... G) 400FT AGL)": the "(" is this one's, not the end
+            // of the one before
+            int open = at;
+            while (open > 0 && Character.isWhitespace(t.charAt(open - 1))) open--;
+            if (open > 0 && t.charAt(open - 1) == '(') at = open - 1;
             starts.add(at);
         }
         for (int i = 0; i < starts.size(); i++) {
@@ -110,8 +115,12 @@ public final class NotamParser {
         return out;
     }
 
-    /** One NOTAM's block, or null when its area can't be found. */
-    static Notam one(String block) {
+    /**
+     * One NOTAM's block, or null when its area can't be found. Its brackets are not part of any item: the closing
+     * one was read as G)'s ("400FT AGL)"), or E)'s when the NOTAM has no F) and G).
+     */
+    static Notam one(String raw) {
+        String block = raw.startsWith("(") && raw.endsWith(")") ? raw.substring(1, raw.length() - 1).trim() : raw;
         Matcher idm = ID.matcher(block);
         String id = idm.find() ? idm.group(1) : "";
         Matcher head = HEAD.matcher(block);
@@ -143,7 +152,7 @@ public final class NotamParser {
             est = cm.group(2) != null;
         }
         String schedule = group(FIELD_D, block).replaceAll("\\s+", " ").trim();
-        return new Notam(id, ring, start, end, est, lower, upper, e, schedule, block);
+        return new Notam(id, ring, start, end, est, lower, upper, e, schedule, raw);
     }
 
     /** E)'s area: three or more points a polygon; one point and a radius a circle; else null. */

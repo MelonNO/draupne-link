@@ -229,6 +229,38 @@ class AirspaceTest {
         }
     }
 
+    /**
+     * ICAO's brackets round a NOTAM: the closing one was read as part of G) ("GND-400FT AGL)" on the map), or of E)
+     * when there is no G), and the next NOTAM's "(" ended the E) of the one before it.
+     */
+    @Test
+    void aNotamsBracketsAreNotPartOfItsItems() {
+        String text = "(A1301/26 NOTAMN\nQ) ENOR/QRDCA/IV/BO/W/000/040/6012N01107E003\nA) ENOR B) 2611120700 C) 2611121600\n"
+                + "E) DANGER AREA EN D350 ACTIVATED.)\n\n"
+                + "(A1302/26 NOTAMN\nQ) ENOR/QWULW/IV/BO/W/000/010/6000N01100E001\nA) ENOR B) 2611100800 C) PERM\n"
+                + "E) UAS ACTIVITY PSN 600000N 0110000E RADIUS 500M.\nF) GND G) 400FT AGL)\n";
+        List<NotamParser.Notam> n = NotamParser.parse(text);
+        assertEquals(2, n.size());
+        assertEquals("DANGER AREA EN D350 ACTIVATED.", n.get(0).text());
+        assertEquals("FL40", n.get(0).upper());
+        assertEquals("A1302/26", n.get(1).id());
+        assertEquals("400FT AGL", n.get(1).upper());
+        assertEquals("GND-400FT AGL", NotamParser.toAirspace(n.get(1), Instant.parse("2026-11-12T08:00:00Z")).limits());
+        assertTrue(n.get(1).raw().startsWith("(A1302/26") && n.get(1).raw().endsWith(")"), "kept as pasted: " + n.get(1).raw());
+        // read back from the saved file, as it is written, and as the file of an earlier version has it (the "(" at
+        // the end of the NOTAM before)
+        String saved = n.get(0).raw() + "\n\n" + n.get(1).raw() + "\n\n";
+        String older = "A1301/26 NOTAMN\nQ) ENOR/QRDCA/IV/BO/W/000/040/6012N01107E003\nA) ENOR B) 2611120700 C) 2611121600\n"
+                + "E) DANGER AREA EN D350 ACTIVATED.)\n\n(\n\nA1302/26 NOTAMN\nQ) ENOR/QWULW/IV/BO/W/000/010/6000N01100E001\n"
+                + "A) ENOR B) 2611100800 C) PERM\nE) UAS ACTIVITY PSN 600000N 0110000E RADIUS 500M.\nF) GND G) 400FT AGL)\n\n";
+        for (String file : new String[]{saved, older}) {
+            List<NotamParser.Notam> back = NotamParser.parse(file);
+            assertEquals(2, back.size());
+            assertEquals("400FT AGL", back.get(1).upper(), file);
+            assertEquals(48, back.get(1).ring().size());
+        }
+    }
+
     @Test
     void pointsAreReadInTheirForms() {
         assertArrayEquals(new double[]{59 + 55 / 60.0, 10 + 45 / 60.0}, NotamParser.point("5955N01045E"), 1e-9);
