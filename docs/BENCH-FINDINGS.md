@@ -606,6 +606,23 @@ kinds, 8 picture and 10 view sizes while listening to FFmpeg - 102 two-step conv
 findings replayed: the process ended before, runs through now; 5 minutes of the fuzz (seed 1) on the fix: 45,443
 inputs, nothing.
 
+**F-093 - A damaged stream's oversized picture stopped the overwatch cards.** Found 2026-11-24 by the decoder fuzz's
+4-hour run (`fuzz\20261124-100413-seed2`, an error at input 496,635 on the overwatch preview's path, no crash):
+parameter sets of a 640 x 360 stream with a few bits changed made every picture 640 x 196480. The decoder handed it
+out; the overwatch card's copy of it is 479 MB, made eight times a second, and the fuzz's child (512 MB for Java) could
+not make room for it. The app is given a quarter of the PC's memory (2 GB on an 8 GB PC): where the card's copy did not
+fit, the overwatch hub's thread ended, and every overwatch card stood still - no pictures, alerts or clips - until the
+app was restarted; the live video, the link and the sticks went on. With more memory the copies fit but came eight a
+second. The OSD recording stops only its own file; the live view, the STANAG feed and the clip player convert to sizes
+of their own. What a pilot could have seen: the overwatch cards standing still after one phone's preview went bad. Not
+seen in flight. **Mended (PC):** every decoder tells FFmpeg the most pixels a picture may have, 4096 x 4096 (the phone
+sends 1920 x 1080 at most); a bigger one is left out before any room is made for it, the log says so once ("Video: a
+picture of 640 x 196480 left out - larger than any phone sends"), and the stream goes on at its next good picture.
+Tests: `OversizedPictureTest` (live, one-thread and GPU decoders: no picture, one log line, then the next good key
+frame - red before), `OverwatchVideoTest` (the same through the overwatch hub - before, it ran out of room making the
+card's picture). The fuzz's input replayed: runs through, 108 MB at most (693 before); 5 minutes of the fuzz (seed 2)
+on the fix: 44,494 inputs, nothing.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
