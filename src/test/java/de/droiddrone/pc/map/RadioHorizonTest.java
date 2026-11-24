@@ -164,6 +164,31 @@ class RadioHorizonTest {
         assertTrue(Double.isNaN(data.heightM(Mercator.lat(py, z), Mercator.lon(px + 400, z))), "no tile there: unknown");
     }
 
+    /**
+     * The terrain kept its heights in decimetres in a short: all ground above 3 276.7 m read as 3 276.7 m (Terrarium's
+     * own tiles at Kleiner Matterhorn, 3 883 m, Mont Blanc and Everest all did). Now from the deepest sea to Everest.
+     */
+    @Test
+    void theTerrainKeepsHighMountainsAndDeepWater() {
+        RadioHorizon.Data data = new RadioHorizon.Data(LAT, LON, true);
+        int z = RadioHorizon.TERRAIN_ZOOM;
+        int tx = (int) Math.floor(Mercator.x(LON, z) / Mercator.TILE), ty = (int) Math.floor(Mercator.y(LAT, z) / Mercator.TILE);
+        double[] heights = {8848.86, 4808.7, 3883.0, 3276.8, 2469.0, 0, -430.5, -10_994.0};
+        BufferedImage img = new BufferedImage(256, 256, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 256; y++) {
+            for (int x = 0; x < 256; x++) {
+                double v = heights[x / 32] + 32768; // Terrarium: (R * 256 + G + B / 256) - 32768
+                int r = (int) Math.floor(v / 256), g = (int) Math.floor(v - r * 256), b = (int) Math.round((v - Math.floor(v)) * 256);
+                img.setRGB(x, y, r << 16 | g << 8 | Math.min(255, b));
+            }
+        }
+        data.putTerrain(tx, ty, img);
+        for (int i = 0; i < heights.length; i++) {
+            double px = tx * 256 + i * 32 + 16.5, py = ty * 256 + 128.5; // a pixel's centre inside each band
+            assertEquals(heights[i], data.heightM(Mercator.lat(py, z), Mercator.lon(px, z)), 0.3, "band " + i);
+        }
+    }
+
     @Test
     void aForestTileKeepsItsWoodUnderTheContourLinesAndNames() {
         RadioHorizon.Data data = new RadioHorizon.Data(LAT, LON, false);

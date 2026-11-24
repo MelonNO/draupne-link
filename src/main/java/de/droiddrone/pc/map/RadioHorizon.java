@@ -418,7 +418,13 @@ public final class RadioHorizon {
         final double lat, lon;
         final int forestZoom;
         final boolean osm;
-        private final Map<Long, short[]> terrain = new ConcurrentHashMap<>(); // decimetres
+        /**
+         * The heights are kept in half-metres: -16 383 to 16 383 m in a short. In decimetres (before) a short ends at
+         * 3 276.7 m, and all ground above it - the Alps' high ground, Kleiner Matterhorn's 3 883 m, Mont Blanc - was
+         * cut flat there.
+         */
+        private static final double PER_M = 2;
+        private final Map<Long, short[]> terrain = new ConcurrentHashMap<>();
         private final Map<Long, long[]> forest = new ConcurrentHashMap<>();
 
         Data(double lat, double lon, boolean osm) {
@@ -442,14 +448,14 @@ public final class RadioHorizon {
 
         void putTerrain(int x, int y, BufferedImage img) {
             int w = img.getWidth(), h = img.getHeight();
-            short[] dm = new short[Mercator.TILE * Mercator.TILE];
+            short[] heights = new short[Mercator.TILE * Mercator.TILE];
             for (int py = 0; py < Mercator.TILE; py++) {
                 for (int px = 0; px < Mercator.TILE; px++) {
                     double m = terrariumHeight(img.getRGB(px * w / Mercator.TILE, py * h / Mercator.TILE));
-                    dm[py * Mercator.TILE + px] = (short) Math.max(-32767, Math.min(32767, Math.round(m * 10)));
+                    heights[py * Mercator.TILE + px] = (short) Math.max(-32767, Math.min(32767, Math.round(m * PER_M)));
                 }
             }
-            terrain.put(key(x, y), dm);
+            terrain.put(key(x, y), heights);
         }
 
         void putForest(int x, int y, BufferedImage img) {
@@ -478,7 +484,7 @@ public final class RadioHorizon {
         private double pixel(int wx, int wy) {
             short[] t = terrain.get(key(Math.floorDiv(wx, Mercator.TILE), Math.floorDiv(wy, Mercator.TILE)));
             if (t == null) return Double.NaN;
-            return t[Math.floorMod(wy, Mercator.TILE) * Mercator.TILE + Math.floorMod(wx, Mercator.TILE)] / 10.0;
+            return t[Math.floorMod(wy, Mercator.TILE) * Mercator.TILE + Math.floorMod(wx, Mercator.TILE)] / PER_M;
         }
 
         @Override
