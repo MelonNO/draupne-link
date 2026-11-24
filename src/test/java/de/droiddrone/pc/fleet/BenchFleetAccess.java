@@ -46,4 +46,19 @@ public final class BenchFleetAccess {
     public static void stop(VirtualDrone d) {
         d.stop();
     }
+
+    /**
+     * How many PCs the made-up drone's book of those that asked its name holds now - the phone's own book
+     * (KnownPcs, capped at KnownPcs.BOOK_MAX); -1 when it cannot be read.
+     */
+    public static int askers(VirtualDrone d) {
+        try {
+            java.lang.reflect.Field f = VirtualDrone.class.getDeclaredField("namedBy");
+            f.setAccessible(true);
+            Object book = f.get(d);
+            return book instanceof de.droiddrone.common.KnownPcs<?> k ? k.size() : -1;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return -1;
+        }
+    }
 }

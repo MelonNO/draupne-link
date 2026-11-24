@@ -17,6 +17,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 hw -Tests *HwNetworkSwitch* -Quick   the phone's own network switched under the link (Wi-Fi off / on, airplane 10 s)
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
   .\bench.ps1 phone -Tests *PhoneNight* -Hours 8 -Sleep both   the phone's night with OVERWATCH too (-Sleep deep | overwatch | both)
+  .\bench.ps1 phone -Tests *PhoneHardening* -Flood 30   the phone app's hardening checks, the flood for 30 min (without -Flood: a 3-min try; emulator too)
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.
 The real mouse and screen are used while no real drone is armed (-Mode quiet: never; -Mode desktop: always).
@@ -46,7 +47,10 @@ param(
     # the sleep of the phone's night rounds (*PhoneNight*, BENCH_SLEEP): deep - DEEP SLEEP every round, as always;
     # overwatch - OVERWATCH every round; both - the two by turns, OVERWATCH first
     [ValidateSet('deep', 'overwatch', 'both')]
-    [string]$Sleep = 'deep'
+    [string]$Sleep = 'deep',
+    # the flood of the phone app's hardening checks (*PhoneHardening*, BENCH_FLOOD_MIN): its minutes - 30 for the whole
+    # check; left out, a 3-minute try
+    [double]$Flood = 0
 )
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
@@ -74,6 +78,13 @@ if ($javaRelease -and (Test-Path $javaRelease) -and ((Get-Content $javaRelease -
 }
 if ($Run -eq 'quick' -or $Quick) { $env:BENCH_QUICK = 'true' } else { $env:BENCH_QUICK = 'false' }
 $env:BENCH_SLEEP = $Sleep   # always set: a word left in this window by an earlier run must not carry over
+if ($Flood -gt 0) {
+    $env:BENCH_FLOOD_MIN = [string]$Flood
+    # a scenario's own time limit: the flood, the minutes before and after it, the phone's start
+    $env:BENCH_TIMEOUT = ([string][math]::Ceiling($Flood + 25)) + ' m'
+} else {
+    $env:BENCH_FLOOD_MIN = ''   # as -Sleep: nothing of an earlier run's carries over (gone: the scenario's own 3-minute try)
+}
 if ($Scale) { $env:BENCH_SCALE = $Scale }   # Windows' text scaling for the app under test: 1, 1.25, 1.5, 2
 if ($Screen) { $env:BENCH_SIZE = $Screen }   # the app on a screen this small, e.g. 1093x584 (a 1366 x 768 laptop at 125 %): every scenario
 # everything started from here inherits it: a real drone's link on this PC goes first

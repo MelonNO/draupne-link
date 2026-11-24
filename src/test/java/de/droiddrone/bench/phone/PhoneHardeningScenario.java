@@ -1,21 +1,37 @@
 package de.droiddrone.bench.phone;
 
+import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.Film;
+import de.droiddrone.bench.Hardware;
+import de.droiddrone.bench.LinkBench;
 import de.droiddrone.bench.PhoneRig;
 import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Sandbox;
 import de.droiddrone.bench.Ui;
+import de.droiddrone.bench.Watch;
+import de.droiddrone.common.KnownPcs;
 import de.droiddrone.common.TailscaleOnly;
+import de.droiddrone.pc.ControlLink;
+import de.droiddrone.pc.FcTelemetry;
+import de.droiddrone.pc.MonoClock;
+import de.droiddrone.pc.Names;
+import de.droiddrone.pc.Pacer;
+import de.droiddrone.pc.PcConfig;
+import de.droiddrone.pc.fleet.BenchFleetAccess;
+import de.droiddrone.testing.Wire;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -42,6 +58,16 @@ import static org.junit.jupiter.api.Assertions.fail;
  * Android's backup holds or queues of it (nothing), and the gallery's index of videos, pictures and sound (nothing of
  * DRAUPNE's: its recordings and clips lie in folders the index leaves out). Only the lines that name the app are kept
  * of what Android says; of the gallery, only the count of what it lists and the entries of DRAUPNE's.</li>
+ * <li><b>Floods</b> ({@link #aFloodOfNameQueriesHoldsNothingUp}): the name query every DRAUPNE Link's scan sends, with
+ * the link key, again and again for {@code -Flood} minutes ({@link #floodMinutes}: BS6 asks for 30; a 3-minute try
+ * without it) - at a made-up drone from {@value #DRONE_SOURCES} addresses of this PC's own loopback, and, where the run
+ * has a phone, at the phone from one address of this PC (over Tailscale to a real phone). Each held to so many bytes a
+ * second, sent and answered together - the phone's is our own phone's mobile data - and the totals go into the film.
+ * A minute before, the flood, half a minute after; the PC's real link flies both all the while, its sticks hands off
+ * (throttle down, ARM off) to the phone, with no picture asked of it. What must hold: the sticks' age as before (the
+ * phone without a flight controller: the gap between stick packets arriving there), the link never lost, the memory
+ * flat (the made-up drone's side: this PC's heap; the phone: Android's count of the app's), the threads capped, the
+ * made-up drone's book of askers at its cap, the phone app's process the same.</li>
  * </ul>
  * On the emulator and on the real phone (the task benchHwPhone). On a real phone nothing is cleared, granted or
  * stopped here: the app on the phone is opened as a hand opens it ({@code am start}) and read.
@@ -430,5 +456,360 @@ class PhoneHardeningScenario {
                 released.close();
             }
         }
+    }
+
+    // ------------------------------------------------------------------ BS6, a flood of name queries
+
+    /** What the flood at the phone takes of the network, sent and answered together: it is our own phone, on mobile data. */
+    static final long PHONE_BYTES_PER_SECOND = 4_000;
+    /** At the made-up drone, on this PC's own loopback. */
+    static final long DRONE_BYTES_PER_SECOND = 200_000;
+    /** The made-up drone is asked from this many addresses: four times what its book of askers holds. */
+    static final int DRONE_SOURCES = 4 * KnownPcs.BOOK_MAX;
+    /** The sticks to the phone, a second, and their values: hands off - throttle down, ARM off - as a radio at rest. */
+    static final int PHONE_STICK_HZ = 50;
+    private static final short[] HANDS_OFF = {1500, 1500, 1500, 1000, 1000, 1500, 1000, 1000};
+    static final long BEFORE_MS = 60_000, AFTER_MS = 30_000, PC_EVERY_MS = 15_000, PHONE_EVERY_MS = 30_000;
+    /** What the sticks' 95th percentile may rise by beyond half again of before's: on this PC's loopback, over the phone's network. */
+    static final long DRONE_STICK_SLACK_MS = 30, PHONE_STICK_SLACK_MS = 100;
+    /** What a memory may grow by over the flood (a collection's saw, a cache filled once), MB; threads more than before. */
+    static final long GROWTH_MB = 32, PC_MORE_THREADS = 4, PHONE_MORE_THREADS = 8;
+    /** Tailscale's own wrapping of a datagram, about (WireGuard's head, its UDP and IP heads), bytes: for the film's estimate. */
+    static final int TAILSCALE_WRAP = 60;
+
+    /** The flood's minutes: bench.flood.min (BENCH_FLOOD_MIN, bench.ps1 -Flood) - BS6 asks for 30; left out, a 3-minute try. */
+    static double floodMinutes() {
+        try {
+            double m = Double.parseDouble(System.getProperty("bench.flood.min", "").trim());
+            return m > 0 ? m : 3;
+        } catch (NumberFormatException e) {
+            return 3;
+        }
+    }
+
+    /** The sticks' age as the PC's screen shows it (OsdDataBuilder): the phone's word on its last write to the flight controller, aged since; -1 not known. */
+    static long sticksAge(ControlLink link) {
+        FcTelemetry.PhoneState ps = link.getTelemetry().getPhoneState();
+        long now = MonoClock.ms();
+        if (ps == null || now - ps.receivedAt() > 2500 || ps.rcWriteAgeMs() < 0) return -1;
+        return ps.rcWriteAgeMs() + (now - ps.receivedAt());
+    }
+
+    /** The PC's link to the phone for the flood: no picture asked (no video on the phone's network), hands-off sticks, every byte through the wire counted. */
+    private static final class LinkToThePhone implements AutoCloseable {
+        final Wire wire;
+        final ControlLink link;
+        final AtomicLong bytes = new AtomicLong(), datagrams = new AtomicLong();
+        private volatile boolean running = true;
+        private final Thread sticks;
+
+        LinkToThePhone(InetSocketAddress at, String key) throws IOException {
+            wire = new Wire(at.getAddress(), at.getPort());
+            wire.rule((toPhone, d, len) -> {
+                bytes.addAndGet(len + Flood.HEAD);
+                datagrams.incrementAndGet();
+                return 0;
+            });
+            PcConfig config = PcConfig.defaults();
+            config.set("key", key);
+            config.set("rcRate", Integer.toString(PHONE_STICK_HZ));
+            link = new ControlLink(config, InetAddress.getLoopbackAddress(), wire.port(), 0);
+            link.setEvents(line -> { });
+            link.start();
+            sticks = new Thread(() -> {
+                Pacer pacer = new Pacer(PHONE_STICK_HZ);
+                while (running) {
+                    link.sendRc(HANDS_OFF.clone());
+                    try {
+                        pacer.await();
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }, "benchPhoneSticks");
+            sticks.setDaemon(true);
+            sticks.start();
+        }
+
+        boolean ready() {
+            return link.getState() == ControlLink.State.READY;
+        }
+
+        @Override
+        public void close() {
+            running = false;
+            sticks.interrupt();
+            link.close();
+            wire.close();
+        }
+    }
+
+    /** The sticks' figures and the links' losses, by phase: a stick age five times a second, the phones' own gap between stick packets once a second. */
+    private static final class StickSampler implements AutoCloseable {
+        volatile FloodWatch.Phase phase = FloodWatch.Phase.BEFORE;
+        final FloodWatch.Series droneAge = new FloodWatch.Series("the made-up drone's sticks age"), droneGap = new FloodWatch.Series("the longest gap between stick packets at the made-up drone"),
+                phoneAge = new FloodWatch.Series("the phone's sticks age"), phoneGap = new FloodWatch.Series("the longest gap between stick packets at the phone"),
+                phoneLag = new FloodWatch.Series("the phone's stick lag");
+        final java.util.EnumMap<FloodWatch.Phase, AtomicLong> droneLost = new java.util.EnumMap<>(FloodWatch.Phase.class),
+                phoneLost = new java.util.EnumMap<>(FloodWatch.Phase.class);
+        private final LinkBench drone;
+        private final LinkToThePhone phone;
+        private final Thread thread;
+        private volatile boolean running = true;
+
+        StickSampler(LinkBench drone, LinkToThePhone phone) {
+            this.drone = drone;
+            this.phone = phone;
+            for (FloodWatch.Phase p : FloodWatch.Phase.values()) {
+                droneLost.put(p, new AtomicLong());
+                phoneLost.put(p, new AtomicLong());
+            }
+            thread = new Thread(this::run, "benchStickSampler");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        private void run() {
+            boolean droneWas = true, phoneWas = true;
+            for (long tick = 0; running; tick++) {
+                FloodWatch.Phase p = phase;
+                droneAge.add(p, sticksAge(drone.link));
+                boolean d = drone.ready();
+                if (droneWas && !d) droneLost.get(p).incrementAndGet();
+                droneWas = d;
+                if (phone != null) {
+                    phoneAge.add(p, sticksAge(phone.link));
+                    boolean r = phone.ready();
+                    if (phoneWas && !r) phoneLost.get(p).incrementAndGet();
+                    phoneWas = r;
+                }
+                if (tick % 5 == 4) {
+                    FcTelemetry.PhoneLink g = drone.link.getTelemetry().takePhoneLink();
+                    if (g != null) droneGap.add(p, g.rcInGapMs());
+                    if (phone != null) {
+                        FcTelemetry.PhoneLink h = phone.link.getTelemetry().takePhoneLink();
+                        if (h != null) phoneGap.add(p, h.rcInGapMs());
+                        FcTelemetry.PhoneRcLag lag = phone.link.getTelemetry().getPhoneRcLag();
+                        if (lag != null && lag.maxLagMs() >= 0) phoneLag.add(p, lag.maxLagMs());
+                    }
+                }
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }
+
+        @Override
+        public void close() {
+            running = false;
+            thread.interrupt();
+        }
+    }
+
+    /** The slow figures, by phase: this PC's heap and threads, the made-up drone's book; the phone app's memory and threads. */
+    private static final class Figures {
+        final FloodWatch.Series pcHeap = new FloodWatch.Series("this PC's heap after a collection"), pcThreads = new FloodWatch.Series("this PC's threads"),
+                book = new FloodWatch.Series("the made-up drone's book of askers"), phonePss = new FloodWatch.Series("the phone app's memory (PSS)"),
+                phoneHeap = new FloodWatch.Series("its Java heap"), phoneThreads = new FloodWatch.Series("its threads");
+        final List<String> phonePids = new ArrayList<>();
+    }
+
+    private static long mb(long kb) {
+        return kb < 0 ? -1 : kb / 1024;
+    }
+
+    /**
+     * So long in one phase, the slow figures taken as they fall due - the first one interval into it: a reading at the
+     * very start of the flood is one from before it (on loopback this PC's heap rose by some 20 MB in the flood's first
+     * seconds, then lay flat - 2026-11-24), and the memory's verdict compares the flood's first third with its last.
+     */
+    private static void watch(FloodWatch.Phase p, long ms, Figures f, LinkBench drone, PhoneRig phone, String app, String pid) {
+        long start = System.currentTimeMillis(), end = start + ms, nextPc = start + PC_EVERY_MS, nextPhone = start + PHONE_EVERY_MS;
+        while (System.currentTimeMillis() < end) {
+            long now = System.currentTimeMillis();
+            if (now >= nextPc) {
+                nextPc = now + PC_EVERY_MS;
+                f.pcHeap.add(p, Watch.usedMb());
+                f.pcThreads.add(p, Thread.activeCount());
+                f.book.add(p, BenchFleetAccess.askers(drone.drone));
+            }
+            if (phone != null && !pid.isEmpty() && now >= nextPhone) {
+                nextPhone = now + PHONE_EVERY_MS;
+                String meminfo = phone.shell("dumpsys meminfo " + app);
+                f.phonePss.add(p, mb(FloodWatch.pssKb(meminfo)));
+                f.phoneHeap.add(p, mb(FloodWatch.javaHeapKb(meminfo)));
+                f.phoneThreads.add(p, Sockets.threads(phone.shell("cat /proc/" + pid + "/status")));
+                String seen = Sockets.firstPid(phone.pid());
+                if (!seen.equals(pid) && !f.phonePids.contains(seen)) f.phonePids.add(seen.isEmpty() ? "none" : seen);
+            }
+            Ui.pause(1000);
+        }
+    }
+
+    /** The phone's link key: a real phone's from the hardware file where it says one; else the one a phone has from its first start. */
+    private static String phoneKey(PhoneRig phone) throws IOException {
+        if (phone.device() && Hardware.present()) {
+            String k = Hardware.load().phoneKey();
+            if (!k.isEmpty()) return k;
+        }
+        return PcConfig.defaults().getKey();
+    }
+
+    /**
+     * BS6: the name queries of a PC's scan, flooded at a made-up drone from many addresses and at the phone from one, for
+     * the run's minutes; the sticks, the links, the memory and the threads watched before, during and after.
+     */
+    @Test
+    void aFloodOfNameQueriesHoldsNothingUp() throws Exception {
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        film = film("phone-flood");
+        double minutes = floodMinutes();
+        PhoneRig phone = target.setUp() ? new PhoneRig(film, target) : null;
+        LinkBench drone = null;
+        LinkToThePhone toPhone = null;
+        Flood atDrone = null, atPhone = null;
+        StickSampler sticks = null;
+        try {
+            say("The flood: " + minutes + " min" + (minutes < 30 ? " - A TRY: BS6 asks for 30 (bench.ps1 -Flood 30)" : "") + "; a minute before it, half a minute after.");
+            // ---- the made-up drone, flown by the PC's real link at the app's own stick rate
+            drone = new LinkBench(BadLink.clean(66)).start(0);
+            LinkBench d = drone;
+            if (!LinkBench.within(40_000, d::ready)) throw new AssertionError("The PC's link to the made-up drone did not come up within 40 s");
+            // ---- the phone, where the run has one: its app open, the PC's link to it
+            String app = target.app(), pid = "", stamp = "", key = "";
+            InetSocketAddress at = null;
+            if (phone == null) {
+                say("No phone in this run (no emulator set up on this PC): the made-up drone alone.");
+            } else {
+                phone.ensureRunning();
+                openTheApp(phone);
+                at = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its Tailscale address
+                key = phoneKey(phone);
+                toPhone = new LinkToThePhone(at, key);
+                LinkToThePhone l = toPhone;
+                // a real phone may be found asleep from an earlier run: back at its next check, as PILOT UAV has it back
+                boolean up = LinkBench.within(phone.device() ? 150_000 : 60_000, l::ready);
+                check(up, "the PC's link to the phone is READY (" + app + " " + phone.version() + "; no picture asked of it: its sticks and its telemetry alone)");
+                if (up) {
+                    pid = Sockets.firstPid(phone.pid());
+                    stamp = phone.now();
+                } else {
+                    toPhone.close();
+                    toPhone = null;
+                    say("The flood goes to the made-up drone alone: the phone was not reached.");
+                }
+            }
+            sticks = new StickSampler(drone, toPhone);
+            Figures f = new Figures();
+            PhoneRig onPhone = toPhone == null ? null : phone;
+
+            watch(FloodWatch.Phase.BEFORE, BEFORE_MS, f, drone, onPhone, app, pid);
+
+            atDrone = new Flood("made-up-drone", Names.query(drone.config.getKey()), new InetSocketAddress(InetAddress.getLoopbackAddress(), drone.drone.port()),
+                    Flood.loopbackSources(DRONE_SOURCES), DRONE_BYTES_PER_SECOND);
+            // one source: the emulator's forwarded port on this PC's loopback, from loopback; a real phone from this PC's every
+            // address (as the bench's wire speaks to it), the system choosing the way - Tailscale's
+            if (toPhone != null) {
+                List<InetAddress> one = at.getAddress().isLoopbackAddress() ? List.of(InetAddress.getLoopbackAddress()) : List.of();
+                atPhone = new Flood("phone", Names.query(key), at, one, PHONE_BYTES_PER_SECOND);
+            }
+            sticks.phase = FloodWatch.Phase.DURING;
+            atDrone.start();
+            if (atPhone != null) atPhone.start();
+            watch(FloodWatch.Phase.DURING, Math.round(minutes * 60_000), f, drone, onPhone, app, pid);
+            atDrone.close();
+            if (atPhone != null) atPhone.close();
+            sticks.phase = FloodWatch.Phase.AFTER;
+            watch(FloodWatch.Phase.AFTER, AFTER_MS, f, drone, onPhone, app, pid);
+            sticks.close();
+
+            judgeTheMadeUpDrone(atDrone, sticks, f, d);
+            if (atPhone != null) judgeThePhone(phone, atPhone, toPhone, sticks, f, pid, stamp);
+        } catch (Throwable t) {
+            stopped(t, phone);
+        } finally {
+            for (AutoCloseable c : new AutoCloseable[]{sticks, atDrone, atPhone, toPhone, drone}) {
+                try {
+                    if (c != null) c.close();
+                } catch (Exception ignored) {
+                }
+            }
+            finish("phone-flood", phone);
+        }
+    }
+
+    private void judgeTheMadeUpDrone(Flood flood, StickSampler sticks, Figures f, LinkBench drone) {
+        FloodWatch.Phase during = FloodWatch.Phase.DURING, before = FloodWatch.Phase.BEFORE;
+        long answers = flood.answers.get();
+        say("AT THE MADE-UP DRONE: " + flood.sent.get() + " queries from " + flood.sources() + " addresses of this PC's loopback"
+                + (flood.refused() > 0 ? " (" + flood.refused() + " could not be had: " + flood.refusedSaid() + ")" : "") + ", " + answers + " answers; "
+                + FloodWatch.bytes(flood.bytes()) + " both ways, " + DRONE_BYTES_PER_SECOND / 1000 + " kB/s at most.");
+        check(answers > 0, "the made-up drone took the keyed queries and answered them (" + answers + ")");
+        check(flood.sources() > KnownPcs.BOOK_MAX, "they came from more addresses (" + flood.sources() + ") than its book of askers holds (" + KnownPcs.BOOK_MAX + ")");
+        long book = FloodWatch.percentile(f.book.of(during), 100);
+        check(book >= 0 && book <= KnownPcs.BOOK_MAX, "its book of the PCs that asked its name held " + KnownPcs.BOOK_MAX + " at most: " + book + " at the most");
+        say(sticks.droneAge.said("ms") + ".");
+        say(sticks.droneGap.said("ms") + ".");
+        check(FloodWatch.unchanged(sticks.droneAge.of(before), sticks.droneAge.of(during), DRONE_STICK_SLACK_MS), "its sticks age during the flood as before it (95th "
+                + "percentile " + FloodWatch.percentile(sticks.droneAge.of(during), 95) + " ms, before " + FloodWatch.percentile(sticks.droneAge.of(before), 95)
+                + " ms; half again and " + DRONE_STICK_SLACK_MS + " ms let pass)");
+        check(sticks.droneLost.get(during).get() == 0, "the PC's link to it was never lost during the flood (" + sticks.droneLost.get(during).get() + " time(s); "
+                + drone.linkLosses.get() + " in the whole run)");
+        say(f.pcHeap.said("MB") + ".");
+        say(f.pcThreads.said("") + ".");
+        long grew = FloodWatch.growth(f.pcHeap.of(during));
+        check(grew <= GROWTH_MB, "this PC's memory - the made-up drone's side - flat over the flood: " + grew + " MB from its first third to its last (" + GROWTH_MB + " let pass)");
+        check(FloodWatch.capped(f.pcThreads.of(before), f.pcThreads.of(during), PC_MORE_THREADS), "and its threads capped: " + FloodWatch.percentile(f.pcThreads.of(before), 100)
+                + " before, " + FloodWatch.percentile(f.pcThreads.of(during), 100) + " at the most during it (the flood's own one and " + PC_MORE_THREADS + " more let pass)");
+    }
+
+    private void judgeThePhone(PhoneRig phone, Flood flood, LinkToThePhone link, StickSampler sticks, Figures f, String pid, String stamp) throws IOException {
+        FloodWatch.Phase during = FloodWatch.Phase.DURING, before = FloodWatch.Phase.BEFORE;
+        long answers = flood.answers.get();
+        say("AT THE PHONE: " + flood.sent.get() + " queries from ONE address of this PC (" + (phone.device() ? "its Tailscale address: Tailscale carries them"
+                : "the emulator sees them all come from its host") + "), " + answers + " answers.");
+        check(answers > 0, "the phone took the keyed queries and answered them (" + answers + ")" + (answers == 0 ? " - with none answered the flood proves nothing" : ""));
+        String now = Sockets.firstPid(phone.pid());
+        check(now.equals(pid) && f.phonePids.isEmpty(), "the phone app's process the same throughout (" + pid + (f.phonePids.isEmpty() ? "" : ", then " + f.phonePids)
+                + (now.equals(pid) ? "" : ", now " + (now.isEmpty() ? "none" : now)) + ")");
+        String log = phone.shell("logcat -d -v time -T '" + stamp + "' -s " + de.droiddrone.bench.BenchControl.LOG_TAG + ":I AndroidRuntime:E");
+        Files.writeString(film.dir().resolve("phone-log.txt"), log, StandardCharsets.UTF_8);
+        // the app's own crash guard's word, or Android's crash handler naming the app (that tag speaks of every app on the phone)
+        boolean ended = log.contains(PhoneWords.FATAL) || log.contains("Process: " + phone.app() + ",");
+        check(!ended, "no error ended the phone app (its log since the flood's minute before)");
+        List<String> dropped = log.lines().filter(l -> l.contains(PhoneWords.OLDEST_DROPPED)).toList();
+        say(dropped.isEmpty() ? "The phone's capped queues and books never ran over (no line of theirs in its log)."
+                : "The phone's capped queues and books said " + dropped.size() + " time(s) that they dropped their oldest, as they are made to: " + dropped.get(0).trim());
+        say(f.phonePss.said("MB") + ".");
+        say(f.phoneHeap.said("MB") + ".");
+        say(f.phoneThreads.said("") + ".");
+        long grew = FloodWatch.growth(f.phonePss.of(during));
+        check(f.phonePss.of(during).size() >= 2 && grew <= GROWTH_MB, "the phone app's memory flat over the flood: " + grew + " MB from its first third to its last ("
+                + f.phonePss.of(during).size() + " readings; " + GROWTH_MB + " let pass)");
+        check(FloodWatch.capped(f.phoneThreads.of(before), f.phoneThreads.of(during), PHONE_MORE_THREADS), "and its threads capped: "
+                + FloodWatch.percentile(f.phoneThreads.of(before), 100) + " before, " + FloodWatch.percentile(f.phoneThreads.of(during), 100) + " at the most during it ("
+                + PHONE_MORE_THREADS + " more let pass)");
+        say(sticks.phoneAge.said("ms") + ".");
+        say(sticks.phoneGap.said("ms") + ".");
+        say(sticks.phoneLag.said("ms") + ".");
+        if (!sticks.phoneAge.of(before).isEmpty() && !sticks.phoneAge.of(during).isEmpty()) {
+            check(FloodWatch.unchanged(sticks.phoneAge.of(before), sticks.phoneAge.of(during), PHONE_STICK_SLACK_MS), "the phone's sticks age (its writes to its flight "
+                    + "controller) during the flood as before it: 95th percentile " + FloodWatch.percentile(sticks.phoneAge.of(during), 95) + " ms, before "
+                    + FloodWatch.percentile(sticks.phoneAge.of(before), 95) + " ms (half again and " + PHONE_STICK_SLACK_MS + " ms let pass)");
+        } else {
+            say("The phone has no flight controller here: its sticks age is not known. The longest gap between stick packets arriving at the phone stands in for it.");
+            check(FloodWatch.unchanged(sticks.phoneGap.of(before), sticks.phoneGap.of(during), PHONE_STICK_SLACK_MS), "the gap between stick packets arriving at the phone "
+                    + "during the flood as before it: 95th percentile " + FloodWatch.percentile(sticks.phoneGap.of(during), 95) + " ms, before "
+                    + FloodWatch.percentile(sticks.phoneGap.of(before), 95) + " ms (" + sticks.phoneGap.of(during).size() + " readings; half again and "
+                    + PHONE_STICK_SLACK_MS + " ms let pass)");
+        }
+        check(sticks.phoneLost.get(during).get() == 0, "the PC's link to the phone was never lost during the flood (" + sticks.phoneLost.get(during).get() + " time(s))");
+        long wrap = phone.device() ? (flood.sent.get() + flood.answers.get() + link.datagrams.get()) * TAILSCALE_WRAP : 0;
+        say("WHAT THE RUN TOOK OF THE PHONE'S NETWORK: the flood " + FloodWatch.bytes(flood.bytes()) + " both ways (" + PHONE_BYTES_PER_SECOND / 1000
+                + " kB/s at most), the link " + FloodWatch.bytes(link.bytes.get()) + " (sticks " + PHONE_STICK_HZ + " a second, the phone's telemetry, no picture) - "
+                + "IP and UDP heads counted" + (phone.device() ? "; Tailscale's own wrapping adds about " + FloodWatch.bytes(wrap) + " to that, some "
+                + FloodWatch.bytes(flood.bytes() + link.bytes.get() + wrap) + " in all" : "") + ".");
     }
 }
