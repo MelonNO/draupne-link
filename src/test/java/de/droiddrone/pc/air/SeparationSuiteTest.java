@@ -509,17 +509,17 @@ class SeparationSuiteTest {
     }
 
     /**
-     * FINDING (tag finding, not fixed): the random cases, then the PC gone for good - every follower out on its lane at
-     * once with whatever plans the overlapping failures left (drones cut off earlier with older plans, GNSS lost for the
-     * group and landing column by column, reserves on their way). 2026-11-24: seeds 7, 9, 154 and 180 of 1-12 and 100-189
-     * lose separation (7-9 m sideways and in height) a few minutes after the PC went. The plans of the drones cut off
-     * before it went are not proven with the later set (only kept clear while the PC lives).
+     * The random cases, then the PC gone for good - every follower out on its lane at once with whatever plans the
+     * overlapping failures left (drones cut off earlier with older plans, GNSS lost for the group and landing column by
+     * column, reserves on their way), nobody left to correct anything. Seeds 7, 9, 154 and 180 lost separation (7-9 m
+     * sideways and in height) a few minutes after the PC went, until every set of plans was proven with the plans the
+     * drones already cut off were flying (ExitPlanner.Hanging), and with the old leads' ways home (seed 124: an old lead
+     * came down on its point as a follower crossed it). Half of these seeds end with the PC gone (by seed).
      */
-    @Tag("finding")
     @Test
     void randomCasesThenThePcGoes() {
         List<String> lost = new ArrayList<>();
-        for (long seed : new long[]{7, 9, 154, 180}) {
+        for (long seed : new long[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 124, 154, 180}) {
             try {
                 randomCase(seed, seed < 100 ? 300 : 600, true);
             } catch (AssertionError e) {
@@ -527,6 +527,23 @@ class SeparationSuiteTest {
             }
         }
         assertTrue(lost.isEmpty(), lost.size() + " lost separation:\n" + String.join("\n", lost));
+    }
+
+    /** As {@link #randomCasesNightly}, each case ending with the PC gone for good where its seed says so. */
+    @Tag("night")
+    @Test
+    void randomCasesThenThePcGoesNightly() {
+        String env = System.getenv("AIR_SEEDS");
+        int n = env != null && env.matches("[0-9]+") ? Integer.parseInt(env) : 30;
+        List<String> lost = new ArrayList<>();
+        for (long seed = 100; seed < 100 + n; seed++) {
+            try {
+                randomCase(seed, 600, true);
+            } catch (AssertionError e) {
+                lost.add(String.valueOf(e.getMessage()).split("\n")[0]);
+            }
+        }
+        assertTrue(lost.isEmpty(), lost.size() + " of " + n + " lost separation:\n" + String.join("\n", lost));
     }
 
     /**
