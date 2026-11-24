@@ -320,6 +320,42 @@ class TransportRobustnessTest {
         }
     }
 
+    /**
+     * F-111, found by the protocol fuzz (2026-11-24): a packet handed on was remembered in the slot of its number's low
+     * byte. When recoverCounter started the numbering over at a number 256 apart (4096 here, after other packets under
+     * old numbers), that packet took #0's slot: the far side's resends of #0 counted again, and the ninth started the
+     * buffer over at 0 and handed #0 on a second time. The last 256 packets handed on are remembered in the order taken
+     * now, whatever their numbers.
+     */
+    @Test
+    void aPacketTakenBeforeAStartOverIsStillKnownAfterANumber256ApartIsTaken() throws Exception {
+        for (boolean server : new boolean[]{true, false}) {
+            try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
+                String side = server ? "the phone's buffer: " : "the PC's buffer: ";
+                AtomicLong clock = new AtomicLong();
+                ReceiverBuffer b = server ? connectedServer(socket, clock) : connectedClient(socket, clock);
+                tick(b, clock, 1000); // sparse traffic: the buffer at MIN_BUFFER_SIZE, the ninth starts it over
+                b.addPacket(numbered(UdpCommon.FcInfo, 0));
+                b.addPacket(numbered(UdpCommon.FcInfo, 1));
+                assertEquals(2, drain(b), side + "0 and 1 taken");
+                for (int n = 0; n < 8; n++) { // other packets under #1: they count
+                    b.addPacket(numbered(UdpCommon.BoxNames, 1));
+                    assertEquals(0, drain(b), side + "other #1, " + n);
+                }
+                b.addPacket(numbered(UdpCommon.BoxNames, 4096)); // the ninth: started over at 4096, #0's low byte
+                SavedPacket p = next(b);
+                assertTrue(p != null && p.packetNum == 4096, side + "started over at 4096: " + (p == null ? null : p.packetNum));
+                for (int copy = 1; copy <= 9; copy++) { // the far side resends #0: its acknowledgements were lost
+                    b.addPacket(numbered(UdpCommon.FcInfo, 0));
+                    assertEquals(0, drain(b), side + "copy " + copy + " of #0 handed on nothing");
+                }
+                b.addPacket(numbered(UdpCommon.BoxNames, 4097));
+                p = next(b);
+                assertTrue(p != null && p.packetNum == 4097, side + "the numbering goes on at 4097: " + (p == null ? null : p.packetNum));
+            }
+        }
+    }
+
     /** The acknowledgements (PacketReceived) of numbers 0 .. n-1 that reached the far side's socket, counted by number. */
     private static int[] acknowledged(DatagramSocket far, int n) throws Exception {
         int[] count = new int[n];

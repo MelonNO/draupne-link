@@ -265,38 +265,52 @@ public class ReceiverBuffer {
     }
 
     /**
-     * F-111 (2026-11-24): the packets handed on lately, by number - each one's number, length and CRC32, in the slot of
-     * its number's low byte (the last HANDED numbers; fixed arrays, nothing made per packet). A packet that is the one
-     * handed on under its number is the far side's resend of a packet whose acknowledgement was lost. Before, each such
-     * copy counted toward recoverCounter as if the numbering had gone apart: on sparse traffic (the buffer at
-     * MIN_BUFFER_SIZE) the ninth started the buffer over at its number and the packet was handed on a second time - two
-     * unacknowledged packets, resent 8 times each, did it: the phone took Config and StartVideo again (the picture
-     * black for 2 s), ChangeCamera again (the other camera), the PC the video config again. Only another packet under
-     * an old number counts now. Kept when recoverCounter starts the numbering over (a late copy from before is still no
-     * new packet), forgotten with a new session (a Connect, F-057), whose numbers are new ones. A number inside the
-     * window is never the one in a slot but after such a start over: the slots hold numbers just handed on.
+     * F-111 (2026-11-24): the last HANDED packets handed on, in the order taken - each one's number, length and CRC32
+     * (fixed arrays, nothing made per packet). A packet that is one of them is the far side's resend of a packet whose
+     * acknowledgement was lost. Before, each such copy counted toward recoverCounter as if the numbering had gone
+     * apart: on sparse traffic (the buffer at MIN_BUFFER_SIZE) the ninth started the buffer over at its number and the
+     * packet was handed on a second time - two unacknowledged packets, resent 8 times each, did it: the phone took
+     * Config and StartVideo again (the picture black for 2 s), ChangeCamera again (the other camera), the PC the video
+     * config again. Only another packet under an old number counts now. Kept when recoverCounter starts the numbering
+     * over (a late copy from before is still no new packet), forgotten with a new session (a Connect, F-057), whose
+     * numbers are new ones. A number inside the window is never one of them but after such a start over: they are
+     * numbers just handed on. In the order taken, not in the slot of the number's low byte (as first; the protocol
+     * fuzz, 2026-11-24): a start over at a number 256 apart (4096 after #0) took the slot of a packet just handed on,
+     * its resends counted again, and the ninth handed it on a second time.
      */
     static final int HANDED = 256;
     private final short[] handedNum = new short[HANDED];
     private final int[] handedLength = new int[HANDED];
     private final int[] handedCrc = new int[HANDED];
-    /** No number in a slot: below -1, where no numbered packet is taken. */
+    /** Under the lock: where the next packet handed on is written - over the oldest of the HANDED. */
+    private int handedNext;
+    /** No packet in an entry: below -1, where no numbered packet is taken. */
     private static final short NO_NUM = Short.MIN_VALUE;
     /** Under the lock: the CRC32 of the packets handed on and of the copies held against them. */
     private final java.util.zip.CRC32 crc = new java.util.zip.CRC32();
 
-    /** Under the lock: the packet is handed on - remembered under its number. */
+    /** Under the lock: the packet is handed on - remembered over the oldest. */
     private void handedOn(SavedPacket p) {
-        int slot = p.packetNum & (HANDED - 1);
-        handedNum[slot] = p.packetNum;
-        handedLength[slot] = p.data.length;
-        handedCrc[slot] = crcOf(p.data, p.data.length);
+        int i = handedNext;
+        handedNext = (i + 1) & (HANDED - 1);
+        handedNum[i] = p.packetNum;
+        handedLength[i] = p.data.length;
+        handedCrc[i] = crcOf(p.data, p.data.length);
     }
 
-    /** Under the lock: these bytes are the packet handed on lately under num (its length and CRC32 alike). */
+    /** Under the lock: these bytes are one of the packets handed on lately under num (its length and CRC32 alike). */
     private boolean handedOnAlready(short num, byte[] data, int length) {
-        int slot = num & (HANDED - 1);
-        return handedNum[slot] == num && handedLength[slot] == length && handedCrc[slot] == crcOf(data, length);
+        int crcOfData = 0;
+        boolean crcDone = false;
+        for (int i = 0; i < HANDED; i++) {
+            if (handedNum[i] != num || handedLength[i] != length) continue;
+            if (!crcDone) {
+                crcOfData = crcOf(data, length);
+                crcDone = true;
+            }
+            if (handedCrc[i] == crcOfData) return true;
+        }
+        return false;
     }
 
     private int crcOf(byte[] data, int length) {
