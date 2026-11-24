@@ -75,6 +75,7 @@ The test week (from 2026-11-21 evening), with the phone app **DRAUPNE Flight 2.3
 - **Drone setup says "Betaflight set up" only when every row is set**; otherwise it names the rows that aren't, in red ("Not set: GPS, GPS rescue.") (`DroneSetupDoneTest`; F-087).
 - **Drone setup's BY HAND names the cell count the page writes** (the one Betaflight forces), not 6 (`DroneSetupByHandTest`; F-088).
 - **On a Betaflight 4.4 or 4.5 built without a GPS, Drone setup no longer takes the GPS as switched on.** Those versions say "unavailable" in small letters; nothing is written, and the GPS row says to answer No (`BetaflightPlan.refused`; `BetaflightTest`; F-089).
+- **The CONTROLLER card is whole at 200 % text scaling** (on a 1920 x 1200 screen: 960 x 564). Each stick was the red dot in a small square, the channel list was cut after THROTTLE, and each bar was a red tick over its number. The list now keeps the width its rows need and scrolls when they don't fit; the sticks take the rest, with the name over the box and the values beside it when short. A bar is never drawn over its number. At 1280 x 752 and up it looks as before (`ControllerSticks`, `GimbalView`, `ChannelBars`; `ControllerSticksTest`; F-090).
 
 ### The maintainer's answers, second round (2026-11-22)
 

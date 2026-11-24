@@ -559,6 +559,22 @@ at the very start, so CONFIRM went on and saved the rest. Found by the reader of
 row says "Not in this Betaflight (built without GPS). Answer No." Tests: `BetaflightTest` (red before),
 `FakeFlightBoardTest`.
 
+**F-090 - At 200 % text scaling the CONTROLLER card's sticks were dots and its channel list was cut.** Seen
+2026-11-24 in the bench's looks at 200 % on this 1920 x 1200 screen (960 x 564; `runs\1124-0554-ui`,
+`looks-random-presser`, `looks-full-size`): with the card open, each stick was the red dot in a 36 px square - no
+circle, no travel - and the channel list beside them was 96 px wide: THROTTLE half there, the AUX rows gone, each bar
+a red tick over the last digit of its number. Whole at 100 %, 125 % and 150 %. The card has about 554 x 86 px there
+for the sticks and the list (F-010 leaves the sticks 86 px); the sticks took 440 of the width as always. The ticks: the
+bar's track is the list's width less the name and number columns, and 96 px is less than the name column alone (78 px,
+142 with Drone setup's AUX names), so the track came out negative and the bar's 3 px least width drew in the number's
+column. **Mended (PC):** the channel list keeps the width its rows need (the name, a bar of 40 px at least, the
+number) and scrolls when it has more rows than height; the sticks get the rest, half at least. A stick box under 72 px
+with its words under it puts the name over the box and the values beside it, with a smaller dot, when the dot travels
+further so: at 960 x 564 a 63 px box with 20 px of travel each way. A track too short for a bar gets none, a bar stays
+in its track, a name is cut before its number. At 1280 x 752 and up the card is laid out and painted as before, pixel
+for pixel. Test: `ControllerSticksTest` (3; its narrow-list check is red on the old `ChannelBars`). Seen again on the
+bench: 200 % with the circle and travel (`runs\1124-0645-ui`), 150 % as before (`1124-0649-ui`), calibration 1 of 1.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
