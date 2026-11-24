@@ -623,6 +623,19 @@ frame - red before), `OverwatchVideoTest` (the same through the overwatch hub - 
 card's picture). The fuzz's input replayed: runs through, 108 MB at most (693 before); 5 minutes of the fuzz (seed 2)
 on the fix: 44,494 inputs, nothing.
 
+**F-094 - The phone app's main screen cut lines on its side and at large text.** Found 2026-11-24 looking at the
+phone app's screens in the emulator (Android 14, 1080 x 2400) at Android's text sizes 100, 130 and 200 % and display
+sizes default and largest, upright and on its side (`wm size 2400x1080`: this emulator does not turn). The screen did
+not scroll. On its side at normal text the status card's last three lines (Install unknown apps for the PC's updates,
+the phone's GPS, props off) were not drawn and could not be reached - on a phone with more notices, more. Upright at
+200 % the status card took the whole height: the connection card (STOP, HOLD TO WAKE, Advanced: port and key) got
+none, and the link's pill (WAITING / LINK READY) was laid out past the top row's right edge. 130 % was whole. Not a
+flight problem: the PC shows the same states. **Mended (phone, pc.60-beta):** the two cards sit in one ScrollView with
+`fillViewport` - when they fit they are laid out as before (every control at the same place at 100 %), when they do
+not the page scrolls; in the top row the name (and FLIGHT UNIT on its side) gives way with "..." so LOCK SCREEN and the
+pill keep their room. Checked: the same pictures and screen dumps on pc.60 - every line and button reachable in all
+eight cases; at 200 % with the largest display size the pill is still cut at the right edge (the rest whole).
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
