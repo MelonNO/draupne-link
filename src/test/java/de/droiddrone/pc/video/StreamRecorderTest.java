@@ -22,6 +22,24 @@ class StreamRecorderTest {
         public void presentFrame() {}
     }
 
+    /**
+     * FFmpeg's words for an error, as the window's log says them. On the test bench's full disk (2026-11-24) it said
+     * "OSD recording stopped: Recording with OSD: could not write a picture (No space left on device" and a line of
+     * rubbish: the rest of the buffer the words were put in, memory nobody had cleared. Here the buffer is rubbish
+     * before, as such memory may be.
+     */
+    @Test
+    void ffmpegsWordsForAnErrorEndWhereTheyEnd() {
+        try (org.bytedeco.javacpp.BytePointer buffer = new org.bytedeco.javacpp.BytePointer(256)) {
+            byte[] rubbish = new byte[256];
+            java.util.Arrays.fill(rubbish, (byte) 'x');
+            buffer.put(rubbish);
+            int noSpace = -28; // AVERROR(ENOSPC): a full disk
+            assertEquals("No space left on device", StreamRecorder.errorText(noSpace, buffer));
+        }
+        assertEquals("No space left on device", StreamRecorder.errorText(-28));
+    }
+
     @Test
     void thePipelineRecordsWhatArrivesOnItsOwnThread(@TempDir Path dir) throws Exception {
         TestStreams.Stream s = TestStreams.h264(320, 240, 20, 10);

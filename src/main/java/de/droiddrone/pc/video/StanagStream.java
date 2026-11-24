@@ -333,11 +333,7 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
         }
 
         private static void check(int result, String what) throws IOException {
-            if (result < 0) {
-                BytePointer msg = new BytePointer(256);
-                av_strerror(result, msg, 256);
-                throw new IOException("could not " + what + " (" + msg.getString().trim() + ")");
-            }
+            if (result < 0) throw new IOException("could not " + what + " (" + StreamRecorder.errorText(result) + ")");
         }
     }
 }

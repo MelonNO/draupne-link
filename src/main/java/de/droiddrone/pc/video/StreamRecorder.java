@@ -274,10 +274,27 @@ public final class StreamRecorder implements AutoCloseable {
     }
 
     private static void check(int result, String what) throws IOException {
-        if (result < 0) {
-            BytePointer msg = new BytePointer(256);
-            av_strerror(result, msg, 256);
-            throw new IOException("Recording: could not " + what + " (" + msg.getString().trim() + ")");
+        if (result < 0) throw new IOException("Recording: could not " + what + " (" + errorText(result) + ")");
+    }
+
+    /** FFmpeg's words for an error code ("No space left on device"). */
+    static String errorText(int code) {
+        try (BytePointer buffer = new BytePointer(256)) {
+            return errorText(code, buffer);
         }
+    }
+
+    /**
+     * The same, put into this buffer: its words up to their end. Read with getString(), the buffer gave all of its
+     * bytes - the words' end and the memory after it, never cleared - and the window's log said "OSD recording
+     * stopped: ... (No space left on device" and a line of rubbish (the test bench's full disk, 2026-11-24).
+     */
+    static String errorText(int code, BytePointer buffer) {
+        av_strerror(code, buffer.position(0), buffer.capacity());
+        byte[] bytes = new byte[(int) buffer.capacity()];
+        buffer.get(bytes);
+        int end = 0;
+        while (end < bytes.length && bytes[end] != 0) end++;
+        return new String(bytes, 0, end, StandardCharsets.UTF_8).trim();
     }
 }
