@@ -73,10 +73,12 @@ class KmlFromOtherProgramsTest {
         bom[2] = (byte) 0xbf;
         System.arraycopy(text, 0, bom, 3, text.length);
         Kml.Parsed p = importBytes("google-earth.kml", bom);
+        assertEquals(0, p.skipped());
         assertEquals(2, p.items().size());
         MapGraphics.Item line = p.items().get(0), area = p.items().get(1);
         assertEquals(MapGraphics.Kind.LINE, line.kind());
         assertEquals("Vei nord", line.name());
+        assertEquals(0xff0000, line.colorRgb(), "the shared style's colour, through its StyleMap (before: the app's own red)");
         assertEquals(59.90456, line.points().get(0).lat(), 1e-9, "longitude first in the file");
         assertEquals(10.70123, line.points().get(0).lon(), 1e-9);
         assertEquals(MapGraphics.Kind.AREA, area.kind());
@@ -179,6 +181,164 @@ class KmlFromOtherProgramsTest {
         assertEquals(10.9, p.items().get(0).points().get(2).lon(), 1e-9);
         assertEquals(1, p.pins().size());
         assertEquals(59.92, p.pins().get(0).lat(), 1e-9);
+    }
+
+    private static final String HEAD = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            + "<kml xmlns=\"http://www.opengis.net/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\"><Document>\n";
+    private static final String FOOT = "</Document></kml>\n";
+
+    /**
+     * I-015: every part of a MultiGeometry is an item of its own. Before, only the first: a Point beside a Polygon (as
+     * Google Earth writes a labelled area) came in as a pin and the area was lost, and a QGIS layer of many parts lost
+     * every part after the first.
+     */
+    @Test
+    void everyPartOfAMultiGeometryComesIn() throws Exception {
+        String kml = HEAD + """
+                <Placemark><name>Felt nord</name>
+                  <MultiGeometry>
+                    <Point><coordinates>10.75,59.95,0</coordinates></Point>
+                    <Polygon><outerBoundaryIs><LinearRing><coordinates>10.7,59.9,0 10.8,59.9,0 10.8,60.0,0 10.7,59.9,0</coordinates></LinearRing></outerBoundaryIs></Polygon>
+                  </MultiGeometry>
+                </Placemark>
+                <Placemark>
+                  <Style><LineStyle><color>ff00ff00</color><width>2</width></LineStyle></Style>
+                  <ExtendedData><SchemaData schemaUrl="#lag"><SimpleData name="navn">Teig</SimpleData></SchemaData></ExtendedData>
+                  <MultiGeometry>
+                    <Polygon><outerBoundaryIs><LinearRing><coordinates>11.0,60.0 11.1,60.0 11.1,60.1 11.0,60.0</coordinates></LinearRing></outerBoundaryIs></Polygon>
+                    <Polygon><outerBoundaryIs><LinearRing><coordinates>11.2,60.0 11.3,60.0 11.3,60.1 11.2,60.0</coordinates></LinearRing></outerBoundaryIs></Polygon>
+                    <MultiGeometry>
+                      <LineString><coordinates>11.4,60.0 11.5,60.1</coordinates></LineString>
+                      <LineString><coordinates>11.6,60.0 11.7,60.1</coordinates></LineString>
+                    </MultiGeometry>
+                  </MultiGeometry>
+                </Placemark>
+                """ + FOOT;
+        Kml.Parsed p = importBytes("multi.kml", kml.getBytes(StandardCharsets.UTF_8));
+        assertEquals(1, p.pins().size(), "the label's point a pin");
+        assertEquals("Felt nord", p.pins().get(0).name());
+        assertEquals(5, p.items().size(), "the area beside it, and all four parts of the other, the nested ones too");
+        assertEquals(MapGraphics.Kind.AREA, p.items().get(0).kind());
+        assertEquals("Felt nord", p.items().get(0).name());
+        for (int i = 1; i <= 2; i++) {
+            assertEquals(MapGraphics.Kind.AREA, p.items().get(i).kind());
+            assertEquals(0x00ff00, p.items().get(i).colorRgb(), "each part with the placemark's style");
+        }
+        assertEquals(11.2, p.items().get(2).points().get(0).lon(), 1e-9);
+        assertEquals(MapGraphics.Kind.LINE, p.items().get(4).kind());
+        assertEquals(60.1, p.items().get(4).points().get(1).lat(), 1e-9);
+        assertEquals(2, p.items().get(4).widthPx());
+        assertEquals(0, p.skipped());
+    }
+
+    /** I-015: Google Earth's GPS tracks (gx:Track, its points as "lon lat alt") and gx:MultiTrack come in as lines; before, dropped. */
+    @Test
+    void googleEarthsGpsTracksComeInAsLines() throws Exception {
+        String kml = HEAD + """
+                <Style id="track"><LineStyle><color>ffff0000</color><width>4</width></LineStyle></Style>
+                <Placemark><name>Tur</name><styleUrl>#track</styleUrl>
+                  <gx:Track>
+                    <altitudeMode>clampToGround</altitudeMode>
+                    <when>2026-11-20T10:00:00Z</when><when>2026-11-20T10:00:05Z</when><when>2026-11-20T10:00:10Z</when>
+                    <gx:coord>10.70 59.90 120.5</gx:coord>
+                    <gx:coord>10.71 59.91 121</gx:coord>
+                    <gx:coord>10.72 59.915 122</gx:coord>
+                    <ExtendedData><SchemaData schemaUrl="#schema"><gx:SimpleArrayData name="hr"><gx:value>90</gx:value></gx:SimpleArrayData></SchemaData></ExtendedData>
+                  </gx:Track>
+                </Placemark>
+                <Placemark>
+                  <gx:MultiTrack><gx:interpolate>0</gx:interpolate>
+                    <gx:Track><when>2026-11-20T11:00:00Z</when><when>2026-11-20T11:00:05Z</when><gx:coord>10.8 59.9 0</gx:coord><gx:coord>10.81 59.9 0</gx:coord></gx:Track>
+                    <gx:Track><when>2026-11-20T11:10:00Z</when><when>2026-11-20T11:10:05Z</when><gx:coord>10.9 59.9 0</gx:coord><gx:coord>10.91 59.9 0</gx:coord></gx:Track>
+                  </gx:MultiTrack>
+                </Placemark>
+                """ + FOOT;
+        Kml.Parsed p = importBytes("tracks.kml", kml.getBytes(StandardCharsets.UTF_8));
+        assertEquals(3, p.items().size(), "one track, and the two of the multi-track each its own line");
+        MapGraphics.Item tur = p.items().get(0);
+        assertEquals(MapGraphics.Kind.LINE, tur.kind());
+        assertEquals("Tur", tur.name());
+        assertEquals(3, tur.points().size());
+        assertEquals(59.915, tur.points().get(2).lat(), 1e-9, "longitude first");
+        assertEquals(10.72, tur.points().get(2).lon(), 1e-9);
+        assertEquals(0x0000ff, tur.colorRgb(), "its shared style");
+        assertEquals(4, tur.widthPx());
+        assertEquals("Track", p.items().get(1).name(), "no name of its own");
+        assertEquals(10.9, p.items().get(2).points().get(0).lon(), 1e-9);
+        assertEquals(0, p.skipped());
+    }
+
+    /**
+     * I-015: a styleUrl to a Style or StyleMap in the same file gives its line colour, width and fill, as a style of
+     * the placemark's own does; before, such drawings came in red, 3 wide. My Maps' way: a StyleMap per look, its
+     * normal pair a Style of its own.
+     */
+    @Test
+    void sharedStylesGiveTheirColourWidthAndFill() throws Exception {
+        String kml = HEAD + """
+                <Style id="poly-0288D1-1200-77-nodesc-normal"><LineStyle><color>ffd18802</color><width>1.2</width></LineStyle><PolyStyle><color>4dd18802</color><fill>1</fill><outline>1</outline></PolyStyle></Style>
+                <Style id="poly-0288D1-1200-77-nodesc-highlight"><LineStyle><color>ff000000</color><width>1.8</width></LineStyle></Style>
+                <StyleMap id="poly-0288D1-1200-77-nodesc">
+                  <Pair><key>highlight</key><styleUrl>#poly-0288D1-1200-77-nodesc-highlight</styleUrl></Pair>
+                  <Pair><key>normal</key><styleUrl>#poly-0288D1-1200-77-nodesc-normal</styleUrl></Pair>
+                </StyleMap>
+                <StyleMap id="inline-pair"><Pair><key>normal</key><Style><LineStyle><color>ff00ffff</color><width>6</width></LineStyle></Style></Pair></StyleMap>
+                <Style id="fill-only"><PolyStyle><color>8000ff00</color></PolyStyle></Style>
+                <Placemark><name>Sone</name><styleUrl>#poly-0288D1-1200-77-nodesc</styleUrl>
+                  <Polygon><outerBoundaryIs><LinearRing><coordinates>10.7,59.9 10.8,59.9 10.8,60.0 10.7,59.9</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
+                <Placemark><name>Gul</name><styleUrl>#inline-pair</styleUrl><LineString><coordinates>10.7,59.9 10.8,59.9</coordinates></LineString></Placemark>
+                <Placemark><name>Bredere</name><styleUrl>#poly-0288D1-1200-77-nodesc-normal</styleUrl>
+                  <Style><LineStyle><width>7</width></LineStyle></Style><LineString><coordinates>10.7,59.9 10.8,59.9</coordinates></LineString></Placemark>
+                <Placemark><name>Grønn</name><styleUrl>#fill-only</styleUrl>
+                  <Polygon><outerBoundaryIs><LinearRing><coordinates>10.7,59.9 10.8,59.9 10.8,60.0 10.7,59.9</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
+                <Placemark><name>Ukjent</name><styleUrl>#not-in-this-file</styleUrl><LineString><coordinates>10.7,59.9 10.8,59.9</coordinates></LineString></Placemark>
+                """ + FOOT;
+        Kml.Parsed p = importBytes("styles.kml", kml.getBytes(StandardCharsets.UTF_8));
+        assertEquals(5, p.items().size());
+        MapGraphics.Item sone = p.items().get(0), gul = p.items().get(1), bredere = p.items().get(2), gronn = p.items().get(3), ukjent = p.items().get(4);
+        assertEquals(0x0288d1, sone.colorRgb(), "the StyleMap's normal look, not its highlight");
+        assertEquals(1, sone.widthPx());
+        assertTrue(sone.filled());
+        assertEquals(0xffff00, gul.colorRgb(), "a normal pair with a Style of its own");
+        assertEquals(6, gul.widthPx());
+        assertEquals(0x0288d1, bredere.colorRgb(), "what its own style does not say, from the shared one");
+        assertEquals(7, bredere.widthPx(), "its own style first");
+        assertEquals(0x00ff00, gronn.colorRgb(), "an area with only a fill colour takes it");
+        assertEquals(0xe31b23, ukjent.colorRgb(), "a style not in the file: the app's red, as before");
+        assertEquals(3, ukjent.widthPx());
+    }
+
+    /**
+     * I-015: what IMPORT does not read is counted, to be said as skipped - before, it was dropped without a word: a
+     * picture laid on the ground or the screen, a network link, a tour, a 3D model, a placemark with nothing on the
+     * map, an area's hole, a line of one point.
+     */
+    @Test
+    void whatIsNotReadIsCounted() throws Exception {
+        String kml = HEAD + """
+                <GroundOverlay><name>Kart</name><Icon><href>files/kart.png</href></Icon><LatLonBox><north>60</north><south>59.9</south><east>10.8</east><west>10.7</west></LatLonBox></GroundOverlay>
+                <ScreenOverlay><name>Logo</name><Icon><href>files/logo.png</href></Icon></ScreenOverlay>
+                <NetworkLink><name>Live</name><Link><href>https://example.com/live.kml</href></Link></NetworkLink>
+                <gx:Tour><name>Tur</name><gx:Playlist/></gx:Tour>
+                <Placemark><name>Hus</name><Model><Link><href>files/hus.dae</href></Link></Model></Placemark>
+                <Placemark><name>Bare navn</name></Placemark>
+                <Placemark><name>Med hull</name><Polygon>
+                  <outerBoundaryIs><LinearRing><coordinates>10.7,59.9 10.8,59.9 10.8,60.0 10.7,59.9</coordinates></LinearRing></outerBoundaryIs>
+                  <innerBoundaryIs><LinearRing><coordinates>10.75,59.92 10.76,59.92 10.76,59.93 10.75,59.92</coordinates></LinearRing></innerBoundaryIs>
+                </Polygon></Placemark>
+                <Placemark><name>Ett punkt</name><LineString><coordinates>10.7,59.9</coordinates></LineString></Placemark>
+                <Placemark><name>Ring</name><LinearRing><coordinates>10.7,59.9 10.8,59.9 10.8,60.0</coordinates></LinearRing></Placemark>
+                <Placemark><name>Pin</name><Point><coordinates>10.75,59.92</coordinates></Point></Placemark>
+                """ + FOOT;
+        Kml.Parsed p = importBytes("other.kml", kml.getBytes(StandardCharsets.UTF_8));
+        assertEquals(2, p.items().size(), "the area without its hole, the ring as its outline");
+        assertEquals(MapGraphics.Kind.AREA, p.items().get(0).kind());
+        MapGraphics.Item ring = p.items().get(1);
+        assertEquals(MapGraphics.Kind.LINE, ring.kind());
+        assertEquals(4, ring.points().size(), "closed: it ends where it began");
+        assertEquals(ring.points().get(0), ring.points().get(3));
+        assertEquals(1, p.pins().size());
+        assertEquals(8, p.skipped(), "overlay, screen overlay, network link, tour, model, empty placemark, hole, one-point line");
     }
 
     /** Megabytes of blanks inside one coordinates element, within IMPORT's size: read at once, not held up. */

@@ -50,7 +50,7 @@ class KmlImportOffSwingTest {
         StringBuilder kml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n<Document>\n");
         for (int i = 0; i < 50_000; i++) kml.append("<Placemark><name>P").append(i).append("</name><Point><coordinates>10.7,59.9,0</coordinates></Point></Placemark>\n");
         Path file = Files.writeString(dir.resolve("many.kml"), kml.append("</Document>\n</kml>\n"), StandardCharsets.UTF_8);
-        assertEquals("over " + Kml.MAX_IMPORT_PLACEMARKS + " placemarks", failure(() -> Kml.readImport(file)));
+        assertEquals("over " + Kml.MAX_IMPORT_PLACEMARKS + " placemarks or parts", failure(() -> Kml.readImport(file)));
         assertEquals("too big to read", failure(() -> {
             throw new StackOverflowError();
         }), "an Error on the way is a line too, not a thread that died without a word");

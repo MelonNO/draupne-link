@@ -605,11 +605,14 @@ final class MapWindow extends JFrame {
         }
     }
 
-    /** IMPORT: a KML file's lines, areas, arrows, symbols and points (as pins) onto the map; the map goes to them. */
+    /**
+     * IMPORT: a KML or KMZ file's lines, areas, arrows, tracks, symbols and points (as pins) onto the map; the map goes
+     * to them.
+     */
     private void importKml() {
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports").toFile());
         chooser.setDialogTitle("Import KML");
-        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML", "kml"));
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML, KMZ", "kml", "kmz"));
         if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
         java.nio.file.Path file = chooser.getSelectedFile().toPath();
         // read and parsed on a thread of its own (a file at IMPORT's limits takes a second or two, and this window
@@ -676,16 +679,20 @@ final class MapWindow extends JFrame {
                 map.centreOn((s + n) / 2, (w + e) / 2, Math.max(map.zoom(), 12));
                 syncFollow();
             }
-            Dialogs.message(this, importedText(parsed.items().size(), parsed.pins().size()),
+            Dialogs.message(this, importedText(parsed.items().size(), parsed.pins().size(), parsed.skipped()),
                     "Import", javax.swing.JOptionPane.INFORMATION_MESSAGE);
         } catch (RuntimeException e) {
             Dialogs.message(this, AsText.label("Import failed: " + e.getMessage()), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
     }
 
-    /** What IMPORT brought, in the right number (F-075: "1 drawings and symbols, 1 pins imported."). */
-    static String importedText(int items, int pins) {
-        return items + (items == 1 ? " drawing or symbol, " : " drawings and symbols, ") + pins + (pins == 1 ? " pin" : " pins") + " imported.";
+    /**
+     * What IMPORT brought, in the right number (F-075: "1 drawings and symbols, 1 pins imported."), and what of the
+     * file it left (I-015: before, dropped without a word).
+     */
+    static String importedText(int items, int pins, int skipped) {
+        return items + (items == 1 ? " drawing or symbol, " : " drawings and symbols, ") + pins + (pins == 1 ? " pin" : " pins") + " imported."
+                + (skipped > 0 ? " " + skipped + " skipped: not read here." : "");
     }
 
     /** PLACE AT: a position typed or pasted in any format the map writes; a point of the drawing on, else a symbol. */

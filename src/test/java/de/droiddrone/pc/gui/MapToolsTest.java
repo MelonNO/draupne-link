@@ -57,9 +57,16 @@ class MapToolsTest {
     /** F-075: IMPORT said "1 drawings and symbols, 1 pins imported." */
     @Test
     void importSaysWhatItBroughtInTheRightNumber() {
-        assertEquals("1 drawing or symbol, 1 pin imported.", MapWindow.importedText(1, 1));
-        assertEquals("2 drawings and symbols, 0 pins imported.", MapWindow.importedText(2, 0));
-        assertEquals("0 drawings and symbols, 3 pins imported.", MapWindow.importedText(0, 3));
+        assertEquals("1 drawing or symbol, 1 pin imported.", MapWindow.importedText(1, 1, 0));
+        assertEquals("2 drawings and symbols, 0 pins imported.", MapWindow.importedText(2, 0, 0));
+        assertEquals("0 drawings and symbols, 3 pins imported.", MapWindow.importedText(0, 3, 0));
+    }
+
+    /** I-015: what IMPORT does not read is said, short, not dropped without a word. */
+    @Test
+    void importSaysWhatItSkipped() {
+        assertEquals("12 drawings and symbols, 0 pins imported. 2 skipped: not read here.", MapWindow.importedText(12, 0, 2));
+        assertEquals("0 drawings and symbols, 0 pins imported. 1 skipped: not read here.", MapWindow.importedText(0, 0, 1));
     }
 
     @Test

@@ -124,6 +124,85 @@ class KmlImportTest {
         assertEquals(items.size(), g.list().size());
     }
 
+    /** A zip of {name, bytes} entries, in that order. */
+    private Path kmz(String name, Object... entries) throws Exception {
+        Path f = dir.resolve(name);
+        try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(f))) {
+            for (int i = 0; i < entries.length; i += 2) {
+                zip.putNextEntry(new java.util.zip.ZipEntry((String) entries[i]));
+                Object body = entries[i + 1];
+                zip.write(body instanceof String s ? s.getBytes(StandardCharsets.UTF_8) : (byte[]) body);
+                zip.closeEntry();
+            }
+        }
+        return f;
+    }
+
+    private static String onePin(String name) {
+        return HEAD + "<Placemark><name>" + name + "</name><Point><coordinates>10.7,59.9,0</coordinates></Point></Placemark>\n" + FOOT;
+    }
+
+    /**
+     * I-015: a KMZ (Google Earth's and My Maps' zip) is read: its doc.kml, else its first .kml, as Google Earth does;
+     * the pictures beside it are left in the zip and nothing is written to disk. Known by its first bytes, whatever its
+     * name says.
+     */
+    @Test
+    void aKmzsKmlIsRead() throws Exception {
+        byte[] picture = new byte[5000];
+        new java.util.Random(1).nextBytes(picture);
+        Path earth = kmz("earth.kmz", "files/photo.png", picture, "files/other.kml", onePin("Other"), "doc.kml", onePin("Doc"));
+        assertEquals("Doc", Kml.readImport(earth).pins().get(0).name(), "doc.kml, wherever it is in the zip");
+        Path noDoc = kmz("nodoc.kmz", "files/photo.png", picture, "layers/first.kml", onePin("First"), "layers/second.kml", onePin("Second"));
+        assertEquals("First", Kml.readImport(noDoc).pins().get(0).name(), "no doc.kml: the first .kml");
+        Path named = kmz("zipped.kml", "doc.kml", onePin("Zipped"));
+        assertEquals("Zipped", Kml.readImport(named).pins().get(0).name(), "a zip named .kml");
+        assertEquals("Plain", Kml.readImport(file("plain.kmz", onePin("Plain"))).pins().get(0).name(), "a KML named .kmz");
+        try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+            assertEquals(List.of("earth.kmz", "nodoc.kmz", "plain.kmz", "zipped.kml"), files.map(p -> p.getFileName().toString()).sorted().toList(),
+                    "nothing unzipped to disk");
+        }
+    }
+
+    /**
+     * I-015: the size limit holds for a KMZ's KML as it unzips, counted while it is read: a small zip that unpacks huge
+     * is refused with a short line, at once, never taken in whole. A zip without KML, or broken, is refused too.
+     */
+    @Test
+    void aKmzThatUnpacksHugeOrHasNoKmlIsRefusedWithAShortLine() throws Exception {
+        byte[] blanks = (HEAD + " ".repeat((int) Kml.MAX_IMPORT_BYTES * 3) + FOOT).getBytes(StandardCharsets.UTF_8);
+        Path bomb = kmz("bomb.kmz", "doc.kml", blanks);
+        assertTrue(Files.size(bomb) < 1 << 20, "a small file: " + Files.size(bomb));
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class, () -> Kml.readImport(bomb));
+        assertShort(refused.getMessage());
+        assertTrue(refused.getMessage().contains((Kml.MAX_IMPORT_BYTES >> 20) + " MB"), refused.getMessage());
+
+        Path pictures = kmz("pictures.kmz", "files/photo.png", new byte[100]);
+        refused = assertThrows(IllegalArgumentException.class, () -> Kml.readImport(pictures));
+        assertEquals("no KML in the KMZ", refused.getMessage());
+        Path broken = Files.write(dir.resolve("broken.kmz"), "PK\u0003\u0004 and then nothing a zip has".getBytes(StandardCharsets.ISO_8859_1));
+        refused = assertThrows(IllegalArgumentException.class, () -> Kml.readImport(broken));
+        assertShort(refused.getMessage());
+    }
+
+    /**
+     * I-015: the placemark limit counts the parts of a MultiGeometry, each of which now comes in as an item or pin of
+     * its own: one placemark of 5 001 points is refused as 5 001 pins would be; one of 5 000 comes in whole.
+     */
+    @Test
+    void theLimitCountsEveryPart() throws Exception {
+        java.util.function.IntFunction<String> multi = n -> {
+            StringBuilder sb = new StringBuilder(HEAD).append("<Placemark><name>Many</name><MultiGeometry>");
+            for (int i = 0; i < n; i++) sb.append("<Point><coordinates>10.7,59.").append(i).append("</coordinates></Point>");
+            return sb.append("</MultiGeometry></Placemark>\n").append(FOOT).toString();
+        };
+        IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
+                () -> Kml.readImport(file("over.kml", multi.apply(Kml.MAX_IMPORT_PLACEMARKS + 1))));
+        assertShort(refused.getMessage());
+        assertTrue(refused.getMessage().contains(Integer.toString(Kml.MAX_IMPORT_PLACEMARKS)), refused.getMessage());
+        assertEquals(Kml.MAX_IMPORT_PLACEMARKS, Kml.readImport(file("full.kml", multi.apply(Kml.MAX_IMPORT_PLACEMARKS))).pins().size());
+    }
+
     @Test
     void anImportsPinsAreSavedOnce() throws Exception {
         Path file = dir.resolve("pins.txt");
