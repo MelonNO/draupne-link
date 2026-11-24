@@ -255,12 +255,19 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         }
     }
 
+    /** Closes the copy; one that got nothing on the disk (a full disk) is deleted, and said so. A file with any byte stays. */
     private void closeWriter() {
         if (writer != null) {
             writer.close();
-            log.accept("OSD recording: " + file.getFileName() + " closed, " + written + " frames" // I-006: a video's word
-                    + (left > 0 ? " (" + left + " dropped)" : "") + ".");
+            if (de.droiddrone.pc.DiskSpace.deleteIfEmpty(file)) {
+                log.accept("OSD recording: " + file.getFileName() + " empty, deleted.");
+            } else {
+                log.accept("OSD recording: " + file.getFileName() + " closed, " + written + " frames" // I-006: a video's word
+                        + (left > 0 ? " (" + left + " dropped)" : "") + ".");
+            }
             writer = null;
+        } else if (file != null) {
+            de.droiddrone.pc.DiskSpace.deleteIfEmpty(file); // its start failed after the file was made
         }
     }
 

@@ -108,4 +108,64 @@ class OsdRecorderTest {
         assertTrue(frames >= 25, "pictures in the copy: " + frames); // a few may be left out to keep up
         assertTrue(bright > 500, "the OSD is in the picture: " + bright);
     }
+
+    /**
+     * F-106 (the test bench's full disk, 2026-11-24): the copy with the OSD of each try on a full disk stayed in
+     * Videos with not one byte in it. A copy that got nothing on the disk is deleted, and the log says so instead of
+     * "closed, 38 frames"; the raw file beside it, which has its bytes, stays. The full disk is played by Windows' lock
+     * on the copy's file, made and locked before the copy begins.
+     */
+    @Test
+    void aCopyThatGotNothingOnTheDiskIsDeleted(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"), "a lock that stops a write is Windows' way");
+        TestStreams.Stream s = TestStreams.h264(320, 240, 30, 10);
+        OsdPreview preview = new OsdPreview();
+        java.util.List<String> said = new java.util.concurrent.CopyOnWriteArrayList<>();
+        OsdRecorder osd = new OsdRecorder(new OsdRecorder.Source() {
+            public OsdRenderer.Data osdData() { return preview.data(); }
+            public OsdLayout osdLayout() { return OsdLayout.defaults(); }
+            public boolean mirror() { return false; }
+            public boolean upsideDown() { return false; }
+            public double displayMs() { return 5; }
+            public void recording(boolean on) { }
+        }, said::add);
+        java.util.List<java.nio.channels.FileChannel> locks = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.List<Path> raws = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        pipeline.setRecordingTap(osd);
+        pipeline.setRecordingFileListener(raw -> { // before the copy begins: its file is there, and refuses every byte
+            raws.add(raw);
+            try {
+                java.nio.channels.FileChannel c = java.nio.channels.FileChannel.open(OsdRecorder.osdFile(raw),
+                        java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE);
+                locks.add(c);
+                c.lock(0, Long.MAX_VALUE, false);
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        Path copy;
+        try {
+            pipeline.startRecording(dir);
+            pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+            short n = 0;
+            for (TestStreams.Packet p : s.packets()) {
+                byte[] d = p.data();
+                pipeline.onVideoFragment(p.keyFrame(), ++n, 0, d.length, d, 0, d.length);
+                Thread.sleep(25);
+            }
+            pipeline.stopRecording();
+            pipeline.close();
+            assertEquals(1, raws.size(), raws.toString());
+            copy = OsdRecorder.osdFile(raws.get(0));
+            long end = System.currentTimeMillis() + 20_000; // the copy's own thread ends its file
+            while (Files.exists(copy) && said.stream().noneMatch(l -> l.contains("empty, deleted")) && System.currentTimeMillis() < end) Thread.sleep(20);
+        } finally {
+            for (java.nio.channels.FileChannel c : locks) c.close();
+        }
+        osd.finish(5000);
+        assertFalse(Files.exists(copy), "the copy that got nothing is deleted: " + said);
+        assertTrue(said.stream().noneMatch(l -> l.contains("closed")), "not said closed with frames in it: " + said);
+        assertTrue(Files.size(raws.get(0)) > 0, "the raw file, which has its bytes, stays");
+    }
 }

@@ -63,6 +63,26 @@ class FlightRecordTest {
         assertEquals(1, Files.readAllLines(r.file()).stream().filter(l -> l.startsWith("armedlast=")).count());
     }
 
+    /**
+     * F-106 (the test bench's full disk, 2026-11-24): each try of the recording on the full disk was named in the
+     * record - PREVIOUS FLIGHTS had five parts of no byte. A part deleted for having nothing in it is left out, also
+     * when the record is read back from the disk.
+     */
+    @Test
+    void aPartDeletedForHavingNothingInItIsNoPartOfTheFlight(@TempDir Path dir) {
+        long start = FlightFiles.at("2026-11-17T08:00:00");
+        FlightRecord r = FlightRecord.start(dir, "MobileAlpha", "192.0.2.7", "1.0.71", start);
+        Path kept = dir.resolve("flight-2026-11-17_08-00-02-MobileAlpha.mkv"), empty = dir.resolve("flight-2026-11-17_08-01-38-MobileAlpha.mkv");
+        r.video(kept);
+        r.video(empty);
+        r.videoDropped(empty);
+        r.videoDropped(dir.resolve("flight-2026-11-17_08-09-00-MobileAlpha.mkv")); // never told: nothing written
+        assertEquals(List.of(kept), r.videos());
+        r.armed(start + 20_000);
+        r.end(FlightRecord.DISCONNECT, start + 300_000);
+        assertEquals(List.of(kept), FlightRecord.read(r.file()).videos(), "read back from the disk");
+    }
+
     @Test
     void aFlightWithoutANameIsCalledByItsAddress(@TempDir Path dir) {
         FlightRecord r = FlightRecord.start(dir, "", "192.0.2.7", "1.0.71", FlightFiles.at("2026-11-17T08:00:00"));

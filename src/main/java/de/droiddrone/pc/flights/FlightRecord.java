@@ -174,6 +174,15 @@ public final class FlightRecord {
         append("video=" + f.toAbsolutePath());
     }
 
+    /**
+     * A part of the recording that got nothing on the disk (a full disk) and was deleted: no part of this flight any
+     * more. Written as a line of its own - the record is only ever added to, so a full disk never cuts it short.
+     */
+    public synchronized void videoDropped(Path f) {
+        if (f == null || !videos.remove(f)) return;
+        append("novideo=" + f.toAbsolutePath());
+    }
+
     /** The flight controller says armed now. The first time is written at once, later ones every {@link #ARMED_EVERY_MS}. */
     public synchronized void armed(long nowMs) {
         if (ended != null) return;
@@ -249,6 +258,7 @@ public final class FlightRecord {
                         Path v = Path.of(value);
                         if (!r.videos.contains(v)) r.videos.add(v);
                     }
+                    case "novideo" -> r.videos.remove(Path.of(value)); // a part deleted for having nothing in it
                     case "end" -> {
                         int space = value.indexOf(' ');
                         r.endMs = number(space < 0 ? value : value.substring(0, space));

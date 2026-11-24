@@ -84,6 +84,8 @@ final class VideoRecording {
     private volatile Consumer<Path> fileListener;
     /** Told (record thread) when the recording stops by itself, in the pilot's words; null: the app's log is. */
     private volatile Consumer<String> problemListener;
+    /** Told (record thread) of a file the fileListener was told of that got nothing on the disk and was deleted. */
+    private volatile Consumer<Path> emptyListener;
     private volatile String label = "";
 
     VideoRecording(Supplier<VideoPipeline.Config> currentConfig, Runnable requestKeyFrame, Supplier<AudioConfig> defaultAudio) {
@@ -94,6 +96,37 @@ final class VideoRecording {
 
     void setFileListener(Consumer<Path> listener) {
         fileListener = listener;
+    }
+
+    /**
+     * Told of a part of the recording that got not one byte on the disk (a full disk) and was deleted at its end, with
+     * its figures' .csv: it is no part of the flight. Each try on a full disk left such files (the test bench, 2026-11-24).
+     */
+    void setEmptyListener(Consumer<Path> listener) {
+        emptyListener = listener;
+    }
+
+    /**
+     * Closes a part; when it got nothing on the disk it is deleted, its figures' .csv too when that is empty, and the
+     * empty listener is told. A file with any byte stays.
+     */
+    private void closeFile(StreamRecorder recorder) {
+        try {
+            recorder.close();
+        } catch (RuntimeException e) { // the file is looked at all the same
+            log("Recording: closing the file: " + e);
+        }
+        Path mkv = recorder.file();
+        de.droiddrone.pc.DiskSpace.deleteIfEmpty(StreamRecorder.figuresFile(mkv));
+        if (!de.droiddrone.pc.DiskSpace.deleteIfEmpty(mkv)) return;
+        log("Recording: " + mkv.getFileName() + " empty, deleted.");
+        Consumer<Path> to = emptyListener;
+        if (to == null) return;
+        try {
+            to.accept(mkv);
+        } catch (RuntimeException e) {
+            log("Recording: " + e);
+        }
     }
 
     /**
@@ -261,7 +294,7 @@ final class VideoRecording {
                 }
                 if (item == REC_STOP) break;
                 if (item instanceof RecNewFile n) {
-                    if (recorder != null) recorder.close();
+                    if (recorder != null) closeFile(recorder);
                     recorder = null;
                     tapEnded(r);
                     fileConfig = n.config();
@@ -298,7 +331,7 @@ final class VideoRecording {
                     held = null;
                 }
                 if (f.streamStart() && f.keyFrame() && !configCame) { // a restart whose config hasn't come: not into this file
-                    if (recorder != null) recorder.close();
+                    if (recorder != null) closeFile(recorder);
                     recorder = null;
                     tapEnded(r);
                     held = new ArrayList<>();
@@ -325,11 +358,7 @@ final class VideoRecording {
                 failures++;
                 failedAt = System.nanoTime();
                 if (recorder != null) {
-                    try {
-                        recorder.close();
-                    } catch (RuntimeException closing) {
-                        log("Recording: closing the file: " + closing);
-                    }
+                    closeFile(recorder); // a full disk: nothing of it on the disk, and it is deleted
                     recorder = null;
                     tapEnded(r);
                     file = null;
@@ -358,13 +387,7 @@ final class VideoRecording {
                 if (recording == r) recording = null;
             }
         } finally {
-            if (recorder != null) {
-                try {
-                    recorder.close();
-                } catch (RuntimeException e) { // the tap and the file name are let go all the same
-                    log("Recording: closing the file: " + e);
-                }
-            }
+            if (recorder != null) closeFile(recorder); // the tap and the file name are let go all the same
             tapEnded(r);
             file = null;
         }
@@ -380,7 +403,13 @@ final class VideoRecording {
             if (c == null || !f.keyFrame()) return null; // a file starts at a key frame
             Path path = newFile(r.dir, label);
             AudioConfig sound = audioTrackForNewFile();
-            StreamRecorder opened = new StreamRecorder(path, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
+            StreamRecorder opened;
+            try {
+                opened = new StreamRecorder(path, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
+            } catch (IOException | RuntimeException e) {
+                de.droiddrone.pc.DiskSpace.deleteIfEmpty(path); // made and not begun: no empty file left behind
+                throw e;
+            }
             try {
                 file = path;
                 Consumer<Path> started = fileListener;
@@ -392,7 +421,7 @@ final class VideoRecording {
                 writeInto(r, opened, f);
             } catch (IOException | RuntimeException e) {
                 // the caller never gets it (1.0.53): closed here, or the file stayed open - and locked - for good
-                opened.close();
+                closeFile(opened);
                 throw e;
             }
             return opened;

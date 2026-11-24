@@ -4052,6 +4052,11 @@ public class MainWindow extends JFrame {
                 de.droiddrone.pc.flights.FlightRecord record = flightRecord;
                 if (record != null) record.video(file);
             });
+            v.setRecordingEmptyListener(file -> { // a part begun on a full disk, deleted: not the flight's
+                liveRecordings.remove(file);
+                de.droiddrone.pc.flights.FlightRecord record = flightRecord;
+                if (record != null) record.videoDropped(file);
+            });
             v.setRecordingProblemListener(this::logLine); // a recording that stops by itself is said in the window
             v.startRecording(dir);
             logLine("Recording to " + dir + (withOsd ? ", plus a copy with the OSD." : "."));

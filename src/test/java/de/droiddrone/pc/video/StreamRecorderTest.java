@@ -149,6 +149,52 @@ class StreamRecorderTest {
                 VideoRecording.stoppedLine(new java.io.IOException("Recording: could not write a frame (No space left on device)")), "FFmpeg's words");
     }
 
+    /**
+     * F-106 (the test bench's full disk, 2026-11-24): each try of the recording on a full disk left an empty MKV in
+     * Videos, named in the flight's record - 15 files of no byte for one full disk. A part that got nothing on the disk
+     * is deleted when it ends and the listener told (the record leaves it out); the part after it stays. The full disk
+     * is played by Windows' lock on the first part's file: every write into it fails, as on a disk with no room.
+     */
+    @Test
+    void aPartThatGotNothingOnTheDiskIsDeletedAndThePartAfterItStays(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"), "a lock that stops a write is Windows' way");
+        TestStreams.Stream s = TestStreams.h264(320, 240, 150, 10);
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        java.util.List<Path> files = new java.util.concurrent.CopyOnWriteArrayList<>(), empty = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.List<java.nio.channels.FileChannel> locks = new java.util.concurrent.CopyOnWriteArrayList<>();
+        pipeline.setRecordingFileListener(f -> {
+            files.add(f);
+            if (files.size() > 1) return;
+            try { // the first part: not one byte of it reaches the disk
+                java.nio.channels.FileChannel c = java.nio.channels.FileChannel.open(f, java.nio.file.StandardOpenOption.WRITE);
+                locks.add(c);
+                c.lock(0, Long.MAX_VALUE, false);
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        pipeline.setRecordingEmptyListener(empty::add);
+        try {
+            pipeline.startRecording(dir);
+            pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+            // at the phone's pace: the first part's bytes go to the disk at its once-a-second flush, which fails
+            int i = 0, more = -1;
+            for (; i < s.packets().size() && (more < 0 || i < more); i++) {
+                feed(pipeline, s, i, i + 1, i + 1);
+                Thread.sleep(20);
+                if (more < 0 && files.size() >= 2) more = i + 20; // and a little of the second part
+            }
+            pipeline.stopRecording();
+            pipeline.close();
+        } finally {
+            for (java.nio.channels.FileChannel c : locks) c.close();
+        }
+        assertTrue(files.size() >= 2, "a second part after the failed one: " + files);
+        assertEquals(java.util.List.of(files.get(0)), empty, "the empty part is told, the other is not");
+        assertFalse(Files.exists(files.get(0)), "the part that got nothing is deleted");
+        assertTrue(Files.size(files.get(1)) > 0 && framesAndWidth(files.get(1))[0] > 0, "the part after it stays and plays");
+    }
+
     /** A screen the pictures go to, so frames are presented (each one writes a row of the OSD sidecar). */
     private static final class SmallScreen implements VideoPipeline.FrameSink {
         final java.util.concurrent.atomic.AtomicInteger presented = new java.util.concurrent.atomic.AtomicInteger();

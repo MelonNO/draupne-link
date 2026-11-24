@@ -34,6 +34,22 @@ public final class DiskSpace {
     }
 
     /**
+     * A file that got not one byte on the disk - a recording's part begun on a full disk - is deleted: true when it was.
+     * A file with any byte in it is never touched. Until 2026-11-24 each try of the recording on a full disk left three
+     * empty files in Videos (the test bench: 15 for one full disk), each named in the flight's record.
+     */
+    public static boolean deleteIfEmpty(Path file) {
+        if (file == null) return false;
+        try {
+            if (!Files.isRegularFile(file) || Files.size(file) != 0) return false;
+            Files.delete(file);
+            return true;
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
      * Why a file could not be written, in a few words: Windows' own reason when it gives one. A plain IOException's
      * name says nothing - the full disk said "TRACK NOT SAVED: IOException: There is not enough space on the disk"
      * (the test bench, 2026-11-24) - so only its words are given; other kinds keep their name, which tells something

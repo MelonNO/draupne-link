@@ -122,6 +122,16 @@ public final class StreamRecorder implements AutoCloseable {
         return frames;
     }
 
+    /** The MKV being written. */
+    public Path file() {
+        return file;
+    }
+
+    /** The OSD figures' .csv beside an MKV: flight-x.mkv -> flight-x.csv (there once a row was written). */
+    public static Path figuresFile(Path mkv) {
+        return mkv.resolveSibling(mkv.getFileName().toString().replaceFirst("\\.mkv$", "") + ".csv");
+    }
+
     /**
      * An AAC track (1.0.45) on oc, before its header is written: the phone's frames go in as they came. Its packets'
      * timestamps are ms. The muxer holds packets back to interleave the tracks, for as long as one track has none -
@@ -209,8 +219,7 @@ public final class StreamRecorder implements AutoCloseable {
     public void writeOsd(OsdRow r) throws IOException {
         if (!started) return;
         if (osd == null) {
-            String name = file.getFileName().toString().replaceFirst("\\.mkv$", "") + ".csv";
-            osd = Files.newBufferedWriter(file.resolveSibling(name), StandardCharsets.UTF_8);
+            osd = Files.newBufferedWriter(figuresFile(file), StandardCharsets.UTF_8);
             osd.write(OSD_HEADER);
             osd.newLine();
         }

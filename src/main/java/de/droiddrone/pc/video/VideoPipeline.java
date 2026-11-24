@@ -208,6 +208,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         recording.setFileListener(listener);
     }
 
+    /** Told of a part of the recording that got nothing on the disk (a full disk) and was deleted: no part of the flight. */
+    public void setRecordingEmptyListener(Consumer<Path> listener) {
+        recording.setEmptyListener(listener);
+    }
+
     /** Told once, in the pilot's words, when the recording stops by itself (a disk that keeps refusing). */
     public void setRecordingProblemListener(Consumer<String> listener) {
         recording.setProblemListener(listener);
