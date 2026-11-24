@@ -627,6 +627,30 @@ code: Windows says another version is installed, and UPDATE offers nothing for t
 `InstallerTestScriptTest` (fast tests) proves what can be proved without installing: the names the app's code gives,
 the folder list, the copy aside on folders of its own, the compare, and the refusal - the whole script sealed.
 
+## The video decoding fuzzed (`gradlew decoderFuzz`)
+
+By hand, for hours, beside other work: made-up video through the app's own decoding (the live video's decoder, the
+one-thread decoders of the overwatch preview, the OSD recording and STANAG, and the clip player with FFmpeg's demuxers)
+in a child JVM at the lowest priority on two cores, so a native crash ends the child, not the run. No hardware, no
+network, nothing of the pilot's. Start it at idle priority:
+
+```
+gradlew decoderFuzz -Phours=4 -Pseed=1          [-Pcores=2] [-PtimeoutMs=10000] [-PmaxMemMb=2048] [-PseedDir=<recordings, .dfz>]
+gradlew decoderFuzz -Preplay=<a finding's input.dfz>       that input once more, in a child
+```
+
+Seeds are made each run (libopenh264 H.264 of several kinds; H.265 only from an encoder of the PC's own; MKV by the
+app's recorder, MP4 and TS remuxed), then changed at their bytes, NAL units, frame order or file structure. Results in
+`%LOCALAPPDATA%\DraupneBench\fuzz\<time>-seed<n>`: `summary.txt` (inputs, a second, crashes, hangs, the child's largest
+memory, Java exception kinds), `progress.txt`, `findings\` (the input, the child's last lines, the JVM's crash report,
+whether it does it again alone or after the inputs before it), `exceptions\`, `seeds\`. Exit 0: no crash, no hang.
+`-PseedsFrom=<run>\seeds -Pseed=<n> -Pfirst= -Plast=` runs a run's inputs again.
+
+A crash is a native fault in FFmpeg that would end the whole app: the answer is an FFmpeg update (the JavaCV presets)
+or the decoding moved out of the app's process, as the STANAG encoder was. A Java exception is no crash (the app
+catches it). `DecoderFuzzTest` (fast tests) holds the mutator and the watching: a child that ends, hangs, crashes the
+JVM and grows on purpose, and sixty real inputs.
+
 ## Betaflight as a program
 
 Betaflight's own source built for the PC (SITL) and run in Windows' Linux part (WSL, Ubuntu, as root). Set up on

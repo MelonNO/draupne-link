@@ -262,6 +262,22 @@ tasks.register('benchReport', JavaExec) {
     args benchRootDir.path
 }
 
+// By hand, for hours (docs/TESTING.md, "The video decoding fuzzed"): made-up streams and clips through the app's own video
+// decoding in a child JVM at the lowest priority; a crash or hang keeps its input under %LOCALAPPDATA%\DraupneBench\fuzz.
+//   gradlew decoderFuzz -Phours=4 -Pseed=1 [-PtimeoutMs=10000] [-Pcores=2] [-PmaxMemMb=2048] [-Ptargets=live,second,clip]
+//                       [-PseedDir=<more seeds: .dfz inputs, recordings>] [-Pout=<another folder>]
+//   gradlew decoderFuzz -Preplay=<a finding's input.dfz>     that one input again, in a child
+tasks.register('decoderFuzz', JavaExec) {
+    group = 'verification'
+    description = "Feeds made-up video through the app's decoding in a child JVM for hours (-Phours=4 -Pseed=1; -Preplay=<input.dfz>)"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.bench.fuzz.DecoderFuzz'
+    maxHeapSize = '256m'
+    args(['hours', 'seed', 'timeoutMs', 'cores', 'maxMemMb', 'targets', 'seedDir', 'out', 'replay', 'seedsFrom', 'first', 'last', 'pcEncoders', 'polite']
+            .findAll { project.hasProperty(it) }
+            .collect { "${it}=${project.property(it)}".toString() })
+}
+
 // By hand, on the real internet: one tile from each of the map's servers, asked the way the app asks (docs/TESTING.md).
 tasks.register('mapProbe', JavaExec) {
     group = 'verification'
