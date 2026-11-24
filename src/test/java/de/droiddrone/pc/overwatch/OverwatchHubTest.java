@@ -244,6 +244,58 @@ class OverwatchHubTest {
     }
 
     /**
+     * F-108 (the test bench's full disk, 2026-11-24): the phone announces its clip every 5 s until the PC takes it, and
+     * with the disk full each announcement put "clip can't be stored" in the window's log again. Said once a clip; once
+     * it can be stored the clip comes, said as before. The full disk is played by a file where the clips' folder
+     * should be.
+     */
+    @Test
+    void aClipThatCannotBeStoredIsSaidOnceAndComesWhenItCan() throws Exception {
+        Path inTheWay = dir.resolve("not-a-folder");
+        Files.write(inTheWay, new byte[]{1});
+        OverwatchHub hub = new OverwatchHub(new ClipIndex(inTheWay.resolve("Overwatch")), sent::add);
+        hub.setListener(new OverwatchHub.Listener() {
+            @Override
+            public void onNews(String drone) {
+                news.add(drone);
+            }
+
+            @Override
+            public void onDropped(String drone, int reason, int batteryPercent, int tempDeci) {
+            }
+
+            @Override
+            public void onClips(String drone) {
+            }
+
+            @Override
+            public void log(String line) {
+                logs.add(line);
+            }
+        });
+        hub.watch("MobileAlpha", TOKEN, new CameraFootprint.Pose(59.9, 10.7, 120, 45, 0, 0, 10, 70, 40));
+        hub.freeBytesOverride = () -> 100_000_000_000L; // the disk says it has room (the bench's did too)
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 5, 0));
+        receive(hub, OverwatchProtocol.clipEnded(TOKEN, 5, STARTED + 40_000, true));
+        byte[] clip = new byte[OverwatchProtocol.FRAGMENT * 3 + 10];
+        new Random(5).nextBytes(clip);
+        byte[] info = OverwatchProtocol.clipInfo(new OverwatchProtocol.ClipInfo(TOKEN, 5, clip.length,
+                MessageDigest.getInstance("SHA-256").digest(clip), 40_000, STARTED, true, 1280, 720));
+        for (int i = 0; i < 4; i++) { // announced again every 5 s
+            hub.nowOverride = 2000 + i * 5000L;
+            receive(hub, info);
+        }
+        assertEquals(1, logs.stream().filter(l -> l.contains("clip can't be stored")).count(), logs.toString());
+        Files.delete(inTheWay); // room again
+        hub.nowOverride = 30_000;
+        receive(hub, info);
+        assertEquals(1, logs.stream().filter(l -> l.contains("clip (") && l.contains(" comes ")).count(), "the clip comes: " + logs);
+        assertEquals(1, logs.stream().filter(l -> l.contains("clip can't be stored")).count(), logs.toString());
+        hub.close(); // its .part let go
+    }
+
+    /**
      * 1.0.64, item 4e: FLEET's OVERWATCH (or a new CHECK EVERY on an overwatching phone) put its new token in force at
      * once. An alert before the phone's next check-in came with the old one: unknown, taken up as "set by another PC"
      * without a view - which also deleted the new token. The old token stays in force until the new one is taken.

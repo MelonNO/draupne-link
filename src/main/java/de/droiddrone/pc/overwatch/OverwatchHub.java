@@ -760,6 +760,7 @@ public final class OverwatchHub implements AutoCloseable {
         if (t != null && t.info.event == info.event && t.info.startedAt == info.startedAt && Arrays.equals(t.info.sha256, info.sha256)) return;
         if (t != null) t.close();
         s.transfer = null;
+        String hex = hex(info.sha256);
         try {
             // pc.38: an event comes in 60 s segments, all filed under the event (its start), each a part of its own
             String id = idFor(s, info.event, info.eventStartedAt);
@@ -767,7 +768,6 @@ public final class OverwatchHub implements AutoCloseable {
             String sfx = ClipIndex.partSuffix(part);
             Path dir = index.folder(s.filed());
             Path done = dir.resolve(ClipIndex.partFile(id, part));
-            String hex = hex(info.sha256);
             if (Files.isRegularFile(done) && hasChecked(s, id, part, done, info, hex)) {
                 send(s, OverwatchProtocol.clipDone(s.token, info.event, true, info.startedAt)); // here already
                 return;
@@ -804,6 +804,7 @@ public final class OverwatchHub implements AutoCloseable {
             s.waitSaid = null;
             s.clipNote = null;
             ClipTransfer ct = new ClipTransfer(partFile, done, info.size, info.sha256);
+            s.storeFailedClip = null; // stored now: a failure later is said again
             s.transfer = new Transfer(info, id, ct);
             updateMeta(s, id, m -> {
                 m.setProperty("clipSize" + sfx, Long.toString(info.size));
@@ -815,7 +816,10 @@ public final class OverwatchHub implements AutoCloseable {
                     + (ct.received() > 0 ? ", resuming at " + ClipIndex.sizeText(ct.received()) : "")
                     + ") comes" + (isFlying() ? " when no drone may be flying (" + heldWhy() + ")." : " now."));
         } catch (IOException e) {
-            log(s.drone() + ": clip can't be stored: " + e.getMessage());
+            // the phone announces the clip again every 5 s: said once a clip (the test bench's full disk, 2026-11-24,
+            // said it every 5 s), and "comes now" when it can be stored
+            if (!hex.equals(s.storeFailedClip)) log(s.drone() + ": clip can't be stored: " + e.getMessage());
+            s.storeFailedClip = hex;
         }
     }
 
@@ -1127,6 +1131,8 @@ public final class OverwatchHub implements AutoCloseable {
         String clipNote;
         /** The clip (its SHA-256) whose wait for room was said; the clips refused for their size. */
         String waitSaid;
+        /** The clip (its SHA-256) that could not be stored, said once; null since one was stored. */
+        String storeFailedClip;
         final java.util.Set<String> refused = new java.util.HashSet<>();
         boolean endedSaid, droppedSaid, blindSaid, storeFailedSaid;
         Transfer transfer;
