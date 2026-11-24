@@ -20,37 +20,51 @@
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:fontFamily="sans-serif-condensed"
-            android:letterSpacing="0.08"
-            android:text="@string/dd_title"
-            android:textColor="@color/dd_text"
-            android:textSize="22sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/tvSubtitle"
+        <!-- F-094: the name gives way (cut with "...") so LOCK SCREEN and the link's pill stay on the screen at large text -->
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
             android:layout_weight="1"
-            android:fontFamily="sans-serif-condensed"
-            android:letterSpacing="0.08"
-            android:text="@string/dd_subtitle"
-            android:textColor="@color/dd_accent"
-            android:textSize="22sp"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-condensed"
+                android:letterSpacing="0.08"
+                android:maxLines="1"
+                android:text="@string/dd_title"
+                android:textColor="@color/dd_text"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvSubtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:ellipsize="end"
+                android:fontFamily="sans-serif-condensed"
+                android:letterSpacing="0.08"
+                android:maxLines="1"
+                android:text="@string/dd_subtitle"
+                android:textColor="@color/dd_accent"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/lockScreen"
             android:layout_width="wrap_content"
             android:layout_height="40dp"
+            android:layout_marginStart="8dp"
             android:layout_marginEnd="10dp"
             android:background="@drawable/dd_button_lock"
             android:fontFamily="sans-serif-condensed"
             android:letterSpacing="0.1"
+            android:maxLines="1"
             android:minWidth="0dp"
             android:paddingStart="14dp"
             android:paddingEnd="14dp"
@@ -67,6 +81,7 @@
             android:background="@color/dd_panel_2"
             android:fontFamily="sans-serif-condensed"
             android:letterSpacing="0.1"
+            android:maxLines="1"
             android:paddingStart="14dp"
             android:paddingTop="5dp"
             android:paddingEnd="14dp"
@@ -77,13 +92,21 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- side by side in landscape; MainActivity stacks them in portrait -->
-    <LinearLayout
-        android:id="@+id/llCards"
+    <!-- F-094: the cards scroll as one page when they do not fit (landscape: the status card's last notices; large
+         text: the connection card with STOP and HOLD TO WAKE). When they fit, fillViewport lays them out as before. -->
+    <ScrollView
+        android:id="@+id/cardsScroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="10dp"
         android:layout_weight="1"
+        android:fillViewport="true">
+
+    <!-- side by side in landscape; MainActivity stacks them in portrait -->
+    <LinearLayout
+        android:id="@+id/llCards"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
         android:orientation="horizontal">
 
         <!-- STATUS -->
@@ -442,6 +465,7 @@
             </LinearLayout>
         </ScrollView>
     </LinearLayout>
+    </ScrollView>
 
     <TextView
         android:id="@+id/tvVersion"
