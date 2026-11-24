@@ -49,6 +49,9 @@ final class SitlFleetPhone implements AutoCloseable {
     private volatile boolean open = true;
     volatile boolean linkUp = true;
 
+    /** As the phone's FleetRole: the commander's order and plan sequences. */
+    final de.droiddrone.common.group.OrderGates gates = new de.droiddrone.common.group.OrderGates();
+
     /** The blocks' parts, put together as the phone does. */
     final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();
 
@@ -109,13 +112,15 @@ final class SitlFleetPhone implements AutoCloseable {
                     case FleetCmd.GROUP -> {
                         if (piloted) break; // the piloted drone is never a follower (FL-7), as the phone in a session
                         GroupOrder o = GroupOrder.decode(c.data, c.at + 1);
-                        if (o == null) break;
+                        if (o == null || !gates.group.take(o.seq, now)) break; // as the phone: an older order is dropped
                         if (brain == null) brain = new FollowerBrain(1000);
                         brain.order(o, now);
+                        double[] cell = de.droiddrone.common.group.FollowerRule.place(o, 0), pos = fc.position(); // as the phone
+                        if (pos != null) act(seq.followerOrder(now, de.droiddrone.common.group.GeoLocal.distance(cell[0], cell[1], pos[0], pos[1]), pos[2] - cell[2]));
                     }
                     case FleetCmd.EXIT -> {
                         ExitPlan plan = ExitPlan.decode(c.data, c.at + 1);
-                        if (plan != null && brain != null) {
+                        if (plan != null && brain != null && gates.exit.take(plan.seq, now)) {
                             brain.plan(plan);
                             lastPlan = plan;
                             rtlAlt(plan.returnAltRelM);

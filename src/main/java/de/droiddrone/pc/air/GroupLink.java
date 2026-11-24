@@ -543,15 +543,24 @@ public final class GroupLink implements AutoCloseable {
             if (drone == null) continue; // a phone this group doesn't know
             if (p.getLength() > 1 && p.getData()[0] == FleetCmd.LAUNCH_STATUS) {
                 de.droiddrone.common.launch.LaunchWire.Status ls = de.droiddrone.common.launch.LaunchWire.decodeStatus(p.getData(), 1, p.getLength() - 1);
-                if (ls != null) listener.launchStatus(drone, ls);
+                long at = de.droiddrone.pc.MonoClock.ms();
+                // a late status (CLIMBING after IN GROUP) is older than the newest: dropped (SeqGate)
+                if (ls != null && launchGates.computeIfAbsent(drone, k -> new de.droiddrone.common.SeqGate()).take(ls.seq, at)) listener.launchStatus(drone, ls);
                 continue;
             }
             FleetStatus s = FleetStatus.decode(p.getData(), p.getLength());
             if (s == null) continue;
+            long at = de.droiddrone.pc.MonoClock.ms();
+            // only a newer report: a delayed one overwrote a newer one and counted as fresh (heardAt)
+            if (!statusGates.computeIfAbsent(drone, k -> new de.droiddrone.common.SeqGate()).take(s.seq, at)) continue;
             last.put(drone, s);
-            heardAt.put(drone, de.droiddrone.pc.MonoClock.ms());
+            heardAt.put(drone, at);
         }
     }
+
+    /** Each phone's report and launch status sequences (the receive thread's own). */
+    private final Map<String, de.droiddrone.common.SeqGate> statusGates = new java.util.concurrent.ConcurrentHashMap<>(),
+            launchGates = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Override
     public void close() {

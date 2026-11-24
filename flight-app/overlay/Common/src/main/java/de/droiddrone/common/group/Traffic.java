@@ -37,11 +37,17 @@ import java.util.List;
  *   [flags u8]        {@link #PREDICTED}: cut off, the place its exit plan has it; {@link #NO_GNSS}: its own fix lost
  *   [age u8]          seconds since the PC last heard it, 0..255
  * </pre>
- * 2 + 8 * 24 = 194 bytes at most. Java 11.
+ * Then (fleet) [seq u16]: the PC's sequence, counting up from a random start (SeqGate) - the phone drops a TRAFFIC older
+ * than its newest (a late one put the other drones back where they were). A reader of version 1 reads past it, one
+ * without it (an older PC) has none ({@link #seq} -1). 2 + 8 * 24 + 2 = 196 bytes at most. Java 11.
  */
 public final class Traffic {
     public static final int VERSION = 1, MAX = 8, ENTRY_BYTES = 24;
     public static final int PREDICTED = 1, NO_GNSS = 2;
+    /** The sender's sequence; -1 none (an older PC; or encode: the next of this app's own). */
+    public int seq = -1;
+    private static final java.util.concurrent.atomic.AtomicInteger NEXT =
+            new java.util.concurrent.atomic.AtomicInteger(de.droiddrone.common.SeqGate.randomStart());
 
     /** One drone. */
     public static final class Entry {
@@ -93,7 +99,7 @@ public final class Traffic {
     }
 
     public byte[] encode() {
-        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(2 + entries.size() * ENTRY_BYTES);
+        java.nio.ByteBuffer b = java.nio.ByteBuffer.allocate(2 + entries.size() * ENTRY_BYTES + 2);
         b.put((byte) VERSION).put((byte) entries.size());
         for (Entry e : entries) {
             double heading = ((e.headingDeg % 360) + 360) % 360;
@@ -106,6 +112,7 @@ public final class Traffic {
                     .put((byte) e.flags)
                     .put((byte) Math.max(0, Math.min(255, e.ageS)));
         }
+        b.putShort((short) (seq >= 0 ? seq : NEXT.getAndIncrement()));
         return b.array();
     }
 
@@ -113,7 +120,7 @@ public final class Traffic {
     public static Traffic decode(byte[] d, int at, int len) {
         if (d == null || len < 2 || at < 0 || at + len > d.length || (d[at] & 0xff) != VERSION) return null;
         int n = d[at + 1] & 0xff;
-        if (n > MAX || len < 2 + n * ENTRY_BYTES) return null;
+        if (n > MAX || len != 2 + n * ENTRY_BYTES && len != 2 + n * ENTRY_BYTES + 2) return null; // with its sequence or (an older PC) without
         java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(d, at + 2, n * ENTRY_BYTES);
         List<Entry> out = new ArrayList<>();
         for (int i = 0; i < n; i++) {
@@ -124,6 +131,8 @@ public final class Traffic {
             if (Math.abs(lat) > 90 || Math.abs(lon) > 180 || heading >= 360) return null;
             out.add(new Entry(address, lat, lon, alt, heading, hor, ver, flags, age));
         }
-        return new Traffic(out);
+        Traffic t = new Traffic(out);
+        if (len >= 2 + n * ENTRY_BYTES + 2) t.seq = (d[at + 2 + n * ENTRY_BYTES] & 0xff) << 8 | (d[at + 3 + n * ENTRY_BYTES] & 0xff);
+        return t;
     }
 }

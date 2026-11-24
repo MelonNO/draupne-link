@@ -350,6 +350,33 @@ public final class LaunchSequence {
         return out;
     }
 
+    /** Its cell counts as reached this close to the place the group's order gives it (sideways, in height). */
+    public static final double CELL_REACHED_M = 3, CELL_REACHED_UP_M = 2;
+
+    /**
+     * The group's order came (FleetCmd GROUP): the PC has taken the reserve into the group and routes it in - on its way
+     * it is at the group and in transit at once; within {@link #CELL_REACHED_M} / {@link #CELL_REACHED_UP_M} of its
+     * order's place it is IN GROUP. Before, nothing on the phone called atGroup, transitGranted or inCell: a reserve that
+     * had joined stayed ON THE WAY while armed, and the launch's link-loss rule ran beside the follower's.
+     * @param cellDistM  how far its place is from the order's (NaN: not known)
+     * @param cellDistUpM its height above (below) the order's
+     */
+    public List<LaunchIntent> followerOrder(long nowMs, double cellDistM, double cellDistUpM) {
+        List<LaunchIntent> out = new ArrayList<>();
+        if (state == ON_THE_WAY) out.addAll(atGroup(nowMs));
+        if (state == WAITING_FOR_TRANSIT) out.addAll(transitGranted(nowMs));
+        if (state == IN_TRANSIT && cellDistM <= CELL_REACHED_M && Math.abs(cellDistUpM) <= CELL_REACHED_UP_M) out.addAll(inCell(nowMs));
+        return out;
+    }
+
+    /**
+     * The launch's own link-loss rule (LOITER after 12 s, RTL after 2 min) is in charge: on its way to the group and no
+     * follower yet. From the group's first order on only the follower's rules apply (its hold and 2 min exit plan, AC-37).
+     */
+    public static boolean launchRuleApplies(int s, boolean follower) {
+        return !follower && linkLossApplies(s);
+    }
+
     /** It flew to the group in its approach layer and waits for a transit area (AC-27). */
     public List<LaunchIntent> atGroup(long nowMs) {
         return step(ON_THE_WAY, WAITING_FOR_TRANSIT, nowMs);

@@ -166,6 +166,22 @@ final class LaunchRunner {
      * A launch is under way - from the call until the drone is in the group (or the launch has ended): the lead / solo
      * link-loss rule stands aside meanwhile (a reserve has no pilot session; an old session's silence must not brake it).
      */
+    /**
+     * The group's order to this reserve (the receive thread): at the group and in transit, IN GROUP once it is at its
+     * order's place (LaunchSequence.followerOrder) - the launch's states move on and its link-loss rule stands aside.
+     */
+    void followerOrder(Udp udp, Mavlink m, de.droiddrone.common.group.GroupOrder o) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        double[] p = de.droiddrone.common.group.FollowerRule.place(o, 0);
+        double lat = m.latNow(), lon = m.lonNow(), alt = m.altAmslNow();
+        double d = Double.isNaN(lat) || Double.isNaN(lon) ? Double.NaN : de.droiddrone.common.group.GeoLocal.distance(p[0], p[1], lat, lon);
+        List<LaunchIntent> todo;
+        synchronized (seqLock) {
+            todo = seq.followerOrder(now, d, alt - p[2]);
+        }
+        act(udp, m, todo);
+    }
+
     /** The launch's state now (LaunchSequence's). */
     int state() {
         synchronized (seqLock) {

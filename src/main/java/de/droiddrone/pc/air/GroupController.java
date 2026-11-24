@@ -156,7 +156,8 @@ public final class GroupController {
     private boolean leashing, landMode, leadDownSaid, traffic, trafficSaid, leaving, emergency;
     private long lastTick = -1, lastOrderCheck = -1, lastPlansAt = -1, lastProofAt = -1;
     private boolean changed = true;
-    private int orderSeq, planSeq;
+    /** Orders' and plans' sequences: from a random start at every start of the PC (SeqGate: the phone drops older ones). */
+    private int orderSeq = de.droiddrone.common.SeqGate.randomStart(), planSeq = de.droiddrone.common.SeqGate.randomStart();
     private Map<String, ExitPlan> plans = new HashMap<>();
     private double leadRtlAltRel = Double.NaN;
     private V2 rallySite;
