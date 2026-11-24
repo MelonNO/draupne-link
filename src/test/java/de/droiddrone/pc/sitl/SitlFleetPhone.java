@@ -56,12 +56,17 @@ final class SitlFleetPhone implements AutoCloseable {
     final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();
 
     SitlFleetPhone(ArduSitl sitl, String key) throws IOException {
+        this(sitl, key, InetAddress.getLoopbackAddress());
+    }
+
+    /** At a loopback address of its own (the SITL fleet for DRAUPNE Link: 127.0.0.x, one per drone). */
+    SitlFleetPhone(ArduSitl sitl, String key, InetAddress bind) throws IOException {
         this.sitl = sitl;
         this.fc = sitl.fc;
         this.key = key;
         SitlMission.feed(fc, () -> upload);
         fc.onText(t -> { if (texts.size() < 200) texts.add(t); });
-        socket = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+        socket = new DatagramSocket(0, bind);
         Thread r = new Thread(this::receive, "sitlFleetPhone" + sitl.instance);
         r.setDaemon(true);
         r.start();
@@ -71,7 +76,23 @@ final class SitlFleetPhone implements AutoCloseable {
     }
 
     InetSocketAddress address() {
-        return new InetSocketAddress(InetAddress.getLoopbackAddress(), socket.getLocalPort());
+        return new InetSocketAddress(socket.getLocalAddress(), socket.getLocalPort());
+    }
+
+    /** What isn't a fleet command (DRAUPNE Link's name queries) goes here; null: dropped. */
+    private volatile java.util.function.Consumer<DatagramPacket> other;
+
+    void onOther(java.util.function.Consumer<DatagramPacket> handler) {
+        other = handler;
+    }
+
+    /** A datagram from this phone's own socket. */
+    void sendRaw(byte[] data, InetSocketAddress to) {
+        try {
+            socket.send(new DatagramPacket(data, data.length, to.getAddress(), to.getPort()));
+        } catch (IOException ignored) {
+            // the next one
+        }
     }
 
     boolean isFollower() {
@@ -101,7 +122,12 @@ final class SitlFleetPhone implements AutoCloseable {
             }
             if (!linkUp) continue;
             FleetCmd c = FleetCmd.read(p.getData(), p.getLength());
-            if (c == null || !c.key.equals(key)) continue;
+            if (c == null) {
+                java.util.function.Consumer<DatagramPacket> o = other;
+                if (o != null) o.accept(p);
+                continue;
+            }
+            if (!c.key.equals(key)) continue;
             long now = System.currentTimeMillis();
             commander = new InetSocketAddress(p.getAddress(), p.getPort());
             commanderHeardAt = now;

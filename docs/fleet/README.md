@@ -122,6 +122,19 @@ How it is proven:
    gives sticks before the new phone's version is known (old frame layout for a moment) and knows the PC by its address
    (fine on Tailscale, not behind a shared NAT); the radio's mode switch at the hand-over moment is untried.
 
+### Trying it by hand on SITL
+
+`.\sitl-fleet.ps1` (or `-Drones 8`, `-Lat 59.91 -Lon 10.72 [-Alt 120]`) starts that many ArduPilot SITL drones on
+the ground, 25 m apart, each with the phone's fleet role in front of it. Start DRAUPNE Link as usual: they show as
+VIRTUAL (named from MobileZulu down) on the map and in FLEET. Right-click a drone for SAFE TO AUTOLAUNCH, right-click
+the map for DISPATCH; return heights, rally points and TRAFFIC go to them as to real ones. Each line printed gives a
+Mission Planner port (TCP 127.0.0.1:6362, 6372, ...) to watch that drone. Ctrl+C ends them all.
+- Not the pilot's own session: no Connect, sticks or video to a SITL drone (the phone reaches its FC over USB only).
+  FOLLOW GROUP, TAKE CONTROL, DISCARD LEAD and CALL RESERVE need a flown ArduPilot drone - covered by `gradlew
+  fleetSitl`, not by hand.
+- Not together with the virtual fleet (Virtual fleet.bat): the two share one file.
+- The ground's height at the place is looked up, so routes over the terrain fit SITL's flat ground.
+
 **Done since 2026-11-23, in short:** a dispatched drone leaves its column only at its own layer (the 10-drone gate
 found one starting its route at the 40 m floor and climbing through the layers below it); separation 90 / 90 (and the PC-gone class); hand-over in about 290 ms; TRAFFIC to
 every drone's ArduPilot; stage 1 GNSS loss (AC-12 / AC-20 / AC-42); return heights over terrain (RT-9) and apart

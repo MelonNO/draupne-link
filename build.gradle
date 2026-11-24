@@ -446,3 +446,19 @@ tasks.register('fleetSitl', Test) {
     include '**/sitl/**'
     maxParallelForks = 1
 }
+
+// fleet: SITL drones for trying DRAUPNE Link by hand (sitl-fleet.ps1): -Pdrones=4, -Plat= -Plon= [-Palt=] for the place
+tasks.register('sitlFleet', JavaExec) {
+    group = 'bench'
+    description = 'ArduPilot SITL drones the running DRAUPNE Link finds by itself (-Pdrones=4, -Plat/-Plon/-Palt)'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.pc.sitl.SitlFleetMain'
+    systemProperty 'java.net.preferIPv4Stack', 'true'
+    standardInput = System.in
+    def a = [(project.findProperty('drones') ?: '4').toString()]
+    if (project.hasProperty('lat') && project.hasProperty('lon')) {
+        a += [project.property('lat').toString(), project.property('lon').toString()]
+        if (project.hasProperty('alt')) a += [project.property('alt').toString()]
+    }
+    args a
+}

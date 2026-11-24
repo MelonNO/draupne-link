@@ -169,7 +169,8 @@ public class MainWindow extends JFrame {
         @Override
         public java.net.InetSocketAddress addressOf(String phone) {
             String ip = names.ipOf(phone);
-            return ip == null ? null : new java.net.InetSocketAddress(ip, config.getPort());
+            // a virtual fleet's drone listens on its own port (VirtualFleet): before, its fleet commands went to the link port
+            return ip == null ? null : new java.net.InetSocketAddress(ip, de.droiddrone.pc.fleet.VirtualFleet.portOf(ip, config.getPort()));
         }
 
         @Override
