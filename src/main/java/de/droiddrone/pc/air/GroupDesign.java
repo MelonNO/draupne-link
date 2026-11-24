@@ -39,7 +39,22 @@ public final class GroupDesign {
      * (AC-31), its layers on top, then one approach layer for each reserve on its way (AC-5).
      */
     public static double topM(AirParams p, int followers, int reserves) {
-        return p.floorM() + (layers(followers) + Math.max(0, reserves)) * p.layerM();
+        int layers = layers(followers);
+        return reserves <= 0 ? cubeTopM(p, layers) : approachM(p, layers, reserves - 1);
+    }
+
+    /** The cube's top layer above the ground, with this many layers: the abort layer at the floor, the cube above it. */
+    public static double cubeTopM(AirParams p, int layers) {
+        return p.floorM() + Math.max(1, layers) * p.layerM();
+    }
+
+    /**
+     * AC-5: the k-th reserve's approach layer (0: the first) above the ground - two spacings over the cube's top layer,
+     * one more for each reserve on its way before it. The one rule for the designer's check (AC-13) and the group's
+     * own approach layers (GroupController): before, the designer counted the first a spacing lower than the group flew it.
+     */
+    public static double approachM(AirParams p, int layers, int k) {
+        return cubeTopM(p, layers) + (2 + Math.max(0, k)) * p.layerM();
     }
 
     /** AC-13 and the layer spacing, in plain words; null when it fits. */

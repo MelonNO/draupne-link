@@ -77,6 +77,8 @@ public final class GroupController {
 
     /** Within this of 3 % a drone is taken as about to come down where it is: the drones under it move out first. */
     public static final double LANDING_WARN_S = 40;
+    /** A drone that may come down where it is any moment (near 3 %) flies no faster than this, m/s. */
+    public static final double NEAR_CRITICAL_MS = 4;
     /** Within these of a point of a move: there. */
     public static final double REACHED_H_M = 2.0, REACHED_V_M = 1.5;
     /** Exit plans proven at most this often (a burst of changes is one proof). */
@@ -142,7 +144,9 @@ public final class GroupController {
     private final AirParams base;
     private AirParams p;
     private HollowCube cube;
-    private final double groundAmsl, lat0, lon0;
+    private final double lat0, lon0;
+    /** AC-2 / AC-3: the ground the layers stand on (AMSL) - moved towards groundTarget as the group goes over terrain. */
+    private double groundAmsl, groundTarget = Double.NaN;
     private final TransitScheduler scheduler = new TransitScheduler();
     private ConflictPredictor predictor;
     private final ExitPlanner.Prover prover;
@@ -173,6 +177,30 @@ public final class GroupController {
         this.lat0 = lat0;
         this.lon0 = lon0;
         this.prover = prover;
+    }
+
+    /**
+     * AC-3: the base follows the highest ground under the group's area as it goes - this rate at most, slower than any
+     * drone climbs, so every layer moves together and keeps its order: no layer is ever pushed through another.
+     */
+    public static final double GROUND_RATE_MS = 1.0;
+
+    /** AC-3: the highest ground under the group's area now (AMSL), looked up off the tick (NaN: not known, kept). */
+    public void setGroundTarget(double amsl) {
+        groundTarget = amsl;
+    }
+
+    private void stepGround(double dt) {
+        if (Double.isNaN(groundTarget) || landMode) return; // landing column by column: nobody climbs
+        // one that doesn't follow the base (cut off, without GNSS) holds its height: the layers round it must not move
+        // through it - the base waits until it is back or gone
+        for (Member m : members.values()) if (m.state == State.LOST || m.state == State.GNSS_LOST) return;
+        double d = groundTarget - groundAmsl;
+        if (Math.abs(d) < 0.05) return;
+        double step = Math.max(-GROUND_RATE_MS * dt, Math.min(GROUND_RATE_MS * dt, d));
+        groundAmsl += step;
+        for (Member m : members.values()) if (!Double.isNaN(m.approachAlt)) m.approachAlt += step; // approach layers with it
+        if (Math.abs(d) >= 0.5 && (lastPlansAt < 0 || lastTick - lastPlansAt >= 2000)) changed = true; // plans at the new heights
     }
 
     /** The ground its layers stand on (AMSL): the highest under the group's area (AC-2). */
@@ -321,7 +349,7 @@ public final class GroupController {
         }
         Set<Double> taken = new HashSet<>();
         for (Member m : members.values()) if (m != who && !Double.isNaN(m.approachAlt) && m.state == State.APPROACH) taken.add(m.approachAlt);
-        double a = groundAmsl + cube.layerAlt(top) + 2 * p.layerM();
+        double a = groundAmsl + GroupDesign.approachM(p, top + 1, 0); // the one rule (GroupDesign): layers above, then one each
         while (taken.contains(a)) a += p.layerM();
         return a;
     }
@@ -369,6 +397,16 @@ public final class GroupController {
         return next;
     }
 
+    /** AC-41: where the lead's RTL comes down (its rally point or home), airspace frame; null: not known. */
+    private V2 leadHome;
+
+    /** AC-41: where the lead's RTL comes down; the next exit plans keep clear of its way there (null: not known). */
+    public void setLeadHome(V2 home) {
+        if (home == null ? leadHome == null : leadHome != null && leadHome.dist(home) < 2) return;
+        leadHome = home;
+        changed = true;
+    }
+
     /** FL-14: one floor for the group, live; never under 10 m. Returns the floor taken. */
     public double setFloor(double floorM) {
         double f = Math.max(10, floorM);
@@ -386,6 +424,7 @@ public final class GroupController {
     public Out tick(long now, Map<String, Report> reports, Report lead, List<Other> others, V2 wind) {
         double dt = lastTick < 0 ? 0.2 : Math.min(1.0, (now - lastTick) / 1000.0);
         lastTick = now;
+        stepGround(dt);
         List<String> events = new ArrayList<>();
         String newLead = null;
         updateMembers(now, reports, events);
@@ -498,8 +537,18 @@ public final class GroupController {
                 continue;
             }
             switch (m.state) {
-                case GONE, LEAVING -> {
+                case GONE -> {
                 }
+                case LEAVING -> { // the new lead: the pilot's now, but silent it will climb where it is (its phone's rule)
+                    if (!fresh && m.lostAt < 0) {
+                        m.lostAt = now;
+                        m.shifted = false;
+                        events.add("LINK LOST " + m.id);
+                    } else if (fresh) {
+                        m.lostAt = -1;
+                    }
+                }
+
                 case LOST -> {
                     if (fresh) {
                         if (landMode) { // the group lands (AC-20): it holds where it is and lands in its turn
@@ -648,6 +697,21 @@ public final class GroupController {
         boolean pcCut = !leadFresh && members.values().stream().anyMatch(m -> m.state == State.LOST)
                 && members.values().stream().allMatch(m -> m.state == State.LOST || m.state == State.GONE);
         if (pcCut) lost = null;
+        // the new lead gone silent on its way out: its phone takes it home after 20 s, climbing where it is first - right
+        // through the group above it. The group steps aside from its column at once (before, the leaving drone was waited
+        // for, then the follower over it was hit by its climb: seed 160)
+        leaverShift = false;
+        for (Member m : members.values()) {
+            if (m.state != State.LEAVING || m.lostAt < 0) continue;
+            leaverShift = true;
+            if (!m.shifted) {
+                m.shifted = true;
+                V2 away = centre.minus(m.lastPos);
+                if (away.length() < 0.5) away = new V2(0, 1);
+                shiftTarget = centre.plus(away.unit().times(p.cellM() + p.radiusM() + 5));
+                events.add("MOVE AWAY FROM " + m.id);
+            }
+        }
         if (lost != null && !landMode) { // AC-37: 20 m sideways away from it, once
             V2 away = centre.minus(lost.lastPos);
             shiftTarget = centre.plus(away.unit().times(p.lostMoveM()));
@@ -730,7 +794,7 @@ public final class GroupController {
         }
         if (traffic && !trafficSaid) events.add("TRAFFIC"); // once as it starts: the OSD shows it while it lasts
         trafficSaid = traffic;
-        if (!traffic && stop && escape == null) {
+        if (!traffic && stop && escape == null && !leaverShift) {
             want = V2.ZERO;
             emergency = true;
         }
@@ -738,7 +802,7 @@ public final class GroupController {
         // looked at from as far out as the group needs to stop
         List<double[]> keep = new ArrayList<>(); // e, n, radius
         for (Member m : members.values()) {
-            if (m.state == State.LOST && m.shifted) {
+            if (m.state == State.LOST && (m.shifted || landMode)) { // landing the group, nobody is left behind: its lane kept clear all the same
                 V2 out = m.lastPos.minus(m.lostCentre == null ? centre : m.lostCentre).unit();
                 for (int k = 0; k <= 10; k++) {
                     V2 at = m.lastPos.plus(out.times(k * p.laneEndBaseM() / 10));
@@ -811,6 +875,9 @@ public final class GroupController {
 
     /** Whether each drone without GNSS was last reported on the ground. */
     private final Map<String, Boolean> landedNow = new HashMap<>();
+
+    /** A silent new lead is being stepped away from (its column: it climbs there when its phone takes it home). */
+    private boolean leaverShift;
 
     /**
      * AC-42 (and AC-20's drifting drones): the velocity that keeps the group out of the way of drones that drift with
@@ -1128,7 +1195,9 @@ public final class GroupController {
         m.stages = s;
         m.stage = -1;
         m.point = 0;
-        m.holdAt = new HollowCube.Point(rel, Math.max(climbTo, m.lastAlt - groundAmsl));
+        // until its first stage is granted it holds where it is, at its height - before, it was told the top of its climb at
+        // once and rose in place, under whoever was over its old cell (a rejoin, seed 113)
+        m.holdAt = new HollowCube.Point(rel, m.lastAlt - groundAmsl);
         m.dir = 0;
     }
 
@@ -1406,6 +1475,29 @@ public final class GroupController {
     static final double GNSS_ERR_CAP_M = 20;
 
     /**
+     * A drone that will climb where it is, unheard (a silent lead's RTL climbs first): kept clear from its height up to
+     * the lead's return height - every drone over it moves aside.
+     */
+    private void addColumn(List<Orca.Agent> agents, String id, V2 pos, double fromAlt) {
+        double top = leadTopAmsl();
+        int k = 0;
+        for (double alt = fromAlt; alt <= Math.max(top, fromAlt) + 1e-9; alt += p.layerM() / 2) {
+            agents.add(new Orca.Agent(id + "^" + k++, pos, alt, V2.ZERO, 0, V2.ZERO, 0, false, 2));
+        }
+    }
+
+    /** How high a lead's RTL climbs (AMSL): its return height from the plans, else a layer over everyone. */
+    private double leadTopAmsl() {
+        double top = groundAmsl + p.floorM();
+        for (Member m : members.values()) top = Math.max(top, m.lastAlt);
+        top += p.layerM();
+        Member any = null;
+        for (Member m : members.values()) { any = m; break; }
+        if (!Double.isNaN(leadRtlAltRel) && any != null) top = Math.max(top, any.homeAmsl + leadRtlAltRel);
+        return top;
+    }
+
+    /**
      * Every follower the PC flies (in its cell, on a move) gets the velocity closest to the one that takes it to its
      * place, clear of every drone near its height ({@link Orca}). Followers give way, one by one (AC-8): to each other
      * half and half; to the lead, to drones cut off (still where their brake stopped them, and - in wind - perhaps
@@ -1420,6 +1512,7 @@ public final class GroupController {
             Report r = reports.get(w.m().id);
             // landing, or its FC no longer flying as told (its own battery failsafe landing it): it goes where it goes
             if (r == null || r.landed() || (w.flags() & GroupOrder.FLAG_LAND) != 0 || !r.following()) continue;
+            if (w.m().state == State.LEAVING && w.m().lostAt >= 0) continue; // silent: not flown by anyone here
             V2 target = centre.plus(w.off());
             V2 pref = vel.plus(target.minus(r.pos()).times(PLACE_GAIN)).capped(Math.max(w.cap(), 0.5));
             // near 3 %: its FC may land it where it is any moment (BATT_FS_CRT_ACT): shown as coming down already, so
@@ -1428,14 +1521,34 @@ public final class GroupController {
             double toCritical = (mm.battery - LAND_PCT) / Math.max(mm.drainPerS, 1e-6);
             double vu = toCritical < LANDING_WARN_S && mm.battery < 50 || landingSoon.contains(mm.id) ? Math.min(r.vu(), -1.5) : r.vu();
             boolean firm = nearCritical(mm) || mm.state == State.LANDING || landingSoon.contains(mm.id);
-            agents.add(new Orca.Agent(w.m().id, r.pos(), r.altAmsl(), r.vel(), vu, pref, p.catchUpMs(), true, 0, firm, r.vu() < -FALLING_MS));
+            // near 3 % its FC may land it any moment - braking along its way first (LAND holds where it stops): it flies no
+            // faster than NEAR_CRITICAL_MS, its braking way short.
+            // Before, one chasing its cell at speed braked across a neighbour's path (seed 164)
+            double maxV = nearCritical(mm) && mm.state != State.LANDING ? Math.min(p.catchUpMs(), NEAR_CRITICAL_MS) : p.catchUpMs();
+            agents.add(new Orca.Agent(w.m().id, r.pos(), r.altAmsl(), r.vel(), vu, pref.capped(maxV), maxV, true, 0, firm, r.vu() < -FALLING_MS));
             flown.add(w.m().id);
         }
         if (lead != null && leadFresh && !lead.landed()) {
             agents.add(new Orca.Agent("lead", lead.pos(), lead.altAmsl(), lead.vel(), lead.vu(), lead.vel(), 0, false, 0, false, lead.vu() < -FALLING_MS));
+        } else if (lead != null && !lead.landed()) {
+            // a silent lead (its link lost, not yet taken over): still there - where it was heard and as far on as its
+            // phone's brake lets it (then it holds, then climbs where it is). Before, it was nobody's: a follower flew
+            // into a new lead that had gone silent on its way out (seed 160)
+            double sp = lead.vel().length();
+            V2 stop = sp < 0.3 ? lead.pos() : lead.pos().plus(lead.vel().unit().times(sp * SILENT_MS / 1000.0 + sp * sp / (2 * p.brakeMs2())));
+            for (double s = 0; s <= lead.pos().dist(stop) + 1e-9; s += 4) {
+                V2 on = sp < 0.3 ? stop : lead.pos().plus(stop.minus(lead.pos()).unit().times(s));
+                agents.add(new Orca.Agent("lead~" + Math.round(s), on, lead.altAmsl(), V2.ZERO, 0, V2.ZERO, 0, false, 1));
+                if (sp < 0.3) break;
+            }
+            addColumn(agents, "lead", stop, lead.altAmsl()); // and its climb there when it goes home
         }
         for (Member m : members.values()) {
             if (flown.contains(m.id) || m.state == State.GONE) continue;
+            if (m.state == State.LEAVING && m.lostAt >= 0) { // a silent new lead: where it hangs, and its climb there
+                addColumn(agents, m.id, m.lastPos, m.lastAlt);
+                continue;
+            }
             Report r = reports.get(m.id);
             if (m.state == State.LOST) { // where its plan has it: still through its hold, then out along its lane and home
                 double[] at = predicted(m.id, lastTick);
@@ -1580,7 +1693,10 @@ public final class GroupController {
             lastPlansAt = now;
             return null;
         }
-        ExitPlanner.Result res = new ExitPlanner(p).plan(centre, vel, in, top, prover);
+        // AC-41: the lead's way home (from where it is to its home, or where it was last heard) proven with the plans
+        V2 lh = leadHome != null ? leadHome : lead == null ? null : lead.pos();
+        ExitPlanner.Lead lp = lead == null ? null : new ExitPlanner.Lead(lead.pos(), lead.altAmsl(), lh, lead.homeAmsl());
+        ExitPlanner.Result res = new ExitPlanner(p).plan(centre, vel, in, top, lp, prover);
         if (prover != null && !res.proven()) {
             events.add("EXIT PLANS NOT PROVEN");
             return null; // the drones keep the last proven set

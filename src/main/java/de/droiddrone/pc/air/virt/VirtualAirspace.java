@@ -211,6 +211,8 @@ public final class VirtualAirspace {
             VirtualCopter c = copters.get(id);
             others.add(new GroupController.Other(id, c.pos(), c.u, V2.ZERO, false));
         }
+        VirtualCopter lc = leadId == null ? null : copters.get(leadId);
+        if (lc != null) gc.setLeadHome(new V2(lc.rallyE, lc.rallyN)); // AC-41: where its RTL comes down
         GroupController.Out out = gc.tick(now, reports, lead, others, wind);
         for (Map.Entry<String, GroupOrder> e : out.orders().entrySet()) {
             FollowerBrain b = phones.get(e.getKey());
@@ -362,8 +364,25 @@ public final class VirtualAirspace {
      * through it, so the start is the same). Flat ground under the group's base; homes as the inputs say.
      */
     public static ExitPlanner.Prover prover(AirParams p, double groundAmsl) {
-        return (centre, velocity, inputs, plans, leadAlt) -> {
+        return (centre, velocity, inputs, plans, leadAlt, leadIn) -> {
             VirtualAirspace a = new VirtualAirspace(p, groundAmsl, 1);
+            // AC-41: the lead goes home LEAD_HOME_AFTER_S after the PC went - while the followers still hold (their hold
+            // is left out here: it is flown ahead by that much), its way up, over and down checked against where they hold
+            VirtualCopter lead = null;
+            if (leadIn != null) {
+                lead = new VirtualCopter(ExitPlanner.LEAD_ID, leadIn.pos().e(), leadIn.pos().n(), leadIn.altAmsl(), groundAmsl, 2);
+                lead.homeAmsl = leadIn.homeAmsl();
+                lead.rallyE = leadIn.home().e();
+                lead.rallyN = leadIn.home().n();
+                lead.apply(de.droiddrone.common.group.FleetIntent.rtl(Math.max(0, leadAlt - leadIn.homeAmsl())), a.lat0, a.lon0);
+                double ahead = p.holdMs() / 1000.0 - ExitPlanner.LEAD_HOME_AFTER_S;
+                for (double t = 0; t < ahead && !lead.landed; t += STEP_MS / 1000.0) {
+                    lead.step(STEP_MS / 1000.0, 0, 0, groundAmsl);
+                    // (its way down onto a drone still holding there is no plan's to change: it is the lead's own rule;
+                    // the plans are proven from where they start to fly, the lead over them by then)
+                }
+                if (lead.landed) lead = null; // down before anyone leaves
+            }
             double[] c = GeoLocal.offset(a.lat0, a.lon0, centre.e(), centre.n());
             for (ExitPlanner.Input in : inputs) {
                 V2 at = centre.plus(in.rel());
@@ -383,6 +402,7 @@ public final class VirtualAirspace {
                 b.plan(new ExitPlan(pl.bottomRow() ? ExitPlan.FLAG_BOTTOM_ROW : 0, 1, pl.laneEndRadiusM(), pl.startDelayS(),
                         pl.returnAltRelM(), rally[0], rally[1], pl.layerAltAmsl()));
             }
+            if (lead != null) a.copters.put(lead.id, lead); // flies on by its RTL: measured with the rest
             a.pcAlive = false;
             for (int k = 0; k < 6000; k++) { // at most 10 min
                 a.step();

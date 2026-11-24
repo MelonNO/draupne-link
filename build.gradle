@@ -422,6 +422,19 @@ tasks.register('packageInstaller', Exec) {
     }
 }
 
+// fleet AC-14: the random separation cases of the follower group (tag night in pc/air: SeparationSuiteTest's seeds,
+// AIR_SEEDS of them, 30 unless set). A few minutes. gradlew nightSeparation
+tasks.register('nightSeparation', Test) {
+    group = 'bench'
+    description = 'The follower group\'s random separation seeds (tag night in pc/air; AIR_SEEDS, default 30)'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'night' }
+    include '**/pc/air/**'
+    maxParallelForks = 1
+    testLogging { events 'failed'; exceptionFormat 'full' }
+}
+
 // fleet: the PRD's phase gates against real ArduPilot Copter running on this PC (ArduPilot's Windows SITL build in
 // %LOCALAPPDATA%\DroidDroneBuild\sitl\copter, or DRAUPNE_ARDU_SITL). Real time, a few minutes; skipped without SITL.
 tasks.register('fleetSitl', Test) {

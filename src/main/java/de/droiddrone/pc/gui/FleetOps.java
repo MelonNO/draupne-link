@@ -234,7 +234,7 @@ final class FleetOps {
         GroupLink l = link;
         if (l == null || !l.active()) return DISPATCH_HEIGHT_M;
         de.droiddrone.pc.air.AirParams d = design();
-        return Math.max(DISPATCH_HEIGHT_M, de.droiddrone.pc.air.GroupDesign.topM(d, l.members().size(), 1) + 2 * d.layerM());
+        return Math.max(DISPATCH_HEIGHT_M, de.droiddrone.pc.air.GroupDesign.topM(d, l.members().size(), 1) + d.layerM());
     }
 
     private void begin(List<de.droiddrone.pc.route.Dispatch.Leg> legs, java.util.Map<String, double[]> starts) {
@@ -717,6 +717,7 @@ final class FleetOps {
     /** Once a second (the window's refresh): calls waiting for their column, orders sent again until answered. */
     void tickReserves() {
         tickReturns(de.droiddrone.pc.MonoClock.ms());
+        lookGround(de.droiddrone.pc.MonoClock.ms());
         tickRallies(de.droiddrone.pc.MonoClock.ms());
         tickDispatch();
         dropRefusedMarks();
@@ -735,6 +736,51 @@ final class FleetOps {
         for (String d : new ArrayList<>(pending.keySet())) {
             Long at = orderSentAt.get(d);
             if (at == null || de.droiddrone.pc.MonoClock.ms() - at >= 2000) sendOrder(d);
+        }
+    }
+
+    // ------------------------------------------------------------------ AC-3: the base over rising ground
+
+    /** The ground under the group is looked up this often (off Swing's thread and the group's tick). */
+    static final long GROUND_EVERY_MS = 5000;
+    /** And this far ahead of it along its way, s. */
+    static final double GROUND_AHEAD_S = 10;
+    private final java.util.concurrent.ExecutorService groundLookup = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "groupGround");
+        t.setDaemon(true);
+        return t;
+    });
+    private volatile boolean groundBusy;
+    private long groundAt = Long.MIN_VALUE / 2;
+
+    /**
+     * AC-3: the highest ground under the group's area - where it is and where it will be in {@link #GROUND_AHEAD_S}
+     * - given to the group, whose base follows it (slowly, every layer together). Before, the base was the ground
+     * where the group formed for as long as it flew: over rising ground its floor and layers came ever closer to it.
+     */
+    private void lookGround(long now) {
+        GroupLink l = link;
+        if (l == null || !l.active() || groundBusy || now - groundAt < GROUND_EVERY_MS) return;
+        double[] c = l.centreNow();
+        if (c == null) return;
+        groundAt = now;
+        groundBusy = true;
+        de.droiddrone.pc.route.TerrainSource terrain = host.terrain();
+        de.droiddrone.pc.air.AirParams d = design();
+        try {
+            groundLookup.execute(() -> {
+                try {
+                    double here = groupGround(terrain, d, c[0], c[1], Double.NaN);
+                    double[] ahead = de.droiddrone.common.group.GeoLocal.offset(c[0], c[1], c[2] * GROUND_AHEAD_S, c[3] * GROUND_AHEAD_S);
+                    double there = groupGround(terrain, d, ahead[0], ahead[1], Double.NaN);
+                    double g = Double.isNaN(here) ? there : Double.isNaN(there) ? here : Math.max(here, there);
+                    if (!Double.isNaN(g)) l.setGround(g);
+                } finally {
+                    groundBusy = false;
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            groundBusy = false; // closed
         }
     }
 
@@ -1181,6 +1227,7 @@ final class FleetOps {
 
     void close() {
         closed = true;
+        groundLookup.shutdownNow();
         launchViews.close();
         GroupLink l = link;
         link = null;
@@ -1341,6 +1388,12 @@ final class FleetOps {
             for (String a : miniViews.takeAlerts()) SwingUtilities.invokeLater(() -> host.alert("LAUNCH FAILED: " + a)); // off the paint
         }
         GroupLink.Picture p = picture();
+        if (l != null && p != null) { // AC-41: where the lead's RTL comes down - its own rally point, else ArduPilot's home
+            Rally own = host.flownPhone() == null ? null : rallies.get(host.flownPhone());
+            de.droiddrone.pc.FcTelemetry.Home home = lead == null ? null : lead.getHome();
+            if (own != null && own.onDrone) l.setLeadHome(own.lat, own.lon);
+            else if (home != null) l.setLeadHome(home.latDeg(), home.lonDeg());
+        }
         de.droiddrone.pc.FcTelemetry.Gps gps = lead == null ? null : lead.getGps();
         double edge = Double.NaN;
         if (p != null && gps != null && gps.positionOk()) {

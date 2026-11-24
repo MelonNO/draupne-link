@@ -265,6 +265,32 @@ public final class GroupLink implements AutoCloseable {
         return followerRallies;
     }
 
+    /** AC-3: the highest ground under the group's area as last looked up (AMSL); NaN: none new. */
+    private volatile double groundAsked = Double.NaN;
+
+    /** AC-3: the highest ground under the group's area now, looked up off the tick: the base follows it (slowly). */
+    public void setGround(double amsl) {
+        groundAsked = amsl;
+    }
+
+    /** The group's centre and velocity now ({lat, lon, velE, velN}), for the ground look-up; null without a group. */
+    public double[] centreNow() {
+        Picture p = view.picture();
+        double[] v = velNow;
+        return p == null ? null : new double[]{p.lat(), p.lon(), v[0], v[1]};
+    }
+
+    private volatile double[] velNow = {0, 0};
+
+    /** AC-41: where the lead's RTL comes down ({lat, lon}), not yet taken by the tick; null: none new. */
+    private volatile double[] leadHomeAsked;
+
+    /** AC-41: where the lead's RTL comes down (its rally point or home): the exit plans keep clear of its way there. */
+    public void setLeadHome(double lat, double lon) {
+        if (Double.isNaN(lat) || Double.isNaN(lon)) return;
+        leadHomeAsked = new double[]{lat, lon};
+    }
+
     /** A floor asked for and not yet taken by the tick (NaN: none). */
     private volatile double floorAsked = Double.NaN;
 
@@ -351,6 +377,11 @@ public final class GroupLink implements AutoCloseable {
             floorAsked = Double.NaN;
             g.setFloor(floor);
         }
+        double gr = groundAsked;
+        if (!Double.isNaN(gr)) g.setGroundTarget(gr); // AC-3
+        velNow = new double[]{g.velocity().e(), g.velocity().n()};
+        double[] lh = leadHomeAsked;
+        if (lh != null && !Double.isNaN(lat0)) g.setLeadHome(local(lh[0], lh[1])); // AC-41
         Map<String, double[]> solo = soloRalliesAsked;
         if (solo != null) { // AC-10: the followers' rally points clear of the solo drones'
             soloRalliesAsked = null;

@@ -36,6 +36,8 @@ class FleetFlowLoopbackTest {
     private final List<String> log = new CopyOnWriteArrayList<>();
     private final Set<String> noAddress = ConcurrentHashMap.newKeySet();
     private volatile String flown = "Lead";
+    /** The ground the PC's terrain look-ups see (AMSL). */
+    private volatile double terrainNow = GROUND;
     private FleetOps ops;
 
     @AfterEach
@@ -98,7 +100,7 @@ class FleetFlowLoopbackTest {
             }
 
             public de.droiddrone.pc.route.TerrainSource terrain() {
-                return (lat, lon) -> GROUND;
+                return (lat, lon) -> terrainNow;
             }
         });
     }
@@ -380,6 +382,21 @@ class FleetFlowLoopbackTest {
         until(() -> ops.picture() != null && Math.abs(ops.picture().floorM() - 10) < 1e-6, 2000, "the group's floor 10 m");
         for (int i = 0; i < 30 && log.stream().noneMatch(l -> l.contains("over the ceiling")); i++) click("F1", "Floor +5 m");
         assertTrue(log.stream().anyMatch(l -> l.startsWith("! Floor 115 m: top layer 125 m, over the ceiling (120 m)")), log.toString());
+    }
+
+    /**
+     * AC-3 through the window: the ground under the group rises (here: the terrain the PC looks up, all of it 20 m
+     * higher) - looked up off Swing's thread every few seconds, the group's base follows, every follower climbs by it.
+     */
+    @Test
+    void theGroupClimbsWithTheGroundUnderIt() throws Exception {
+        group();
+        ops = ops();
+        form("F1", "F2");
+        until(() -> Math.abs(phones.get("F1").copter.u - (GROUND + 50)) < 1 && Math.abs(phones.get("F2").copter.u - (GROUND + 50)) < 1, 60_000, "both in the bottom layer");
+        double f1 = phones.get("F1").copter.u, f2 = phones.get("F2").copter.u;
+        terrainNow = GROUND + 20;
+        until(() -> phones.get("F1").copter.u > f1 + 18 && phones.get("F2").copter.u > f2 + 18, 60_000, "both 20 m higher");
     }
 
     /** FA1: a follower in the air (its report says armed and flying) is not marked SAFE TO AUTOLAUNCH. */
