@@ -1042,6 +1042,99 @@ class ControlLinkTest {
         }
     }
 
+    /**
+     * A damaged answer to a Connect (found by the protocol fuzz, 2026-11-24): the receive buffer refuses it, and it
+     * starts nothing here either - the phone's own answers after it are taken as ever. The link's own receive thread
+     * (never started: no session thread, no Connects of its own), on a socket that hands it the datagrams one by one.
+     */
+    @Test
+    void aDamagedAnswerStartsNothingAndTheAnswersAfterItAreTaken() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        ControlLink link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        long id = 0x1234_5678L;
+        byte[] damaged = answer(config.getKey(), id + 1000);
+        damaged[6] ^= 0x01; // a letter of the key
+        byte[] cut = java.util.Arrays.copyOf(answer(config.getKey(), id + 2000), 7); // the key cut short
+        List<byte[]> datagrams = List.of(answer(config.getKey(), id), cut, damaged, answer(config.getKey(), id + 1), answer(config.getKey(), id + 2),
+                answer(config.getKey(), id + 3));
+        List<Long> startsAfter = new java.util.ArrayList<>();
+        List<String> logged = new CopyOnWriteArrayList<>();
+        java.lang.reflect.Field running = ControlLink.class.getDeclaredField("running");
+        running.setAccessible(true);
+        DatagramSocket socket = new DatagramSocket((java.net.SocketAddress) null) { // unbound: nothing sent, nothing taken
+            int next;
+
+            @Override
+            public void send(DatagramPacket p) {
+            }
+
+            @Override
+            public void receive(DatagramPacket p) throws java.io.IOException {
+                if (next > 0) startsAfter.add(link.getSessionStarts());
+                if (next == datagrams.size()) {
+                    try {
+                        running.set(link, false);
+                    } catch (IllegalAccessException e) {
+                        throw new IllegalStateException(e);
+                    }
+                    throw new java.net.SocketException("over");
+                }
+                byte[] d = datagrams.get(next++);
+                System.arraycopy(d, 0, p.getData(), 0, d.length);
+                p.setLength(d.length);
+                p.setAddress(InetAddress.getLoopbackAddress());
+                p.setPort(phonePort);
+            }
+        };
+        UdpSender sender = new UdpSender(socket);
+        sender.connect(InetAddress.getLoopbackAddress(), phonePort);
+        java.io.PrintStream out = System.out;
+        System.setOut(new java.io.PrintStream(new java.io.OutputStream() { // the receive thread's log: "Receiver error: ..."
+            final StringBuilder line = new StringBuilder();
+
+            @Override
+            public void write(int b) {
+                if (b != '\n') line.append((char) b);
+                else {
+                    logged.add(line.toString());
+                    line.setLength(0);
+                }
+            }
+        }, true));
+        try {
+            for (String[] f : new String[][]{{"socket"}, {"udpSender"}, {"receiverBuffer"}, {"running"}}) {
+                java.lang.reflect.Field field = ControlLink.class.getDeclaredField(f[0]);
+                field.setAccessible(true);
+                field.set(link, switch (f[0]) {
+                    case "socket" -> socket;
+                    case "udpSender" -> sender;
+                    case "receiverBuffer" -> new ReceiverBuffer(sender, false, config.getKey(), config.getKey());
+                    default -> true;
+                });
+            }
+            java.lang.reflect.Method receiverRun = ControlLink.class.getDeclaredMethod("receiverRun");
+            receiverRun.setAccessible(true);
+            receiverRun.invoke(link);
+        } finally {
+            System.setOut(out);
+            sender.close();
+            socket.close();
+        }
+        assertEquals(List.of(1L, 1L, 1L, 2L, 3L, 4L), startsAfter, "the phone's answers each start the session, the damaged two nothing; logged: " + logged);
+        assertTrue(logged.stream().noneMatch(l -> l.contains("Exception")), "nothing thrown on the receive thread: " + logged);
+    }
+
+    /** The phone's answer: this link's Connect as buildConnectPacket writes it, marked "told by the id" as the phone marks it. */
+    private static byte[] answer(String key, long sessionId) throws java.io.IOException {
+        UdpPacketData p = new UdpPacketData(UdpCommon.Connect, -1);
+        p.daos.writeByte(1);
+        p.daos.writeUTF(key);
+        p.daos.writeShort(SettingsCommon.versionCompatibleCode);
+        p.daos.writeInt((int) sessionId);
+        p.daos.writeByte(de.droiddrone.common.SessionGate.ANSWER_BY_ID);
+        return p.getData();
+    }
+
     @Test
     void theVideoProfileGoesOutWithTheFirstConfigOfEverySession() throws Exception {
         phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);

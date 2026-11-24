@@ -543,6 +543,9 @@ public class ControlLink {
                 }
                 lastReceivedAt = MonoClock.ms();
                 if (packet.getLength() > 0 && d[0] == UdpCommon.Connect) {
+                    // the phone's answer is this link's own Connect sent back: a damaged one is none - the buffer refuses
+                    // it, and it counts for nothing here either (2026-11-24, the protocol fuzz)
+                    if (!answerTakenByTheBuffer(d, packet.getLength())) continue;
                     if (answerOfAnOlderTry(d, packet.getLength(), lastReceivedAt)) continue; // 1.0.71: it starts nothing
                     connectAnsweredAt = lastReceivedAt; // it hears us again
                     sessionStarts.incrementAndGet();
@@ -1176,6 +1179,16 @@ public class ControlLink {
         olderAnswers = 0;
         answeredId = id;
         return false;
+    }
+
+    /**
+     * A Connect the receive buffer takes as the phone's answer: [8][num i16, -1 or more][client type 0-2][key UTF, this
+     * link's] - as ReceiverBuffer.addPacket reads it (this side's buffer has the one key for both kinds of client).
+     */
+    private boolean answerTakenByTheBuffer(byte[] d, int len) {
+        if (len < 6 || (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)) < -1 || d[3] < 0 || d[3] > 2) return false;
+        int n = ((d[4] & 0xff) << 8) | (d[5] & 0xff);
+        return n > 0 && 6 + n <= len && key != null && key.equals(new String(d, 6, n, java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /** How often the phone's answer to a Connect started this side's session (over) since start(): one a (re)connect when all is well. */
