@@ -30,6 +30,13 @@ import static org.junit.jupiter.api.Assertions.fail;
  * emulator alone), its sockets opened by the same code as the released app's: checked as the released app's. In the
  * emulator the bench build takes every address by design - said, not judged - and the released build of this PC
  * ({@code flight-app\build.ps1}), started there beside it, is checked instead: without Tailscale it must be silent.</li>
+ * <li><b>A WAKE from outside, behind the lock screen</b> ({@link #aWakeFromOutsideStaysBehindTheLockScreen}): with the
+ * lock screen up, the app's WAKE is started from adb's shell - as any other app could - without the app's own token,
+ * and once with a made-up one: the lock screen must still show with nothing in front of it, the window in front must
+ * not be the app's, and the app's log must say it was opened as a plain start. The app's own WAKE (the PC's PILOT UAV
+ * waking a sleeping phone) still opens it over the lock screen: {@code PhoneNightScenario} shows that every round. The
+ * emulator's lock screen (a swipe) is put up by its sleep key; a real phone's lock is never touched - the bench has no
+ * key for it - so a phone found unlocked is waited for while a hand locks it, and else the check is skipped by name.</li>
  * </ul>
  * On the emulator and on the real phone (the task benchHwPhone). On a real phone nothing is cleared, granted or
  * stopped here: the app on the phone is opened as a hand opens it ({@code am start}) and read.
@@ -39,6 +46,12 @@ import static org.junit.jupiter.api.Assertions.fail;
 class PhoneHardeningScenario {
     /** The kernel's tables of the sockets: what takes datagrams and connections. */
     static final List<String> TABLES = List.of("udp", "udp6", "tcp", "tcp6");
+    /** The app's main screen, as adb names it after the package. */
+    static final String MAIN_ACTIVITY = "de.droiddrone.flight.MainActivity";
+    /** A token of the right length that is not the app's: the app makes its own at random and keeps it to itself. */
+    static final String MADE_UP_TOKEN = "0123456789abcdef0123456789abcdef";
+    /** How long a real phone found unlocked is waited for while a hand locks it (its power button). */
+    static final long LOCK_BY_HAND_MS = 120_000;
 
     private final List<String> wrong = new ArrayList<>();
     private Film film;
@@ -174,6 +187,104 @@ class PhoneHardeningScenario {
         } finally {
             finish("phone-listens-on", phone);
         }
+    }
+
+    /**
+     * BS8: the app's WAKE started from outside the app - adb's shell, as any other app on the phone could - with the
+     * lock screen up: it must stay behind it.
+     */
+    @Test
+    void aWakeFromOutsideStaysBehindTheLockScreen() throws Exception {
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        film = film("phone-wake-from-outside");
+        PhoneRig phone = new PhoneRig(film, target);
+        try {
+            phone.ensureRunning();
+            openTheApp(phone);
+            String app = target.app();
+            say("Checked: " + app + " " + phone.version() + (phone.device() ? " on a real phone" : " in the emulator") + ". Its main screen and the WAKE's "
+                    + "handling are the released app's own code in either build (the bench build adds a receiver and its ways to a flight controller).");
+            PhoneRig.Keyguard k = lockScreenUp(phone);
+            if (k.lock() == PhoneRig.Lock.UNLOCKED) {
+                if (phone.device()) {
+                    phone.skip("BS8, a WAKE from outside behind the lock screen: the phone was not locked (the bench never locks a real phone itself) - " + k);
+                } else {
+                    check(false, "the emulator's lock screen came up for the check: " + k);
+                }
+                return;
+            }
+            say("The lock screen up for the check: " + k + ".");
+            phone.shot("phone: locked, before a WAKE from outside");
+            String[][] tries = {{"without a token", ""}, {"with a made-up token", " --es " + PhoneWords.WAKE_TOKEN_EXTRA + " " + MADE_UP_TOKEN}};
+            for (String[] t : tries) {
+                String w = "a WAKE from outside " + t[0];
+                phone.shell("input keyevent KEYCODE_WAKEUP"); // the screen lit: the lock screen as a hand that picks the phone up sees it
+                Ui.pause(800);
+                String stamp = phone.now();
+                String started = phone.shell("am start -n " + app + "/" + MAIN_ACTIVITY + " -a " + PhoneWords.WAKE_ACTION + t[1]);
+                Ui.pause(3000);
+                PhoneRig.Keyguard after = phone.keyguardAsItIs();
+                PhoneRig.Reading screen = phone.reading();
+                String log = phone.appSaidSince(stamp);
+                check(!started.contains("Error"), w + ": Android took the start (" + started.lines().findFirst().orElse("") + ")");
+                check(after.lock() != PhoneRig.Lock.UNLOCKED, w + ": the lock screen still shows (" + after + ")");
+                check(!Boolean.TRUE.equals(after.occluded()), w + ": nothing is in front of the lock screen");
+                check(!after.focus().startsWith(app + "/"), w + ": the window in front is not the app's" + (after.focus().isEmpty() ? "" : " (" + after.focus() + ")"));
+                if (screen.read()) {
+                    long apps = screen.nodes().stream().filter(n -> app.equals(n.app())).count();
+                    check(apps == 0, w + ": nothing of the app's is on the screen as Android describes it (" + apps + " of its parts)");
+                } else {
+                    say(w + ": the screen could not be described (uiautomator: " + screen.error() + ") - the lock screen's state and the window in front say it.");
+                }
+                check(!log.contains(PhoneWords.OPENED_OVER_LOCK), w + ": the app did not open over the lock screen (its log)");
+                check(log.contains(PhoneWords.WAKE_NOT_ITS_OWN), w + ": the app's log says it took it as a plain start, behind the lock screen");
+                phone.shot("phone: after " + w);
+            }
+            say("The other half - the app's own WAKE, with its token, as the PC's PILOT UAV wakes a sleeping phone, still opens it over the lock screen - is "
+                    + "PhoneNightScenario's: every round it wakes the phone so, and files what adb sees of it (TO LOOK AT, the first three rounds).");
+        } catch (Throwable t) {
+            stopped(t, phone);
+        } finally {
+            if (!phone.device()) {
+                try {
+                    phone.unlock(); // the emulator as the other scenarios find it: its lock screen swiped away
+                } catch (Throwable ignored) {
+                }
+            }
+            finish("phone-wake-from-outside", phone);
+        }
+    }
+
+    /**
+     * The lock screen up, the screen lit. The emulator's is a swipe (PhoneRig.grantPermissions), and comes with its
+     * sleep key. A real phone's lock is never touched - the bench sends no key that could - so one found unlocked is
+     * waited for while a hand locks it; what is returned then says whether that happened.
+     */
+    private PhoneRig.Keyguard lockScreenUp(PhoneRig phone) {
+        if (!phone.device()) {
+            phone.shell("input keyevent KEYCODE_SLEEP");
+            Ui.pause(1500);
+            phone.shell("input keyevent KEYCODE_WAKEUP");
+            Ui.pause(1500);
+            return phone.keyguardAsItIs();
+        }
+        phone.shell("input keyevent KEYCODE_WAKEUP");
+        Ui.pause(800);
+        PhoneRig.Keyguard k = phone.keyguardAsItIs();
+        if (k.lock() != PhoneRig.Lock.UNLOCKED) return k;
+        say("The phone is unlocked. The bench never locks a real phone itself: lock it with its power button within " + LOCK_BY_HAND_MS / 60_000
+                + " min and leave it so - the run waits for it, then goes on behind the lock screen.");
+        long end = System.currentTimeMillis() + LOCK_BY_HAND_MS;
+        while (System.currentTimeMillis() < end) {
+            Ui.pause(5000);
+            k = phone.keyguardAsItIs();
+            if (k.lock() != PhoneRig.Lock.UNLOCKED) {
+                say("Locked by hand: " + k + ".");
+                return k;
+            }
+        }
+        return k;
     }
 
     /**
