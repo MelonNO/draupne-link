@@ -208,6 +208,27 @@ class AirspaceTest {
         assertEquals(List.of("A1239/26"), NotamParser.replaced(copied), "the one it replaces goes too");
     }
 
+    /** The radius of E) in the orders and units NOTAMs give it; before, "500M RADIUS" drew the Q) line's 3 NM. */
+    @Test
+    void aRadiusIsReadBeforeOrAfterItsWordAndInFeet() {
+        String[][] cases = {
+                {"UAS OPS WI 500M RADIUS OF PSN 600000N 0110000E.", "500"},
+                {"UAS OPS WI 2NM RADIUS OF 600000N 0110000E.", "3704"},
+                {"WI 1.5 NM RADIUS CENTRED ON 600000N 0110000E", "2778"},
+                {"PSN 600000N 0110000E RADIUS 0,5NM.", "926"},
+                {"UAS OPS WITHIN RADIUS 1000FT OF 600000N 0110000E.", "304.8"},
+                {"WI A RADIUS OF 2 KM CENTRED ON 600000N 0110000E", "2000"},
+        };
+        for (String[] c : cases) {
+            String text = "A0125/26 NOTAMN\nQ) ENOR/QWULW/IV/BO/W/000/010/6000N01100E003\nA) ENOR B) 2611250600 C) PERM\nE) " + c[0]
+                    + "\nF) GND G) 400FT AGL\n";
+            List<NotamParser.Notam> n = NotamParser.parse(text);
+            assertEquals(1, n.size(), c[0]);
+            double north = (n.get(0).ring().get(0)[0] - 60.0) * 111_320.0;
+            assertEquals(Double.parseDouble(c[1]), north, 0.5, c[0]);
+        }
+    }
+
     @Test
     void pointsAreReadInTheirForms() {
         assertArrayEquals(new double[]{59 + 55 / 60.0, 10 + 45 / 60.0}, NotamParser.point("5955N01045E"), 1e-9);

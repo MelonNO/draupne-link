@@ -75,7 +75,13 @@ public final class NotamParser {
     private static final Pattern FIELD_G = Pattern.compile("\\bG\\)\\s*([^\\n]*)");
     /** A point: DDMM[SS[.s]]N DDDMM[SS[.s]]E, with or without spaces between. */
     static final Pattern POINT = Pattern.compile("(\\d{2})(\\d{2})(\\d{2}(?:[.,]\\d+)?)?\\s?([NS])\\s*[,/]?\\s*(\\d{3})(\\d{2})(\\d{2}(?:[.,]\\d+)?)?\\s?([EW])");
-    private static final Pattern RADIUS = Pattern.compile("RADIUS\\s+(?:OF\\s+)?(\\d+(?:[.,]\\d+)?)\\s*(NM|KM|M)\\b");
+    /**
+     * "RADIUS 2NM", "RADIUS OF 500 M" - or the radius first, as many NOTAMs have it: "WI 2NM RADIUS OF PSN ...",
+     * "WI 500M RADIUS" (read as the Q) circle before, rounded up to whole NM and round the Q) line's minute: 500 m drew
+     * as 5.5 km). Feet too ("RADIUS 1000FT").
+     */
+    private static final Pattern RADIUS = Pattern.compile("RADIUS\\s+(?:OF\\s+)?(\\d+(?:[.,]\\d+)?)\\s*(NM|KM|M|FT)\\b"
+            + "|\\b(\\d+(?:[.,]\\d+)?)\\s*(NM|KM|M|FT)\\s+RADIUS\\b");
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyMMddHHmm", Locale.ROOT);
 
     /** Every NOTAM in the text (one may be several pasted together); those whose area can't be found are left out. */
@@ -155,8 +161,15 @@ public final class NotamParser {
         }
         Matcher r = RADIUS.matcher(e);
         if (!pts.isEmpty() && r.find()) {
-            double v = Double.parseDouble(r.group(1).replace(',', '.'));
-            double m2 = r.group(2).equals("NM") ? v * 1852 : r.group(2).equals("KM") ? v * 1000 : v;
+            boolean after = r.group(1) != null;
+            double v = Double.parseDouble((after ? r.group(1) : r.group(3)).replace(',', '.'));
+            String unit = after ? r.group(2) : r.group(4);
+            double m2 = switch (unit) {
+                case "NM" -> v * 1852;
+                case "KM" -> v * 1000;
+                case "FT" -> v * 0.3048;
+                default -> v;
+            };
             return Airspace.circle(pts.get(0)[0], pts.get(0)[1], m2);
         }
         return null;
