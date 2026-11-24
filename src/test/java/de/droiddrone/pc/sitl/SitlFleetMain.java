@@ -26,13 +26,9 @@ import static de.droiddrone.common.PacketIds.NAME_QUERY;
 import static de.droiddrone.common.PacketIds.NAME_REPLY;
 
 /**
- * Manual tries of the fleet in DRAUPNE Link against real ArduPilot Copter: {@code gradlew sitlFleet -Pdrones=6}
- * (sitl-fleet.ps1). Starts that many SITL drones on the ground, 25 m apart, each with the phone's fleet role in front
- * of it (SitlFleetPhone) on a loopback address of its own, announced as the virtual fleet is (VirtualFleet's file) and
- * answering DRAUPNE Link's name queries - so the running app finds them by itself: on the map, in FLEET, with SAFE TO
- * AUTOLAUNCH, DISPATCH, return heights, rally points and TRAFFIC. No pilot session (Connect, sticks, video): the
- * phone's own link to its FC is USB. Each SITL's second port (TCP 5762 + 10 x instance) is free for Mission Planner.
- * Only for this PC's tries; never part of the app. Ctrl+C (or DRAUPNE Link's stop request) ends everything.
+ * The fleet-only drones of the SITL lab (SitlLab): SITL drones each with the phone's fleet role in front of it
+ * (SitlFleetPhone) on a loopback address of its own, announced as the virtual fleet is and answering DRAUPNE Link's
+ * name queries. {@link #start} for a test; the helpers for the lab.
  */
 public final class SitlFleetMain {
     /** SITL instances 60 and up: clear of the tests' (0 - 49). */
@@ -42,37 +38,6 @@ public final class SitlFleetMain {
     static final double SPACING_M = 25;
 
     private SitlFleetMain() {
-    }
-
-    public static void main(String[] args) throws Exception {
-        int drones = args.length > 0 ? Integer.parseInt(args[0]) : 4;
-        if (drones < 1 || drones > 20) throw new IllegalArgumentException("drones: 1 - 20");
-        double lat = args.length > 2 ? Double.parseDouble(args[1]) : Fleet.DEFAULT_LAT;
-        double lon = args.length > 2 ? Double.parseDouble(args[2]) : Fleet.DEFAULT_LON;
-        double alt = args.length > 3 ? Double.parseDouble(args[3]) : groundAt(lat, lon);
-        if (!ArduSitl.installed()) {
-            System.out.println("ArduPilot SITL isn't installed (" + ArduSitl.ENV + " or %LOCALAPPDATA%\\DroidDroneBuild\\sitl\\copter).");
-            System.exit(1);
-        }
-        if (!VirtualFleet.announcedNow().isEmpty()) {
-            System.out.println("The virtual fleet runs already (DRAUPNE Link's fleet program): close it first - the two share one file.");
-            System.exit(1);
-        }
-        Path configFile = AppPaths.configFile();
-        PcConfig config = PcConfig.load(Files.exists(configFile) ? configFile : null); // read only: never saved
-        VirtualFleet.clearStop(VirtualFleet.stopFile());
-        System.out.printf(Locale.ROOT, "Starting %d ArduPilot SITL drones at %.6f, %.6f (ground %.0f m above sea level) ...%n", drones, lat, lon, alt);
-        Running r = start(config, VirtualFleet.file(), drones, lat, lon, alt, FIRST_INSTANCE, line -> System.out.println(line));
-        Runtime.getRuntime().addShutdownHook(new Thread(r::close, "sitlFleetClose"));
-        System.out.println("Ready: " + drones + " drones on the ground, pre-arm checks passed. Start DRAUPNE Link as usual;"
-                + " they show as VIRTUAL. Ctrl+C here ends them.");
-        while (true) {
-            Thread.sleep(VirtualFleet.STOP_POLL_MS);
-            if (VirtualFleet.stopRequested(VirtualFleet.stopFile())) {
-                System.out.println("DRAUPNE Link asked the fleet to close.");
-                System.exit(0);
-            }
-        }
     }
 
     /** The drones up: their phones by name, announced in the fleet file; close ends everything. */
@@ -143,7 +108,7 @@ public final class SitlFleetMain {
     }
 
     /** A name query answered as the phone does: its name, where it is, armed or not, NORMAL (as ArduShow's). */
-    private static void answerName(String key, String name, SitlFleetPhone p, DatagramPacket d) {
+    static void answerName(String key, String name, SitlFleetPhone p, DatagramPacket d) {
         byte[] b = java.util.Arrays.copyOf(d.getData(), d.getLength());
         if (b.length < 1 || b[0] != NAME_QUERY) return;
         if (!key.equals(Names.keyOf(b, b.length))) return;

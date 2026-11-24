@@ -40,16 +40,23 @@ public final class ArduSitl implements AutoCloseable {
 
     /** Starts instance n at home (lat, lon, height above sea level), heading north; waits for its heartbeat. */
     public static ArduSitl start(int n, double lat, double lon, double alt, double speedup) throws IOException, InterruptedException {
+        return start(n, lat, lon, alt, speedup, java.util.List.of());
+    }
+
+    /** As above, with more of ArduPilot's defaults (lines "NAME value"): the SITL lab's battery monitor, on as on a real board. */
+    public static ArduSitl start(int n, double lat, double lon, double alt, double speedup, java.util.List<String> moreDefaults)
+            throws IOException, InterruptedException {
         try {
-            return startOnce(n, lat, lon, alt, speedup);
+            return startOnce(n, lat, lon, alt, speedup, moreDefaults);
         } catch (IOException e) {
             // once (a full fleetSitl run): no heartbeat within 5 s of the start, right after the 10-drone test - again, once
             Thread.sleep(2000);
-            return startOnce(n, lat, lon, alt, speedup);
+            return startOnce(n, lat, lon, alt, speedup, moreDefaults);
         }
     }
 
-    private static ArduSitl startOnce(int n, double lat, double lon, double alt, double speedup) throws IOException, InterruptedException {
+    private static ArduSitl startOnce(int n, double lat, double lon, double alt, double speedup, java.util.List<String> moreDefaults)
+            throws IOException, InterruptedException {
         Path bin = home();
         if (bin == null) throw new IOException("ArduPilot SITL not installed (" + ENV + ")");
         Path dir = bin.resolve("run" + n);
@@ -58,7 +65,7 @@ public final class ArduSitl implements AutoCloseable {
         Files.writeString(defaults, String.join("\n",
                 "FRAME_CLASS 1", "FRAME_TYPE 1", // quad X
                 "SYSID_THISMAV " + (n + 1),
-                "SIM_SPEEDUP " + speedup, "") + "\n");
+                "SIM_SPEEDUP " + speedup, "") + "\n" + (moreDefaults.isEmpty() ? "" : String.join("\n", moreDefaults) + "\n"));
         List<String> cmd = new ArrayList<>(List.of(bin.resolve("ArduCopter.elf").toString(), "--model", "quad",
                 "--home", lat + "," + lon + "," + alt + ",0", "-I" + n, "--speedup", String.valueOf(speedup),
                 "--defaults", defaults.toString()));
@@ -153,14 +160,37 @@ public final class ArduSitl implements AutoCloseable {
         throw new IOException("ArduPilot's pre-arm checks never passed");
     }
 
-    @Override
-    public void close() {
+    /**
+     * The SITL lab: this connection to ArduPilot's first port silent from now on (no ground station heartbeats), the
+     * phone app in an emulator its only ground station, on the second port (BenchFc, TCP), as a drone's phone is. Not
+     * closed: ArduPilot SITL ends when its first port's (its console's) connection closes.
+     */
+    public void handOver() {
+        fc.stopHeartbeats();
+    }
+
+    /** The second MAVLink port (SERIAL1): the phone app's in the lab. */
+    public int secondPort() {
+        return 5762 + 10 * instance;
+    }
+
+    private void release() {
         fc.close();
         try {
             socket.close();
         } catch (IOException ignored) {
             // gone
         }
+    }
+
+    /** ArduPilot still running. */
+    public boolean alive() {
+        return process.isAlive();
+    }
+
+    @Override
+    public void close() {
+        release();
         process.destroy();
         try {
             if (!process.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) process.destroyForcibly();

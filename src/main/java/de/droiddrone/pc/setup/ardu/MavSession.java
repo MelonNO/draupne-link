@@ -341,6 +341,14 @@ public final class MavSession implements AutoCloseable {
         return id;
     }
 
+    /**
+     * No more heartbeats from here (the session still reads and writes): another ground station takes over - the bench's
+     * SITL lab, where ArduPilot ends when its console connection closes, so this one stays open, silent.
+     */
+    public void stopHeartbeats() {
+        beat.interrupt();
+    }
+
     private void beatLoop() {
         while (open) {
             try {

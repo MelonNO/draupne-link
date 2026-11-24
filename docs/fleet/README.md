@@ -122,20 +122,37 @@ How it is proven:
    gives sticks before the new phone's version is known (old frame layout for a moment) and knows the PC by its address
    (fine on Tailscale, not behind a shared NAT); the radio's mode switch at the hand-over moment is untried.
 
-### Trying it by hand on SITL
+### The SITL lab: trying and flying it by hand
 
-`.\sitl-fleet.ps1` (or `-Drones 8`, `-Lat 59.91 -Lon 10.72 [-Alt 120]`) starts that many ArduPilot SITL drones on
-the ground, 25 m apart, each with the phone's fleet role in front of it. Start DRAUPNE Link as usual: they show as
-VIRTUAL (named from MobileZulu down) on the map and in FLEET. Right-click a drone for SAFE TO AUTOLAUNCH, right-click
-the map for DISPATCH; return heights, rally points and TRAFFIC go to them as to real ones. Each line printed gives a
-Mission Planner port (TCP 127.0.0.1:6362, 6372, ...) to watch that drone. Ctrl+C ends them all.
-- Not the pilot's own session: no Connect, sticks or video to a SITL drone (the phone reaches its FC over USB only).
-  FOLLOW GROUP, TAKE CONTROL, DISCARD LEAD and CALL RESERVE need a flown ArduPilot drone - covered by `gradlew
-  fleetSitl`, not by hand.
-- Not together with the virtual fleet (Virtual fleet.bat): the two share one file.
+`.\sitl-fleet.ps1` starts a whole fleet on real ArduPilot Copter (SITL) on this PC; then start DRAUPNE Link as usual -
+everything shows as VIRTUAL on the map, in the PHONE list and in FLEET. Ctrl+C ends it all.
+- **Phone drones**: the real phone app (its bench build - never released) in an Android emulator, its flight
+  controller a SITL drone. Pick one in the PHONE list, PILOT UAV, and fly it with the radio: AUX1 arms, AUX2 the
+  modes, camera picture and OSD as on a drone. What needs a flown drone works on these: FOLLOW GROUP (the flown one
+  leads), TAKE CONTROL, CALL RESERVE, DISCARD LEAD - for that one make the followers phone drones: the new lead is the
+  bottom row's emptiest battery, and a fleet-only drone has no pilot session to hand over to.
+- **Fleet-only drones**: the phone's fleet role on the PC, no pilot session - followers, reserves, DISPATCH.
+- Every SITL drone is set up as Drone setup sets up a DRAUPNE drone (its plan written, then restarted). Its battery monitor is
+  on (BATT_MONITOR 4), as on a real board: SITL has it off, and a battery ArduPilot doesn't know fails the launch check.
+- Mission Planner can watch any drone on the TCP port the script prints for it.
+- The phone apps' logs are kept in `%LOCALAPPDATA%\DraupneBench\sitl-lab` when the lab ends.
+
+**This PC's settings** live in `%LOCALAPPDATA%\DraupneBench\sitl-lab.settings` (made from the repo's
+`sitl-lab.settings` the first time; `.\sitl-fleet.ps1 -Edit` opens it): `phones` (auto: as many as the free memory
+and cores allow - 2 on this 28 GB laptop), `fleetOnly`, `emulatorMemoryMb`, `emulatorCores`, `emulatorWindows`, the
+place. **On a stronger PC** raise them there - or for one run: `.\sitl-fleet.ps1 -Phones 6 -Drones 10 -Memory 3072
+-Cores 4 -Windows`. `-Phones 0` starts no emulators (quick). The phone app's bench build is made again by itself when
+its code changed (`-Build` forces it); the lab's own Android device (`draupne-lab`, beside the bench's) is prepared
+again for each new build.
+- Not together with the virtual fleet (Virtual fleet.bat): they share one file.
 - The ground's height at the place is looked up, so routes over the terrain fit SITL's flat ground.
+- `gradlew fleetSitl` includes `SitlLabFlightTest`: the PC's link to a phone drone, armed on AUX1, climbed in ALT
+  HOLD on the throttle, held, landed and disarmed - through the relay, the emulator, the phone app and ArduPilot. And two phone
+  drones DISPATCHed by their own phone apps (GUIDED, arm, the climb, the route uploaded, AUTO), each holding at its slot.
 
-**Done since 2026-11-23, in short:** a dispatched drone leaves its column only at its own layer (the 10-drone gate
+**Done since 2026-11-23, in short:** the SITL lab found two real bugs: the phone app never read an ArduPilot drone's stick map
+or asked for its telemetry (it waited for an OSD request DRAUPNE Link never sends - no sticks reached ArduPilot), and a
+dispatched drone its phone did not launch stayed LAUNCHING with nobody told; a dispatched drone leaves its column only at its own layer (the 10-drone gate
 found one starting its route at the 40 m floor and climbing through the layers below it); separation 90 / 90 (and the PC-gone class); hand-over in about 290 ms; TRAFFIC to
 every drone's ArduPilot; stage 1 GNSS loss (AC-12 / AC-20 / AC-42); return heights over terrain (RT-9) and apart
 (FD-6); ArduPilot 4.7's renamed parameters; route blocks in parts (the phone reads 1100 bytes); stale datagrams

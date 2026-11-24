@@ -824,6 +824,15 @@ final class FleetOps {
             boolean down = s.reason == de.droiddrone.common.launch.LaunchSequence.LANDED; // its launch over by landing: no alarm
             if (s.state == de.droiddrone.common.launch.LaunchSequence.LAUNCH_FAILED && !down) host.alert("LAUNCH FAILED: " + drone + " - "
                     + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason));
+            if (s.state == de.droiddrone.common.launch.LaunchSequence.NOT_LAUNCHED) {
+                // its phone did not launch it (LOW BATTERY, NO GPS, TIPPED ...): its DISPATCH is over, the pilot told. Before,
+                // only a failed launch was said - such a drone stayed LAUNCHING in FLEET for good and nobody was told (the
+                // SITL lab, 2026-11-24: two phone apps' LOW BATTERY)
+                soloBack(drone);
+                dispatched.remove(drone);
+                marked.remove(drone); // as a reserve's: marked again by the pilot when it may go
+                host.alert("DISPATCH: " + drone + " NOT LAUNCHED - " + de.droiddrone.common.launch.LaunchSequence.reasonWord(s.reason) + ".");
+            }
             return;
         }
         if (reserves == null) return;
@@ -1521,6 +1530,11 @@ final class FleetOps {
     /** The launch's status, kept for FLEET's state (FD-2) as well as the queue's. */
     private void keepLaunch(String drone, de.droiddrone.common.launch.LaunchWire.Status s) {
         launches.put(drone, s);
+    }
+
+    /** The drone's last launch status from its phone (Swing's thread; the tests' look at a launch); null: none. */
+    de.droiddrone.common.launch.LaunchWire.Status launchStatus(String drone) {
+        return launches.get(drone);
     }
 
     // ------------------------------------------------------------------ FD-9: the dispatch preview

@@ -208,13 +208,17 @@ public class Mavlink {
                         continue;
                     }
                     if (fcVariant == FcInfo.FC_VARIANT_ARDUPILOT) {
-                        if (runGetOsdConfig) {
-                            if (fcParams.isFcConfigInitialized()) {
+                        // DRAUPNE Link (SITL lab, 2026-11-24): the FC's config read by itself, as for PX4 - not only when
+                        // the PC asks for the OSD's. The stick map (RCMAP_*) and the telemetry streams wait for it, and
+                        // DRAUPNE Link never asks for the OSD config: the pilot's sticks never reached an ArduPilot drone
+                        // (no RC override without the stick map) and its attitude, battery and GPS were never asked for.
+                        if (!fcParams.isFcConfigInitialized()) {
+                            fcParams.initializeFcConfig();
+                        } else {
+                            cameraRecordVideoChannel = fcParams.getOptionChannelForValue(FcCommon.AP_RC_OPTION_CAMERA_RECORD_VIDEO);
+                            if (runGetOsdConfig) {
                                 runGetOsdConfig = false;
                                 fcParams.sendOsdConfig();
-                                cameraRecordVideoChannel = fcParams.getOptionChannelForValue(FcCommon.AP_RC_OPTION_CAMERA_RECORD_VIDEO);
-                            } else {
-                                fcParams.initializeFcConfig();
                             }
                         }
                     }else if (fcVariant == FcInfo.FC_VARIANT_PX4) {

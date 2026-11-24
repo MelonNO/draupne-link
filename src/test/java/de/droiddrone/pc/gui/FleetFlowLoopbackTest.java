@@ -294,6 +294,29 @@ class FleetFlowLoopbackTest {
         assertTrue(at[1] >= 68, "D2's at its 70 m: " + at[1] + " " + log);
     }
 
+    /**
+     * A dispatched drone its phone does not launch (here LOW BATTERY): the pilot is told and FLEET stops saying
+     * LAUNCHING. Before, only a failed launch was said - such a drone stayed LAUNCHING for good, nobody told (the SITL
+     * lab found it with two real phone apps).
+     */
+    @Test
+    void aDispatchedDroneItsPhoneDoesNotLaunchIsSaidAndNotLeftLaunching() throws Exception {
+        VirtualFleetPhone d = onTheGround("D1", 0, 0);
+        d.copter.battery = 20; // under the launch's 40 %
+        flown = null;
+        ops = ops();
+        mark("D1");
+        double[] target = de.droiddrone.common.group.GeoLocal.offset(LAT, LON, 0, 300);
+        SwingUtilities.invokeAndWait(() -> ops.dispatch(target[0], target[1]));
+        until(() -> log.stream().anyMatch(l -> l.contains("D1 NOT LAUNCHED - LOW BATTERY")), 60_000, "the pilot told: NOT LAUNCHED, LOW BATTERY");
+        assertEquals(List.of(), d.arms, "never armed");
+        String s = state("D1");
+        assertNotEquals("LAUNCHING", s, "FLEET no longer says LAUNCHING");
+        List<JMenuItem>[] place = new List[1];
+        SwingUtilities.invokeAndWait(() -> place[0] = ops.placeItems(target[0], target[1]));
+        assertTrue(place[0].isEmpty() || !place[0].get(0).getText().startsWith("DISPATCH 1"), "not offered for DISPATCH until marked again: " + place[0]);
+    }
+
     /** AL-5: the last call is cancelled from the lead's menu before its drone arms; the drone stays marked and callable. */
     @Test
     void theLastReserveCallIsCancelledBeforeItArms() throws Exception {

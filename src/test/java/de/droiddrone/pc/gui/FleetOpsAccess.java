@@ -82,6 +82,17 @@ public final class FleetOpsAccess {
         flown = drone;
     }
 
+    /** The drone's launch as its phone last said it: state (reason), height; "-" for none. */
+    public String launchOf(String drone) throws Exception {
+        String[] s = new String[1];
+        javax.swing.SwingUtilities.invokeAndWait(() -> {
+            de.droiddrone.common.launch.LaunchWire.Status l = ops.launchStatus(drone);
+            s[0] = l == null ? "-" : de.droiddrone.common.launch.LaunchSequence.stateWord(l.state) + " ("
+                    + de.droiddrone.common.launch.LaunchSequence.reasonWord(l.reason) + "), " + Math.round(l.heightM) + " m";
+        });
+        return s[0];
+    }
+
     /** FLEET's word for a drone. */
     public String stateOf(String drone) throws Exception {
         String[] s = new String[1];

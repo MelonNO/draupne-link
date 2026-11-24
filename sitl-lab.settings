@@ -1,0 +1,29 @@
+# The SITL lab's settings (sitl-fleet.ps1). This is the example: the first run copies it to this PC's own file,
+# %LOCALAPPDATA%\DraupneBench\sitl-lab.settings - change that one (.\sitl-fleet.ps1 -Edit opens it).
+# The script's switches go over these for one run: -Phones 4 -Drones 6 -Memory 3072 -Cores 4 -Windows.
+
+# Drones flown by the real phone app (the bench build) in an Android emulator: you can Connect, fly them with your
+# radio, see their camera and OSD, make one the lead, TAKE CONTROL, DISCARD LEAD, CALL RESERVE.
+# auto: as many as this PC's free memory and cores allow (1 - 10). A stronger PC: auto, or a number.
+phones = auto
+
+# More drones with the phone's fleet role only (no pilot session): followers, reserves, DISPATCH (0 - 30).
+fleetOnly = 2
+
+# Each emulator: memory in MB (1536 - 16384) and CPU cores. 2048 and 2 run on a 28 GB, 16-core laptop.
+emulatorMemoryMb = 2048
+emulatorCores = 2
+
+# true: each phone's screen in a window of its own (more load); false: none.
+emulatorWindows = false
+
+# Where the drones stand. Empty: the virtual fleet's usual place. alt empty: the ground's height is looked up there.
+lat =
+lon =
+alt =
+
+# Metres between two drones on the ground (15 or more).
+spacingM = 25
+
+# The phone app to install. Empty: the newest bench build in build\flight-bench (built by the script when missing).
+apk =

@@ -445,20 +445,21 @@ tasks.register('fleetSitl', Test) {
     useJUnitPlatform { includeTags 'ardusitl' }
     include '**/sitl/**'
     maxParallelForks = 1
+    systemProperty 'bench.build', layout.buildDirectory.get().asFile.path // the SITL lab's phone app (build/flight-bench)
 }
 
-// fleet: SITL drones for trying DRAUPNE Link by hand (sitl-fleet.ps1): -Pdrones=4, -Plat= -Plon= [-Palt=] for the place
+// fleet: the SITL lab for trying and flying DRAUPNE Link by hand (sitl-fleet.ps1): -Psettings=<file>, and for one run
+// -Pphones= -PfleetOnly= -PemulatorMemoryMb= -PemulatorCores= -PemulatorWindows= -Plat= -Plon= -Palt= over the file's values
 tasks.register('sitlFleet', JavaExec) {
     group = 'bench'
-    description = 'ArduPilot SITL drones the running DRAUPNE Link finds by itself (-Pdrones=4, -Plat/-Plon/-Palt)'
+    description = 'The SITL lab: phone-app drones in emulators and fleet-only drones on ArduPilot SITL (sitl-fleet.ps1)'
     classpath = sourceSets.test.runtimeClasspath
-    mainClass = 'de.droiddrone.pc.sitl.SitlFleetMain'
+    mainClass = 'de.droiddrone.pc.sitl.SitlLab'
     systemProperty 'java.net.preferIPv4Stack', 'true'
     standardInput = System.in
-    def a = [(project.findProperty('drones') ?: '4').toString()]
-    if (project.hasProperty('lat') && project.hasProperty('lon')) {
-        a += [project.property('lat').toString(), project.property('lon').toString()]
-        if (project.hasProperty('alt')) a += [project.property('alt').toString()]
+    def a = [(project.findProperty('settings') ?: 'sitl-lab.settings').toString()]
+    for (k in ['phones', 'fleetOnly', 'emulatorMemoryMb', 'emulatorCores', 'emulatorWindows', 'lat', 'lon', 'alt']) {
+        if (project.hasProperty(k)) a += "${k}=${project.property(k)}".toString()
     }
     args a
 }
