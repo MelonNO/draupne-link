@@ -279,6 +279,23 @@ tasks.register('decoderFuzz', JavaExec) {
             .collect { "${it}=${project.property(it)}".toString() })
 }
 
+// By hand, for hours (docs/TESTING.md): the link's packet reading on both sides - valid streams of every kind, made by
+// the apps' own senders, damaged and reordered, fed to the receive paths in a child JVM at the lowest priority and
+// checked against what the code promises (no session without the key, nothing acted on twice, whole frames the ones
+// sent ...); a finding keeps its input under %LOCALAPPDATA%\DraupneBench\fuzz. Nothing leaves the process.
+//   gradlew protocolFuzz -Phours=4 -Pseed=1 [-PtimeoutMs=3000] [-PmaxMemMb=768] [-Ptargets=phone_link,pc_link,...] [-Pout=<folder>]
+//   gradlew protocolFuzz -Preplay=<a finding's input.pfz>   that one input again, every event said whole
+tasks.register('protocolFuzz', JavaExec) {
+    group = 'verification'
+    description = "Feeds damaged link packets to both apps' receive paths in a child JVM for hours (-Phours=4 -Pseed=1; -Preplay=<input.pfz>)"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.bench.fuzz.ProtocolFuzz'
+    maxHeapSize = '256m'
+    args(['hours', 'seed', 'timeoutMs', 'maxMemMb', 'targets', 'out', 'replay', 'first', 'last', 'polite']
+            .findAll { project.hasProperty(it) }
+            .collect { "${it}=${project.property(it)}".toString() })
+}
+
 // By hand, on the real internet: one tile from each of the map's servers, asked the way the app asks (docs/TESTING.md).
 tasks.register('mapProbe', JavaExec) {
     group = 'verification'

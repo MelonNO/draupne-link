@@ -357,8 +357,8 @@ public final class FuzzChild {
         System.out.println(line); // System.out flushes at each line: the parent has it before the next step
     }
 
-    /** The parent gone (its end of our input closed): this child goes too, at once. */
-    private static void endWithParent() {
+    /** The parent gone (its end of our input closed): this child goes too, at once. The protocol fuzz's child too. */
+    static void endWithParent() {
         Thread t = new Thread(() -> {
             try {
                 InputStream in = System.in;
