@@ -128,9 +128,11 @@ How it is proven:
 everything shows as VIRTUAL on the map, in the PHONE list and in FLEET. Ctrl+C ends it all.
 - **Phone drones**: the real phone app (its bench build - never released) in an Android emulator, its flight
   controller a SITL drone. Pick one in the PHONE list, PILOT UAV, and fly it with the radio: AUX1 arms, AUX2 the
-  modes, camera picture and OSD as on a drone. What needs a flown drone works on these: FOLLOW GROUP (the flown one
-  leads), TAKE CONTROL, CALL RESERVE, DISCARD LEAD - for that one make the followers phone drones: the new lead is the
-  bottom row's emptiest battery, and a fleet-only drone has no pilot session to hand over to.
+  modes, camera picture and OSD as on a drone. What needs a flown drone is meant for these: FOLLOW GROUP (the flown
+  one leads), TAKE CONTROL, CALL RESERVE, DISCARD LEAD - for that one make the followers phone drones: the new lead is
+  the bottom row's emptiest battery, and a fleet-only drone has no pilot session to hand over to. Tried on phone
+  drones so far (SitlLabFlightTest): flying on the sticks and DISPATCH; the rest by hand next (SitlFlowTest has them
+  with the phone's fleet role on the PC).
 - **Fleet-only drones**: the phone's fleet role on the PC, no pilot session - followers, reserves, DISPATCH.
 - Every SITL drone is set up as Drone setup sets up a DRAUPNE drone (its plan written, then restarted). Its battery monitor is
   on (BATT_MONITOR 4), as on a real board: SITL has it off, and a battery ArduPilot doesn't know fails the launch check.
