@@ -1,0 +1,259 @@
+package de.droiddrone.bench.phone;
+
+import de.droiddrone.bench.Film;
+import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.PhoneWords;
+import de.droiddrone.bench.Sandbox;
+import de.droiddrone.bench.Ui;
+import de.droiddrone.common.TailscaleOnly;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.fail;
+
+/**
+ * The phone app's hardening, checked on the phone itself - by hand until now (the security review's bench tests). Each
+ * check is a test of its own with a film of its own, and each reads; none changes the phone's settings or its lock.
+ * <ul>
+ * <li><b>What the phone listens on</b> ({@link #whatThePhoneListensOn}): the kernel's own socket tables, read for the
+ * app's uid. The released rule (Tailscale only, Q-006): every socket of the app that takes packets from anyone is on
+ * the phone's Tailscale address - on a VPN's interface - or parked on its own loopback; none on every address, none on
+ * another address of the phone. On a real phone the bench build holds that same rule (BenchNet widens it in the
+ * emulator alone), its sockets opened by the same code as the released app's: checked as the released app's. In the
+ * emulator the bench build takes every address by design - said, not judged - and the released build of this PC
+ * ({@code flight-app\build.ps1}), started there beside it, is checked instead: without Tailscale it must be silent.</li>
+ * </ul>
+ * On the emulator and on the real phone (the task benchHwPhone). On a real phone nothing is cleared, granted or
+ * stopped here: the app on the phone is opened as a hand opens it ({@code am start}) and read.
+ */
+@Tag("emulator")
+@Tag("hwphone")
+class PhoneHardeningScenario {
+    /** The kernel's tables of the sockets: what takes datagrams and connections. */
+    static final List<String> TABLES = List.of("udp", "udp6", "tcp", "tcp6");
+
+    private final List<String> wrong = new ArrayList<>();
+    private Film film;
+
+    private void check(boolean ok, String what) {
+        film.remark((ok ? "ok: " : "WRONG: ") + what);
+        if (!ok) wrong.add(what);
+    }
+
+    private void say(String text) {
+        film.remark(text);
+    }
+
+    private static Film film(String name) throws IOException {
+        return new Film(Sandbox.runRoot().resolve("film").resolve(name + "-" + ProcessHandle.current().pid()), name);
+    }
+
+    /** The film closed with its verdict, the phone given back; the test fails with what went wrong. */
+    private void finish(String name, PhoneRig phone) {
+        try {
+            if (phone != null) phone.close();
+        } finally {
+            film.close(wrong.isEmpty(), wrong);
+        }
+        if (!wrong.isEmpty()) fail(name + ": " + wrong.size() + " problem(s):\n - " + String.join("\n - ", wrong));
+    }
+
+    private void stopped(Throwable t, PhoneRig phone) {
+        wrong.add("the scenario stopped: " + t);
+        try {
+            if (phone != null) phone.shot("phone: STOPPED - " + t);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * The app open and its service running. The emulator: its newest bench build, as every emulator scenario has it,
+     * started afresh. A real phone: the app that is there, opened as a hand opens it - nothing cleared, granted or stopped.
+     */
+    private static void openTheApp(PhoneRig phone) throws IOException {
+        if (!phone.device()) {
+            phone.installApp();
+            phone.grantPermissions();
+            phone.forceStop();
+        }
+        phone.launch();
+        phone.startIfAsked(); // START, where it shows; behind a real phone's lock screen the service has to have started by itself
+    }
+
+    /** The app's sockets now, by its process's uid; null when it has no process. */
+    static List<Sockets.Sock> socketsOf(PhoneRig phone, String app) {
+        String pid = Sockets.firstPid(phone.shell("pidof " + app));
+        if (pid.isEmpty()) return null;
+        int uid = Sockets.uid(phone.shell("cat /proc/" + pid + "/status"));
+        if (uid < 0) return null;
+        List<Sockets.Sock> all = new ArrayList<>();
+        for (String table : TABLES) all.addAll(Sockets.parse(table, phone.shell("cat /proc/net/" + table + " 2>/dev/null")));
+        if (all.isEmpty()) throw new AssertionError("The phone's socket tables (/proc/net/udp, udp6, tcp, tcp6) could not be read");
+        return Sockets.of(all, uid);
+    }
+
+    /** The app's sockets once it has one that takes datagrams (its link socket, parked or not), waited for so long. */
+    private static List<Sockets.Sock> socketsOnceOpen(PhoneRig phone, String app, long ms) {
+        long end = System.currentTimeMillis() + ms;
+        while (true) {
+            List<Sockets.Sock> mine = socketsOf(phone, app);
+            if (mine != null && mine.stream().anyMatch(s -> !s.tcp() && s.listens()) || System.currentTimeMillis() > end) return mine;
+            Ui.pause(1000);
+        }
+    }
+
+    /** Every socket of the app, as the film says it: its kind of address and interface, never the phone's numbers. */
+    private void list(String who, List<Sockets.Sock> mine, List<Sockets.Address> phoneAddresses) {
+        StringBuilder s = new StringBuilder(who + ": " + mine.size() + " socket(s)");
+        for (Sockets.Sock k : mine) s.append("; ").append(Sockets.said(k, Sockets.ifaceOf(phoneAddresses, k.local())));
+        say(s + ".");
+    }
+
+    /**
+     * BS1: the app's sockets as the kernel lists them, held to the released rule - or, for the bench build in the
+     * emulator, said as what they are by design.
+     */
+    @Test
+    void whatThePhoneListensOn() throws Exception {
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        film = film("phone-listens-on");
+        PhoneRig phone = new PhoneRig(film, target);
+        try {
+            phone.ensureRunning();
+            String app = target.app(), stamp = phone.now();
+            openTheApp(phone);
+            int linkPort = phone.device() && target.link() != null ? target.link().getPort() : PhoneRig.linkOnThePhone();
+            List<Sockets.Sock> mine = socketsOnceOpen(phone, app, 30_000);
+            if (mine == null) throw new AssertionError(app + " has no process on the phone: nothing to read");
+            List<Sockets.Address> addresses = Sockets.addresses(phone.shell("ip -o addr show 2>&1"));
+            String said = phone.appSaidSince(stamp);
+            Files.writeString(film.dir().resolve("phone-log.txt"), said, StandardCharsets.UTF_8);
+            String build = app + " " + phone.version();
+            list("The app checked (" + build + (phone.device() ? ", a real phone" : ", the emulator") + ")", mine, addresses);
+            if (addresses.isEmpty()) say("The phone's own addresses could not be read (ip -o addr show): the interfaces are not named.");
+
+            if (!phone.device() && target.benchBuild()) {
+                // the bench build in the emulator: every address, by design (BenchNet) - and so the reading is seen to work
+                boolean wide = mine.stream().anyMatch(s -> !s.tcp() && s.listens() && s.localPort() == linkPort && s.where() == Sockets.Where.EVERY_ADDRESS);
+                check(wide, "the bench build in the emulator takes every address at the link port " + linkPort + ", as BenchNet makes it there (the test rig's build "
+                        + "only)" + (said.contains(PhoneWords.BENCH_NET_WIDE) ? " - its log says so" : "") + ": the reading finds the app's link socket");
+                say("THE BENCH BUILD IN THE EMULATOR SAYS NOTHING OF THE RELEASED APP: it widens the link there on purpose. The released build is checked below.");
+                theReleasedAppInTheEmulator(target, linkPort);
+            } else {
+                holdToTheReleasedRule("the app (" + build + ")", mine, addresses, linkPort, said, phone);
+                if (phone.device()) {
+                    say(target.benchBuild()
+                            ? "Checked: the BENCH BUILD on a real phone. There it holds the released app's rule (BenchNet widens in the emulator alone"
+                            + (said.contains(PhoneWords.BENCH_NET_TAILSCALE) ? ", and its log says so" : "") + "): its link and overwatch sockets are opened by "
+                            + "the same code as the released app's (TailscaleOnly, LinkSocket). What it proves for the released app: its sources at this version; "
+                            + "the released APK itself only where it runs on the phone too (below)."
+                            : "Checked: THE RELEASED APP itself, on a real phone.");
+                    // the other DRAUPNE Flight, where it happens to run: read as it is, never started or stopped here
+                    String other = target.benchBuild() ? PhoneRig.APP : de.droiddrone.bench.BenchControl.PACKAGE;
+                    List<Sockets.Sock> theirs = socketsOf(phone, other);
+                    if (theirs == null) {
+                        say(other + " does not run on the phone now: not read (the bench starts no other app).");
+                    } else {
+                        list("Also running: " + other, theirs, addresses);
+                        holdToTheReleasedRule(other, theirs, addresses, linkPort, "", phone);
+                    }
+                }
+            }
+            phone.shot("phone: its sockets read");
+        } catch (Throwable t) {
+            stopped(t, phone);
+        } finally {
+            finish("phone-listens-on", phone);
+        }
+    }
+
+    /**
+     * The released rule (Q-006): whatever takes packets from anyone is on a Tailscale address of a VPN's interface, or
+     * parked on the phone's own loopback; no TCP listener at all outside the phone.
+     */
+    private void holdToTheReleasedRule(String who, List<Sockets.Sock> mine, List<Sockets.Address> addresses, int linkPort, String said, PhoneRig phone) {
+        List<Sockets.Sock> open = mine.stream().filter(Sockets.Sock::listens).toList();
+        List<String> outside = new ArrayList<>();
+        for (Sockets.Sock s : open) {
+            if (s.where() == Sockets.Where.EVERY_ADDRESS || s.where() == Sockets.Where.OTHER) outside.add(Sockets.said(s, Sockets.ifaceOf(addresses, s.local())));
+        }
+        check(!open.isEmpty(), who + ": it has a socket that takes datagrams (its link socket, on Tailscale or parked) - " + open.size() + " open");
+        check(outside.isEmpty(), who + ": nothing of it takes packets on every address of the phone or on an address other than Tailscale's or its own loopback"
+                + (outside.isEmpty() ? "" : " - " + String.join("; ", outside)));
+        for (Sockets.Sock s : open) {
+            if (s.where() != Sockets.Where.TAILSCALE) continue;
+            String iface = Sockets.ifaceOf(addresses, s.local());
+            if (iface.isEmpty()) {
+                say(who + ": port " + s.localPort() + " is on a Tailscale address whose interface ip did not list.");
+            } else {
+                check(TailscaleOnly.vpnName(iface), who + ": port " + s.localPort() + " is on the Tailscale address of a VPN's interface (" + iface
+                        + "), not on a carrier's address of the same range");
+            }
+        }
+        check(open.stream().noneMatch(s -> s.tcp() && s.where() != Sockets.Where.LOOPBACK), who + ": no TCP listener outside the phone itself");
+        boolean onTailscale = open.stream().anyMatch(s -> !s.tcp() && s.localPort() == linkPort && s.where() == Sockets.Where.TAILSCALE);
+        boolean atLinkPort = open.stream().anyMatch(s -> s.localPort() == linkPort);
+        if (onTailscale) {
+            say(who + ": its link port " + linkPort + " is open on the phone's Tailscale address, and nowhere else.");
+        } else if (!atLinkPort) {
+            String why = said.contains(PhoneWords.NO_TAILSCALE) ? " (its log: not on Tailscale)" : "";
+            say(who + ": nothing listens at the link port " + linkPort + why + " - parked: the phone answers nobody now.");
+            if (phone.device()) phone.skip("BS1 with Tailscale up (" + who + "): the link port on the phone's Tailscale address - the phone was not on Tailscale, "
+                    + "so only the parked state was read");
+        }
+    }
+
+    /**
+     * The emulator: the released build of this PC beside the bench build. The emulator has no Tailscale, so the released
+     * app must have nothing open but its parked socket on loopback. Stopped again afterwards: the emulator flies the
+     * bench build.
+     */
+    private void theReleasedAppInTheEmulator(PhoneRig.Target target, int linkPort) throws IOException {
+        Path apk;
+        try {
+            apk = PhoneRig.builtApk();
+        } catch (IllegalStateException e) {
+            check(false, "the released app in the emulator: no released build on this PC to check (" + e.getMessage() + ")");
+            return;
+        }
+        PhoneRig released = new PhoneRig(film, target.flying(PhoneRig.APP));
+        try {
+            String said = released.installAnyVersion(apk);
+            if (!said.contains("Success")) throw new IllegalStateException("The released app did not install: " + said);
+            released.grantPermissions();
+            released.forceStop();
+            String stamp = released.now();
+            released.launch();
+            released.startIfAsked();
+            List<Sockets.Sock> theirs = socketsOnceOpen(released, PhoneRig.APP, 30_000);
+            if (theirs == null) {
+                check(false, "the released app (" + apk.getFileName() + ") runs in the emulator: it has no process there");
+                return;
+            }
+            List<Sockets.Address> addresses = Sockets.addresses(released.shell("ip -o addr show 2>&1"));
+            String log = released.appSaidSince(stamp);
+            String build = PhoneRig.APP + " " + released.version();
+            list("THE RELEASED APP in the emulator (" + build + ", " + apk.getFileName() + ")", theirs, addresses);
+            holdToTheReleasedRule("the released app in the emulator", theirs, addresses, linkPort, log, released);
+            check(theirs.stream().filter(Sockets.Sock::listens).allMatch(s -> s.where() == Sockets.Where.LOOPBACK),
+                    "the released app in the emulator, which has no Tailscale: all it has open is parked on the phone's own loopback");
+            check(log.contains(PhoneWords.NO_TAILSCALE), "and its log says it answers nothing without Tailscale");
+            released.shot("phone: the released app's sockets read");
+        } finally {
+            try {
+                released.forceStop(); // the emulator flies the bench build: the released app is not left running beside it
+            } finally {
+                released.close();
+            }
+        }
+    }
+}
