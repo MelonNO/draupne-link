@@ -596,6 +596,8 @@ public class MainWindow extends JFrame {
     private final ChannelBars channelBars = new ChannelBars();
     /** The sticks and channel bars; hidden when the controller panel is minimized, so the video gets the room. */
     private JComponent gimbalPanel;
+    /** The channel bars as they scroll (F-090): away while the card folds. */
+    private JComponent channelList;
     private final JButton minimizeButton = textButton("MINIMIZE", "Hide sticks and channels");
     private static final String MINIMIZED_KEY = "controllerMinimized";
     static final String UPSIDE_DOWN_KEY = CameraTurn.KEY;
@@ -1572,21 +1574,19 @@ public class MainWindow extends JFrame {
         top.setLayout(new WrapRowLayout(topLeft, states, minimizeButton, 10, 8)); // narrow: the status lines under the buttons
         controller.add(top, BorderLayout.NORTH);
 
-        JPanel gimbals = new JPanel(new GridLayout(1, 2, 18, 0));
-        gimbals.setOpaque(false);
-        gimbals.add(leftGimbal);
-        gimbals.add(rightGimbal);
-        gimbals.setPreferredSize(new Dimension(440, GIMBALS_HEIGHT));
-        controller.add(gimbals, BorderLayout.WEST);
-        gimbalPanel = gimbals;
-        controller.add(channelBars, BorderLayout.CENTER); // folded away with the sticks: no gap is left for it
+        // F-090: the sticks 440 wide, the channel list beside them; short and narrow, the list keeps the width its rows
+        // need and scrolls, the sticks draw small. Folded away together: no gap is left for them
+        ControllerSticks sticks = new ControllerSticks(leftGimbal, rightGimbal, channelBars);
+        controller.add(sticks, BorderLayout.CENTER);
+        gimbalPanel = sticks;
+        channelList = sticks.channelList();
         column.add(controller, BorderLayout.SOUTH);
         setControllerMinimized("true".equalsIgnoreCase(config.getString(MINIMIZED_KEY)), false);
         return column;
     }
 
     /** The stick boxes' height, and the least they are squeezed to in a small window (F-010). */
-    private static final int GIMBALS_HEIGHT = 262, GIMBALS_MIN_HEIGHT = 86;
+    private static final int GIMBALS_HEIGHT = ControllerSticks.STICKS_HEIGHT, GIMBALS_MIN_HEIGHT = ControllerSticks.STICKS_MIN_HEIGHT;
     /** What the video card needs besides its button column: its border and the gap to the controller card. */
     private static final int VIDEO_CARD_EXTRA = 44;
 
@@ -1602,7 +1602,7 @@ public class MainWindow extends JFrame {
         int from = controllerCard.getHeight();
         controllerAnimHeight = -1;
         gimbalPanel.setVisible(!minimized);
-        channelBars.setVisible(!minimized);
+        channelList.setVisible(!minimized);
         int to = controllerCard.getPreferredSize().height;
         minimizeButton.setText(minimized ? "EXPAND" : "MINIMIZE");
         minimizeButton.setToolTipText(minimized ? "Show sticks and channels" : "Hide sticks and channels");
@@ -1612,7 +1612,7 @@ public class MainWindow extends JFrame {
             return;
         }
         gimbalPanel.setVisible(true); // the stick boxes shrink with the card; hidden once folded
-        channelBars.setVisible(false); // squeezed, the bars would run into the status lines under them
+        channelList.setVisible(false); // squeezed, the bars would run into the status lines under them
         controllerAnimHeight = from;
         long start = System.currentTimeMillis();
         controllerAnim = new Timer(15, e -> {
@@ -1623,7 +1623,7 @@ public class MainWindow extends JFrame {
                 ((Timer) e.getSource()).stop();
                 controllerAnimHeight = -1;
                 gimbalPanel.setVisible(!minimized);
-                channelBars.setVisible(!minimized);
+                channelList.setVisible(!minimized);
             }
             controllerCard.revalidate();
             controllerCard.repaint();

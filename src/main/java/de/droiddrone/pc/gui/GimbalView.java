@@ -17,6 +17,14 @@ import java.util.Deque;
 /** One stick gimbal: a square with crosshair, a live dot with a short trail, and optional "move here" arrow. */
 class GimbalView extends JComponent {
     private static final int TRAIL_LENGTH = 24;
+    /** The room the name and the two values take under the box. */
+    private static final int TEXT_HEIGHT = 46;
+    /**
+     * F-090: a box smaller than this, with the words under it, is a dot in a square (the bench at 200 %, 960 x 564: 36
+     * px). Then the name goes over the box and the values beside it, if that lets the dot travel further.
+     */
+    static final int SMALL_BOX = 72;
+    private static final int TEXT_GAP = 8;
 
     private final String title;
     private final String xName;
@@ -66,16 +74,50 @@ class GimbalView extends JComponent {
         return (channel - RcMapper.MID_CHANNEL_LEVEL) / 500f;
     }
 
+    /**
+     * The box (x, y, size), how far the dot travels from its middle, the dot's radius and its glow's, and whether the
+     * words are beside the box (small) or under it, at the view's present size.
+     */
+    record Face(int x0, int y0, int size, float reach, int dot, int glow, boolean small) {
+    }
+
+    Face face() {
+        int w = getWidth(), h = getHeight();
+        int size = Math.min(w, h - TEXT_HEIGHT) - 4;
+        Face under = new Face((w - size) / 2, 2, size, size / 2f - 16, 10, 16, false); // as it always was
+        if (size >= SMALL_BOX) return under;
+        FontMetrics name = getFontMetrics(Theme.headingFont(13f));
+        int top = 2 + name.getHeight() + 2;
+        int words = valuesWidth();
+        int small = Math.min(h - top - 2, w - TEXT_GAP - words - 4);
+        // the dot and its glow smaller in the small box, so its travel still shows
+        int dot = Math.max(5, Math.min(10, small / 9));
+        int glow = dot * 8 / 5;
+        Face beside = new Face((w - small - TEXT_GAP - words) / 2, top, small, small / 2f - glow, dot, glow, true);
+        return beside.reach() > under.reach() ? beside : under; // whichever lets the dot travel further
+    }
+
+    /** The wider of the two value lines as they stand beside a small box. */
+    private int valuesWidth() {
+        FontMetrics fm = getFontMetrics(Theme.font(java.awt.Font.PLAIN, 12f));
+        int widest = 0;
+        for (String name : new String[]{xName, yName}) {
+            widest = Math.max(widest, Math.max(fm.stringWidth(name + " 0000"), fm.stringWidth(name + " ----")));
+        }
+        return widest;
+    }
+
     @Override
     protected void paintComponent(Graphics graphics) {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
-        int textHeight = 46;
-        int size = Math.min(getWidth(), getHeight() - textHeight) - 4;
-        int x0 = (getWidth() - size) / 2;
-        int y0 = 2;
+        Face face = face();
+        int size = face.size();
+        int x0 = face.x0();
+        int y0 = face.y0();
         float cx = x0 + size / 2f;
         float cy = y0 + size / 2f;
-        float reach = size / 2f - 16;
+        float reach = face.reach();
+        int dot = face.dot(), glow = face.glow();
 
         g.setColor(Theme.PANEL_2);
         g.fillRect(x0, y0, size, size);
@@ -88,7 +130,7 @@ class GimbalView extends JComponent {
 
         if (arrow != Direction.NONE) paintArrow(g, cx, cy, reach);
         boolean searching = disconnected && (xValue == null || yValue == null);
-        if (searching) paintSearching(g, cx, cy);
+        if (searching) paintSearching(g, cx, cy, dot);
 
         int i = 0;
         for (Point2D.Float p : trail) {
@@ -102,31 +144,46 @@ class GimbalView extends JComponent {
             float px = cx + norm(xValue) * reach;
             float py = cy - norm(yValue) * reach;
             g.setColor(Theme.alpha(Theme.ACCENT, 60));
-            g.fillOval(Math.round(px - 16), Math.round(py - 16), 32, 32);
+            g.fillOval(Math.round(px - glow), Math.round(py - glow), glow * 2, glow * 2);
             g.setColor(Theme.ACCENT);
-            g.fillOval(Math.round(px - 10), Math.round(py - 10), 20, 20);
+            g.fillOval(Math.round(px - dot), Math.round(py - dot), dot * 2, dot * 2);
             g.setColor(Theme.TEXT);
             g.setStroke(new BasicStroke(2f));
-            g.drawOval(Math.round(px - 10), Math.round(py - 10), 20, 20);
+            g.drawOval(Math.round(px - dot), Math.round(py - dot), dot * 2, dot * 2);
         }
 
+        String x = xName + " " + (xValue == null ? "----" : xValue), y = yName + " " + (yValue == null ? "----" : yValue);
         g.setFont(Theme.headingFont(13f));
         g.setColor(Theme.TEXT);
+        if (face.small()) {
+            // the name over the box (NO CONTROLLER in its place), the values beside the box, one under the other
+            if (searching) g.setColor(Theme.BAD);
+            drawCentered(g, searching ? "NO CONTROLLER" : title.toUpperCase(), 2 + g.getFontMetrics().getAscent());
+            g.setFont(Theme.font(java.awt.Font.PLAIN, 12f));
+            g.setColor(Theme.MUTED);
+            FontMetrics fm = g.getFontMetrics();
+            int left = x0 + size + TEXT_GAP;
+            int first = y0 + (size - 2 * fm.getHeight()) / 2 + fm.getAscent();
+            g.drawString(x, left, first);
+            g.drawString(y, left, first + fm.getHeight());
+            g.dispose();
+            return;
+        }
         drawCentered(g, title.toUpperCase(), y0 + size + 20);
         g.setFont(Theme.font(java.awt.Font.PLAIN, 12f));
         g.setColor(searching ? Theme.BAD : Theme.MUTED);
-        String values = searching ? "NO CONTROLLER" : xName + " " + (xValue == null ? "----" : xValue) + "     " + yName + " " + (yValue == null ? "----" : yValue);
+        String values = searching ? "NO CONTROLLER" : x + "     " + y;
         drawCentered(g, values, y0 + size + 38);
         g.dispose();
     }
 
-    private void paintSearching(Graphics2D g, float cx, float cy) {
+    private void paintSearching(Graphics2D g, float cx, float cy, int r) {
         long now = System.currentTimeMillis();
         // where the stick should be: an empty, blinking marker
         float blink = 0.5f + 0.5f * (float) Math.sin(now / 160.0);
         g.setColor(Theme.alpha(Theme.BAD, Math.round(80 + 175 * blink)));
         g.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{4f, 4f}, 0f));
-        g.drawOval(Math.round(cx - 10), Math.round(cy - 10), 20, 20);
+        g.drawOval(Math.round(cx - r), Math.round(cy - r), r * 2, r * 2);
         // no repaint here: the main window feeds the gimbals 30 times a second, which keeps this moving
     }
 
