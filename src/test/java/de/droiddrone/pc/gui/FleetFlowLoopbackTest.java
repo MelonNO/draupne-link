@@ -268,6 +268,32 @@ class FleetFlowLoopbackTest {
         assertTrue(place[0].get(0).getText().contains("(80 m above ground)"), place[0].get(0).getText());
     }
 
+    /**
+     * AC-4: a dispatched drone leaves its column only at its own layer. Before, its route started at the follower floor
+     * (40 m) and it climbed the rest on the way - through the layers of the drones sent before it (10 SITL drones: one
+     * passed 2 m beside another holding at its slot, 3 m under it).
+     */
+    @Test
+    void aDispatchedDroneLeavesItsColumnOnlyAtItsOwnLayer() throws Exception {
+        VirtualFleetPhone d1 = onTheGround("D1", 0, 0), d2 = onTheGround("D2", 25, 0);
+        flown = null;
+        ops = ops();
+        mark("D1");
+        mark("D2");
+        double[] target = de.droiddrone.common.group.GeoLocal.offset(LAT, LON, 0, 300);
+        SwingUtilities.invokeAndWait(() -> ops.dispatch(target[0], target[1]));
+        double[] at = {Double.NaN, Double.NaN};
+        long end = System.currentTimeMillis() + 90_000;
+        for (int i = 0; System.currentTimeMillis() < end && (Double.isNaN(at[0]) || Double.isNaN(at[1])); i++) {
+            if (i % 12 == 0) tick();
+            if (Double.isNaN(at[0]) && log.stream().anyMatch(l -> l.contains("D1 TRANSIT"))) at[0] = d1.copter.u;
+            if (Double.isNaN(at[1]) && log.stream().anyMatch(l -> l.contains("D2 TRANSIT"))) at[1] = d2.copter.u;
+            Thread.sleep(20);
+        }
+        assertTrue(at[0] >= 58, "D1's route starts at its 60 m layer, not the 40 m floor: " + at[0] + " " + log);
+        assertTrue(at[1] >= 68, "D2's at its 70 m: " + at[1] + " " + log);
+    }
+
     /** AL-5: the last call is cancelled from the lead's menu before its drone arms; the drone stays marked and callable. */
     @Test
     void theLastReserveCallIsCancelledBeforeItArms() throws Exception {

@@ -40,6 +40,16 @@ public final class ArduSitl implements AutoCloseable {
 
     /** Starts instance n at home (lat, lon, height above sea level), heading north; waits for its heartbeat. */
     public static ArduSitl start(int n, double lat, double lon, double alt, double speedup) throws IOException, InterruptedException {
+        try {
+            return startOnce(n, lat, lon, alt, speedup);
+        } catch (IOException e) {
+            // once (a full fleetSitl run): no heartbeat within 5 s of the start, right after the 10-drone test - again, once
+            Thread.sleep(2000);
+            return startOnce(n, lat, lon, alt, speedup);
+        }
+    }
+
+    private static ArduSitl startOnce(int n, double lat, double lon, double alt, double speedup) throws IOException, InterruptedException {
         Path bin = home();
         if (bin == null) throw new IOException("ArduPilot SITL not installed (" + ENV + ")");
         Path dir = bin.resolve("run" + n);

@@ -18,11 +18,11 @@ Work on [DRAUPNE Fleet & ArduPilot](PRD.md): ArduPilot as a second flight-contro
 
 | # | Phase | Gate | State |
 |---|---|---|---|
-| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; gates 1 and 2 pass in ArduPilot SITL on the PC; F405 bench test not done |
-| 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | built; the ridge gate passes on made-up terrain |
-| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 4 virtual drones apart on loopback, 3 SITL drones dispatched and held apart |
-| 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; random overlapping failures still lose separation (open); hand-over is a new session (1-2 s) |
-| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called, launched and joined on loopback and in SITL; the AL-19 cases as unit tests |
+| 1 | ArduPilot base (A) | A SITL drone arms on overrides and comes home after a 30 s cut; F405 bench test | built; passes in ArduPilot SITL 4.7.3 on the PC; F405 bench test not done |
+| 2 | Terrain routes (B) | A ridge route never goes below the set height in SITL; 100 items upload in under 5 s | built; 100 and 300 items up and read back in SITL; RTL over a hill in SITL climbs first |
+| 3 | Fleet dispatch (C) | 10 SITL drones, none within 10 m on one height layer | built; 10 SITL drones dispatched at once, each holding at its slot, never inside 10 m sideways and 10 m in height |
+| 4 | Follow the leader (E) | A circling lead moves no follower; a 100 m sprint is followed; followers hold the floor; new lead's sticks within 500 ms; two real drones | built; 90 / 90 random runs keep separation; hand-over about 290 ms on loopback; the flow on 5 SITL drones; two real drones not done |
+| 5 | Safe autolaunch (F) | A marked sleeping drone joins within its predicted time; an unmarked one never arms; every crash case aborts, the gusty climb does not | built; a reserve called on the radio, launched and joined in SITL; the AL-19 cases as unit tests |
 | 6-9 | GNSS-denied (stage 2) | See the PRD | after stage 1 |
 
 Phases 2-4 need only phase 1; phase 5 needs phase 4. Each phase brings its own GUI, setup-guide, tour and docs
@@ -97,17 +97,40 @@ First steps of phase 1, in order:
 
 Nothing here has flown. Every step is tried in SITL before the maintainer's hardware.
 
-## Where stage 1 stands (2026-11-23)
+## Where stage 1 stands (2026-11-24)
 
-Built on this branch, each piece with tests; nothing flown, no ArduPilot SITL on the PC it was built on (Windows'
-Linux part isn't installed), so every gate ran against virtual phones and a kinematic model of the drones.
+**Stage 1 is built in full** (stage 2, GNSS-denied, is not started). Every PRD stage-1 item has code and tests. Four
+test rounds pressed the real windows, menus and radio switches against made-up boards, virtual phones and real
+ArduPilot Copter 4.7.3 (SITL, on this PC), and fixed about 100 bugs, each with a test. **Nothing has flown, nothing
+has run on a real phone or board.**
 
-**Open, in the order they matter:**
-1. **Separation under overlapping failures (AC-14 random runs):** with single followers giving way (Orca) 85 of 90 random
-   10-minute runs keep separation (was about 40 %); five seeds still lose it (closest 6.1 m at one height). The nightly
-   run names them (tags `night` + `finding`). The loopback cut-off case on the real wire now passes. **Don't fly a
-   group before all of them pass.**
-2. **Real ArduPilot:** every gate again in SITL (needs WSL), then the PRD's bench tests (F405, two real drones).
+How it is proven:
+- `gradlew test`: the whole suite, about 2760 tests.
+- `gradlew fleetSitl`: 16 tests on real ArduPilot SITL, up to 10 drones at once - setup written, link-loss rule,
+  100-item and 300-item routes in parts, dispatch, follow group, DISCARD LEAD and CALL RESERVE on the radio's
+  switches, a follower cut, the PC gone, everyone landed at its own home or rally point; separation measured all along.
+- `gradlew nightSeparation` (`AIR_SEEDS`, default 30): random 10-minute runs of overlapping failures, and the same
+  ending with the PC gone for good - 90 of 90 each keep separation (never inside 10 m sideways and 10 m in height).
+
+**Open:**
+1. **Hardware:** the PRD's bench tests (F405), two real drones, a real phone. Not tried on hardware at all: the DFU
+   write (Betaflight to ArduPilot), a log download over the real link, the Mission Planner bridge, AUTOTUNE, a real
+   power-line answer.
+2. **By design, not a plan's:** a lead or a cut-off drone passing over a follower still holding in its cell before the
+   new exit plans' start (the PC gone) - while the PC lives the group is kept clear of those paths.
+3. **Smaller:** an observation PC shows only what it knows itself (spectators get the pilot PC's group); a hand-over
+   gives sticks before the new phone's version is known (old frame layout for a moment) and knows the PC by its address
+   (fine on Tailscale, not behind a shared NAT); the radio's mode switch at the hand-over moment is untried.
+
+**Done since 2026-11-23, in short:** a dispatched drone leaves its column only at its own layer (the 10-drone gate
+found one starting its route at the 40 m floor and climbing through the layers below it); separation 90 / 90 (and the PC-gone class); hand-over in about 290 ms; TRAFFIC to
+every drone's ArduPilot; stage 1 GNSS loss (AC-12 / AC-20 / AC-42); return heights over terrain (RT-9) and apart
+(FD-6); ArduPilot 4.7's renamed parameters; route blocks in parts (the phone reads 1100 bytes); stale datagrams
+dropped (sequence numbers); the lead's way home in the exit plans (AC-41); the group's base over rising ground (AC-3).
+
+**History (2026-11-23):**
+1. **Separation** was 85 of 90 random runs; now 90 of 90 (above).
+2. **Real ArduPilot:** now in SITL on this PC (below).
 3. **Hand-over speed (NFR, FL-6): done on loopback, not tried on drones.** It was a new pilot session that waited for
    ArduPilot's armed word twice (its heartbeat, once a second): 1.3-2.1 s, and the window never handed over at all (it
    asked for END LINK first). Now the group's fresh report stands for that word (`RcSession.handedOver`), the link
@@ -115,8 +138,7 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
    commander's session on a follower it just told to lead, armed or not (`FleetCommandGate.leadConnect`) - nobody
    else. `LeadHandoverLoopbackTest`: 286-291 ms at a 120 ms round trip. Open: what the radio's mode switch does to the
    new lead at that moment is untried (AC-32's centred pickup is not built); the video waits for its key frame as before.
-4. **Not built yet:** ADS-B of the other drones to the lead's ArduPilot (FD-8, AC-11: only the virtual airspace has
-   it). The F405 bench test and two real drones (PRD gates) wait for hardware.
+4. **ADS-B to the lead (FD-8, AC-11):** built since (TRAFFIC, `FleetCmd` 0x3F).
 5. **Built 2026-11-23 (late):** AC-10 - every drone the PC sends out (DISPATCH, CALL RESERVE, a route's GO) gets its own
    rally point first, read back on the FC (`RallyPlan`, `FleetOps`; on real ArduPilot in `SitlDispatchTest` and
    `SitlRallyTest`). The follower's own rally upload (exit plans) never read back on real ArduPilot (frame 6 / 3):
@@ -151,9 +173,8 @@ Linux part isn't installed), so every gate ran against virtual phones and a kine
      board stands for is listed first as NOT SET. The phone waited for OSD parameters a board without an OSD never has
      (any version): with them it never asked for attitude, battery, GPS or position. It now gives up on the OSD after
      10 s.
-   - **Open (not this round):** the phone reads at most 1100 bytes a datagram (`UdpCommon.packetLength`), so a
-     dispatch route of more than about 33 items (a steep slope) in one FleetCmd MissionBlock never arrives; the PC
-     says nothing and the drone stays on the ground.
+   - **Fixed since:** the phone reads at most 1100 bytes a datagram (`UdpCommon.packetLength`), so a route of more
+     than about 33 items never arrived; blocks now go in parts of at most 30 items (PROTOCOL.md).
    - Tests: `ReturnHeightsTest`, `DispatchTest`, `RouteWindowTest`, `ReturnHeightsLoopbackTest`; real ArduPilot
      `SitlReturnTest` (instances 10, 11).
 

@@ -310,10 +310,17 @@ final class FleetOps {
         }
     }
 
-    /** The launch past the floor: the route starts (AUTO). Called from onLaunchStatus. */
+    /**
+     * The climb done at its own layer (ON THE WAY): the route starts (AUTO). Called from onLaunchStatus. AC-4: straight
+     * up in its own column to its layer first - before, the route started at the follower floor (~40 m, passedFloor)
+     * and climbed the rest along the way, through the layers of drones sent before it: of 10 SITL drones one passed 2 m
+     * beside another holding at its slot, 3 m under it.
+     */
     private boolean dispatchClimbed(String drone, de.droiddrone.common.launch.LaunchWire.Status st) {
         Sent s = dispatched.get(drone);
-        if (s == null || s.started || !st.passedFloor) return s != null;
+        boolean atLayer = st.state >= de.droiddrone.common.launch.LaunchSequence.ON_THE_WAY
+                && st.state <= de.droiddrone.common.launch.LaunchSequence.IN_GROUP;
+        if (s == null || s.started || !atLayer) return s != null;
         GroupLink l = link;
         if (l == null) return true;
         l.command(drone, de.droiddrone.common.FcCommand.simple(de.droiddrone.common.FcCommand.MISSION_START));
