@@ -17,12 +17,12 @@ import java.util.stream.Stream;
  * what it heard of the flight controller. Read only; for the bad-network box (R8) - a cell's rows by the time of day
  * of its first column, which is this PC's clock as the scenario's own.
  */
-final class AppLinkLog {
+public final class AppLinkLog {
     private AppLinkLog() {
     }
 
     /** One sample row (the rows that carry an event only are left out). videoFps: the picture's frames received a second, 0 for none. */
-    record Row(LocalTime at, String link, int pingMs, long rcMaxGapMs, long telemetryMaxGapMs, String rxloss, String failsafe, String armed,
+    public record Row(LocalTime at, String link, int pingMs, long rcMaxGapMs, long telemetryMaxGapMs, String rxloss, String failsafe, String armed,
                double videoFps) {
         boolean ready() {
             return "READY".equals(link);
@@ -34,7 +34,7 @@ final class AppLinkLog {
     }
 
     /** Every sample row of the link logs in that folder written since that moment (epoch ms; a few seconds' slack), oldest file first. */
-    static List<Row> read(Path logsDir, long sinceMs) {
+    public static List<Row> read(Path logsDir, long sinceMs) {
         List<Row> rows = new ArrayList<>();
         if (!Files.isDirectory(logsDir)) return rows;
         List<Path> files;

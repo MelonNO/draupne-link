@@ -1,6 +1,7 @@
 package de.droiddrone.bench.ui;
 
 import de.droiddrone.bench.AppRig;
+import de.droiddrone.bench.FleetRows;
 import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Sandbox;
 import de.droiddrone.bench.Ui;
@@ -20,29 +21,17 @@ import java.util.List;
  */
 @Tag("ui")
 class FleetScenario {
-    static void openFleet(Ui ui) {
-        if (ui.has("POP OUT MAP")) ui.click("POP OUT MAP");
-        ui.until("the map window", 10_000, () -> ui.window("DRAUPNE Link map") != null);
-        // the rows are there also while the panel is folded away: open means a row can be pressed
-        if (!rowsOpen(ui)) ui.click("FLEET");
-        ui.until("the fleet's rows", 8000, () -> rowsOpen(ui));
+    // the panel's helpers are FleetRows' (shared with the real phone's FLEET scenario)
+    private static void openFleet(Ui ui) {
+        FleetRows.open(ui);
     }
 
-    private static boolean rowsOpen(Ui ui) {
-        List<Component> rows = rows(ui);
-        return !rows.isEmpty() && ui.whyNotPressable(rows.get(0), new java.awt.Point(100, 15)) == null;
+    private static List<Component> rows(Ui ui) {
+        return FleetRows.rows(ui);
     }
 
-    static List<Component> rows(Ui ui) {
-        List<Component> rows = new ArrayList<>();
-        for (Component c : ui.components()) if (c.getClass().getSimpleName().equals("RowView") && c.getWidth() > 0) rows.add(c);
-        return rows;
-    }
-
-    /** The words of a pop-up menu's row that begins like this. */
-    static String menuRow(Ui ui, String start) {
-        for (String b : ui.buttons()) if (b.startsWith(start)) return b;
-        throw new AssertionError("No menu row begins with \"" + start + "\": " + ui.buttons());
+    private static String menuRow(Ui ui, String start) {
+        return FleetRows.menuRow(ui, start);
     }
 
     @Test

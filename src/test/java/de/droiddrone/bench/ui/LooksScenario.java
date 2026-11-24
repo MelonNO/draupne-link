@@ -52,7 +52,7 @@ class LooksScenario {
         pilot.until("the drone to come down", 30_000, () -> drone.readout().altM() < 0.5);
         pilot.disarm(drone);
         pilot.standby();
-        FleetScenario.openFleet(ui);
+        de.droiddrone.bench.FleetRows.open(ui);
         ui.shot(at + ": the map window with FLEET");
         ui.click("MAP TOOLS");
         ui.shot(at + ": MAP TOOLS, DRAW");

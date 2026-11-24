@@ -61,7 +61,7 @@ somebody removes their folders.
 | Edge cases | `edge` | The app killed dead in mid-flight and started again; rubbish in the settings file, and numbers there that are none; broken, empty and cut-short flight files; 400 flights. |
 | The long run | `soak` | Flight after flight for hours on changing bad links, every third with a cut in the air: no flight lost, no freeze, memory and threads flat. |
 | The night | `night -Until HH:mm` | What only hours can test, each with its share of the time until the hour given (one flight for hours first, so that begun before midnight it flies across it; the map's part beside the others all night - it has no window and takes next to no processor, and has a build folder of its own under the run's folder): **sleep and wake** in real time (a phone put to DEEP SLEEP or OVERWATCH checks every 1, 2 or 5 minutes; PILOT UAV must have it at its next check, cycle after cycle); **one flight that lasts for hours** (the same link, track and recording past the hour on every clock, across midnight when begun before it; memory against the flight's length; afterwards one flight with its true length and a REPORT); **the real phone app left running** in the emulator (flown on a poor link with cuts, put to sleep, left through its own check, woken - round after round, its memory and its log watched); **the map on an internet that comes and goes** (the app's own tile cache against a server that says nothing, sends half a tile, hangs up, says 503 or is gone - for seconds or minutes, hundreds of times; after each the map must be whole by itself, and how long that took is the figure; no window); then **flight after flight** as the long run. A part that hangs is ended at its time and the next begins. One table a part in the report. |
-| The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`). |
+| The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`); the phone among three made-up drones in FLEET, asleep and woken (`*PhoneFleet*`). |
 | Betaflight | `sitl` | Betaflight 4.4.1 itself, as a program in WSL, set up as the drone is (see "Betaflight as a program"): a snapshot, settings changed, the restore - the board as the snapshot again; the keeper's lock, a window under the cap, its ends, END safe; the drone's own failsafe when the sticks stop, timed. About 6 min. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
 | Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Three scenarios: the phone found, the link, the picture, STANDBY - nothing armed; the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`); and the bad-network box - the bad-link table between the app and the real phone, the sticks counted at the board (`*HwLinkMatrix*`, about 25 min). Beside them the phone's own network switched under the link - Wi-Fi to mobile data and back, mobile data off, airplane mode, a quick Wi-Fi flap - the phone put back as found (`*HwNetworkSwitch*`, about 12 min). See "Real hardware", "The keeper", "The bad-network box", "The phone's own network switched". |
@@ -506,8 +506,16 @@ screen lock and with a PIN, and 8 hours over mobile data ([BENCH-RUNS.md](BENCH-
 .\bench.ps1 phone -Tests *PhoneCrash*                one of them
 .\bench.ps1 phone -Tests *PhoneNight* -Hours 8       the app left running for hours
 .\bench.ps1 phone -Tests *PhoneNight* -Hours 8 -Sleep both   the same, OVERWATCH and DEEP SLEEP by turns (overwatch: OVERWATCH only)
+.\bench.ps1 phone -Tests *PhoneFleet*                the real phone among three made-up drones in FLEET (about 6 min)
 gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that was killed outright
 ```
+
+- **FLEET with the real phone** (`PhoneFleetScenario`; in the emulator too: `.\bench.ps1 emulator -Tests *PhoneFleet*`):
+  its row by its name, heard, its battery; CONNECTED at PILOT UAV, ASLEEP after the LINK card's DEEP SLEEP (a check
+  every minute), CONNECTED again at its next check, STANDBY after STANDBY MODE; the made-up drones' rows as at the
+  start, nothing armed. Not FLEET's own mode buttons: their check-ins go around the bench's wire. The wire hands the
+  phone's packets to the PC socket that spoke through it last, so a sleeping phone's check-ins often miss the PC and
+  its row may say UNKNOWN - counted in the film, judged as asleep.
 
 - **OVERWATCH at night** (`-Sleep overwatch | both`, BENCH_SLEEP; left out: DEEP SLEEP every round, as before): an
   OVERWATCH round has the deep round's proofs and the phone's word that its camera watches; the alerts, clips, a fall to
@@ -568,7 +576,7 @@ gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that w
   (`phone-logcat.txt`: the app's lines and Android's word on what ended it). Its battery is read once a minute:
   hotter than 42 degrees the scenario waits until it is 40 (half an hour at most), below 15 % it stops.
 - **Which scenarios** (tag `hwphone` beside `emulator`): `PhoneScenario`, `PhoneAndWindowsScenario`,
-  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneNightScenario`. `PhoneUpdateScenario` skips itself with the
+  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneFleetScenario`, `PhoneNightScenario`. `PhoneUpdateScenario` skips itself with the
   bench build: that one is test-only, and Android lets a test-only app be installed by adb alone, not by the app's own
   updater. It runs on the released app's package (`phone.package`) with the word that it may be changed, and only
   with its two test builds in `build\update-test-hw` (the emulator's: `build\update-test`). **Those builds must take
