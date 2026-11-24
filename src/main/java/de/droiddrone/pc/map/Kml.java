@@ -37,8 +37,18 @@ public final class Kml {
         return sb.append("</Document>\n</kml>\n").toString();
     }
 
+    /**
+     * One drawing: name, Style, ExtendedData, then the geometry - KML 2.2's order for a Feature (a Style before the
+     * ExtendedData; before, the other way round, which a reader that holds to the schema refuses).
+     */
     private static void placemark(StringBuilder sb, MapGraphics.Item it) {
-        sb.append("<Placemark><name>").append(xml(it.name())).append("</name>\n<ExtendedData>");
+        sb.append("<Placemark><name>").append(xml(it.name())).append("</name>\n");
+        if (it.kind() != MapGraphics.Kind.SYMBOL) {
+            sb.append("<Style><LineStyle><color>").append(abgr(it.colorRgb(), 255)).append("</color><width>").append(it.widthPx())
+                    .append("</width></LineStyle><PolyStyle><color>").append(abgr(it.colorRgb(), it.filled() ? 90 : 0))
+                    .append("</color><fill>").append(it.filled() ? 1 : 0).append("</fill></PolyStyle></Style>\n");
+        }
+        sb.append("<ExtendedData>");
         data(sb, "kind", it.kind().name());
         data(sb, "width", Integer.toString(it.widthPx()));
         data(sb, "filled", Boolean.toString(it.filled()));
@@ -47,11 +57,6 @@ public final class Kml {
         if (it.affiliation() != null) data(sb, "affiliation", it.affiliation().name());
         if (it.echelon() != null) data(sb, "echelon", it.echelon().name());
         sb.append("</ExtendedData>\n");
-        if (it.kind() != MapGraphics.Kind.SYMBOL) {
-            sb.append("<Style><LineStyle><color>").append(abgr(it.colorRgb(), 255)).append("</color><width>").append(it.widthPx())
-                    .append("</width></LineStyle><PolyStyle><color>").append(abgr(it.colorRgb(), it.filled() ? 90 : 0))
-                    .append("</color><fill>").append(it.filled() ? 1 : 0).append("</fill></PolyStyle></Style>\n");
-        }
         boolean ring = it.kind() == MapGraphics.Kind.AREA || (it.kind() == MapGraphics.Kind.MEASUREMENT && it.closed());
         if (it.kind() == MapGraphics.Kind.SYMBOL) {
             MapGraphics.LatLon p = it.points().get(0);
