@@ -575,6 +575,20 @@ in its track, a name is cut before its number. At 1280 x 752 and up the card is 
 for pixel. Test: `ControllerSticksTest` (3; its narrow-list check is red on the old `ChannelBars`). Seen again on the
 bench: 200 % with the circle and travel (`runs\1124-0645-ui`), 150 % as before (`1124-0649-ui`), calibration 1 of 1.
 
+**F-091 - At some widths a picture shown at its own size came out wrong or ended the app.** Found 2026-11-24 by the
+bench's new decoder fuzz (`gradlew decoderFuzz`: 5 minutes, 70,086 made-up pictures and clips, two ends of the child
+process, both again when replayed alone), then seen with clean 360 x 640 and 1080 x 1920 streams. FFmpeg turns a
+picture into screen pixels at its own size 16 pixels at a time and expects its own picture layout; the app gave it
+rows packed tight. Widths that are multiples of 16 (320, 640, 1280, 1920), scaled pictures and stills were fine. Where
+the app converts at a picture's own size: the OSD recording of a stream 720 or more high (a portrait 1080 x 1920), an
+overwatch preview, the live view or a clip when the view is exactly the picture's size. What a pilot could have seen:
+the app closing by itself with no message, e.g. while recording a portrait stream with the OSD; at 854 wide a thin
+strip at the right edge. Not seen in flight. **Mended (PC):** the picture is converted into FFmpeg's own layout - rows
+aligned to 64 bytes, room after the last - and copied out row by row; the still the same, the encoders' input with the
+same room. Conversion time unchanged (1920 x 1080: 0.81 - 0.84 ms before, 0.78 - 0.79 after). Test:
+`ConvertBufferTest` (2; red before: 32 of 96 and 188 of 896 conversions). The fuzz's finding replayed: the process
+ended before, runs through now; 5 minutes of the fuzz on the fix: 74,785 inputs, nothing.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
