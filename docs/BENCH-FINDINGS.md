@@ -589,6 +589,23 @@ same room. Conversion time unchanged (1920 x 1080: 0.81 - 0.84 ms before, 0.78 -
 `ConvertBufferTest` (2; red before: 32 of 96 and 188 of 896 conversions). The fuzz's finding replayed: the process
 ended before, runs through now; 5 minutes of the fuzz on the fix: 74,785 inputs, nothing.
 
+**F-092 - A damaged stream's picture of an absurd shape ended the app when scaled to the view.** Found 2026-11-24 by
+the decoder fuzz's 4-hour run on the F-091 fix (`fuzz\20261124-093603-seed1`, two ends of the child process in 26
+minutes, both again when replayed alone): a damaged H.264 stream whose first picture came out 128 x 131072, converted
+to 320 x 180. Not new with F-091: the code before it ended the same way. FFmpeg makes a scale of about 64 times or more
+in a direction in two steps of its own, through a picture of the in-between size (here 202 x 4857); with the colour
+matrix the app sets (BT.709 for pictures 720 or more high) it took a further way there that ended the process. Where
+the app could meet it: the live view and the observation tiles, which take their size from what the phone announced,
+not from the picture; the STANAG feed fitting such a picture into 1280 x 720. The overwatch preview and the OSD
+recording convert at the picture's own size and never met it. What a pilot could have seen: the app closing by itself,
+with no message, as a damaged stream started; only a damaged stream makes such a picture. Not seen in flight.
+**Mended (PC):** a picture more than 32 times the view's size in a direction is sampled point by point, which FFmpeg
+does in one step; every other conversion as before. Test: `ConvertFarTest` (2, each in a JVM of its own: the fuzz's
+picture to 320 x 180, 1536 x 864 and 2 x 720 - the JVM ended before, converts now; the app's scaler for 5 picture
+kinds, 8 picture and 10 view sizes while listening to FFmpeg - 102 two-step conversions before, none now). Both
+findings replayed: the process ended before, runs through now; 5 minutes of the fuzz (seed 1) on the fix: 45,443
+inputs, nothing.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
