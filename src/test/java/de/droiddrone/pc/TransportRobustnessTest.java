@@ -55,6 +55,28 @@ class TransportRobustnessTest {
         assertTrue(now >= after && now - after < 1000, "the clock the comparisons use");
     }
 
+    /**
+     * A numbered packet cut before its number, or a Connect whose key runs past its end (found by the protocol fuzz,
+     * 2026-11-24): dropped. Their reads threw on the receive thread, both apps' (logged there, the packet lost).
+     */
+    @Test
+    void aNumberedPacketCutShortIsDroppedWithoutAThrow() throws Exception {
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
+            AtomicLong clock = new AtomicLong();
+            byte[] c = connect().getData(); // [8][-1 i16][type][key UTF "DD"][version i16]
+            for (ReceiverBuffer b : new ReceiverBuffer[]{connectedClient(socket, clock), connectedServer(socket, clock)}) {
+                byte[][] cut = {{UdpCommon.FcInfo}, {UdpCommon.Config, 0}, {UdpCommon.Connect, -1}, java.util.Arrays.copyOf(c, 4),
+                        java.util.Arrays.copyOf(c, 7), {UdpCommon.Connect, -1, -1, 0, 0x7f, (byte) 0xff, 'D', 'D'}};
+                for (byte[] d : cut) {
+                    assertDoesNotThrow(() -> b.addPacket(new DatagramPacket(d, d.length, FAR, 50_000)), java.util.Arrays.toString(d));
+                }
+                assertTrue(b.isConnected(), "the session goes on");
+                b.addPacket(numbered(UdpCommon.FcInfo, 0));
+                assertEquals(1, drain(b), "and takes its next packet");
+            }
+        }
+    }
+
     /** On sparse traffic the buffer size averaged down to 1: every gap was skipped at once, never asked for. */
     @Test
     void aGapIsWaitedForBeforeItIsSkipped() throws Exception {

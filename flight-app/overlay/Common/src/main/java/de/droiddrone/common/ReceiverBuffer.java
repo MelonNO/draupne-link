@@ -32,6 +32,8 @@
  *  processTimer, one a millisecond as long as the loop's 1 ms sleep was 1 ms: a busy phone or Windows' timer made
  *  the 4 s timeout 6 s or more. They count the clock's milliseconds now (at most MAX_STEP_MS a call).
  *  The unnumbered packets waiting for the buffer thread are held to MAX_UNNUMBERED (the oldest dropped, DropOldest).
+ *  A numbered packet cut before its number, and a Connect whose key runs past its end, are dropped (2026-11-24: they
+ *  threw on the receive thread).
  */
 
 package de.droiddrone.common;
@@ -139,10 +141,14 @@ public class ReceiverBuffer {
         byte packetName = buffer.readByte();
         synchronized (lock) {
             if (UdpCommon.isPacketNumbered(packetName)){
+                // DRAUPNE (the protocol fuzz, 2026-11-24): a numbered packet cut before its number, or a Connect whose key
+                // runs past its end, is no packet: dropped here. Its reads threw on the receive thread before
+                if (packetSize < 3) return;
                 short num = buffer.readShort();
                 if (num < -1) return;
                 if (packetName == UdpCommon.Connect){
                     if (isConnected() && isServer) return; // a client's Connect answered: a new session (see the header)
+                    if (packetSize < 6 || 6 + (((data[4] & 0xff) << 8) | (data[5] & 0xff)) > packetSize) return;
                     byte clientType = buffer.readByte();
                     String key = buffer.readUTF();
                     if (key == null) return;
