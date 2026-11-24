@@ -103,6 +103,24 @@ public final class AppRig implements AutoCloseable {
             return this;
         }
 
+        private Path homeOn, appDataOn;
+
+        /**
+         * The made-up user's home - Documents\DRAUPNE Link (tracks, pins, drawings) and Videos\DRAUPNE Link - on another
+         * disk: a small one of the scenario's own that it fills (ui/DiskFullScenario), in a folder of this user's own
+         * there. The fence lets the app write on that disk as in the run's folder; the film stays in the run's folder.
+         */
+        public Plan homeOn(Path disk) {
+            homeOn = disk;
+            return this;
+        }
+
+        /** As {@link #homeOn}, for the settings folder (%APPDATA%\DraupneLink: the settings file and the app's logs). */
+        public Plan appDataOn(Path disk) {
+            appDataOn = disk;
+            return this;
+        }
+
         /**
          * The made-up drones as the app treats them for a pilot: no flight, recording or last place of theirs is
          * saved (1.0.71). Left out, the bench asks the app to save theirs as a real drone's - it has no other drones
@@ -236,11 +254,12 @@ public final class AppRig implements AutoCloseable {
         }
         System.setProperty("draupne.bench.madeUpSaves", Boolean.toString(!plan.madeUpSaveNothing));
         if (plan.reopen != null) {
-            sandbox = Sandbox.reopen(plan.reopen.root(), plan.name);
+            sandbox = Sandbox.reopen(plan.reopen, plan.name); // its folders where they were, on a small disk of the scenario's too
         } else {
-            sandbox = Sandbox.fresh(plan.name);
+            sandbox = Sandbox.fresh(plan.name, plan.homeOn, plan.appDataOn);
         }
         List<Path> writable = new ArrayList<>(List.of(Sandbox.runRoot()));
+        writable.addAll(sandbox.elsewhere()); // a scenario's own small disk (Plan.homeOn), mounted for it alone
         if (System.getProperty("bench.build") != null) writable.add(Path.of(System.getProperty("bench.build")));
         String javacpp = System.getProperty("org.bytedeco.javacpp.cachedir");
         if (javacpp != null) writable.add(Path.of(javacpp));
@@ -361,7 +380,8 @@ public final class AppRig implements AutoCloseable {
         ui.until("the start-up animation to end", 30_000, () -> !main.getGlassPane().isVisible());
         ui.settle();
         watch.windowIsUp();
-        film.remark("Mode: " + ui.mode().name().toLowerCase() + ". Real app: " + ArmedGuard.now() + ". User: " + sandbox.root());
+        film.remark("Mode: " + ui.mode().name().toLowerCase() + ". Real app: " + ArmedGuard.now() + ". User: " + sandbox.root()
+                + (sandbox.elsewhere().isEmpty() ? "" : ". Its home " + sandbox.home() + ", its settings folder " + sandbox.appData()));
         if (hardware != null) {
             film.remark("HARDWARE RUN: " + hardware + ". The fence lets this app reach " + Fence.reach() + " and nothing else outside this PC. The radio: "
                     + radio.limits() + ".");
