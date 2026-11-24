@@ -204,6 +204,19 @@ class CellCoverageTest {
         }
     }
 
+    /**
+     * Q-011: a mast on the shore, a drone 50 m up 8 km out over the sea - the tiles' sea floor put it 255 m under the
+     * water, behind the beach: WEAK (-102 dBm) where the open reads GOOD (-79 dBm).
+     */
+    @Test
+    void overTheSeaTheDroneIsAboveTheWater() {
+        double[] beach = RadioHorizonTest.tileCentre(58.75, 5.5), out = RadioHorizon.destination(beach[0], beach[1], 90, 8000);
+        RadioHorizon.Data shore = RadioHorizonTest.shore(beach[0], beach[1], 10_000);
+        double sea = CellCoverage.rsrpDbm(beach[0], beach[1], out[0], out[1], 50, shore);
+        assertEquals(CellCoverage.rsrpDbm(beach[0], beach[1], out[0], out[1], 50, (la, lo) -> 0), sea, 0.01, "as over flat land at sea level");
+        assertEquals(CellCoverage.GOOD, CellCoverage.level(sea), "8 km out at 50 m: " + sea);
+    }
+
     @Test
     void theModelsPartsBehave() {
         assertEquals(0, CellCoverage.knifeEdgeDb(-1), 1e-9, "clear of the edge");

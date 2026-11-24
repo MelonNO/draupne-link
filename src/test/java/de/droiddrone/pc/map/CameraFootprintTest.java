@@ -31,6 +31,17 @@ class CameraFootprintTest {
         assertFalse(v.flatGround());
     }
 
+    /** Q-011: out at sea the tiles give the sea floor, and the view met a ground 305 m under the water. Now the water. */
+    @Test
+    void overTheSeaTheCameraMeetsTheWaterNotTheSeaFloor() {
+        double[] beach = RadioHorizonTest.tileCentre(58.75, 5.5), out = RadioHorizon.destination(beach[0], beach[1], 90, 6000);
+        RadioHorizon.Data shore = RadioHorizonTest.shore(beach[0], beach[1], 8000);
+        CameraFootprint.View v = CameraFootprint.compute(new CameraFootprint.Pose(out[0], out[1], 100, 0, 0, 0, -90, 90, 90), shore, Double.NaN);
+        assertEquals(100, v.slantRangeM(), 0.5, "100 m over the water");
+        assertEquals(0, v.centre()[2], 0.01);
+        assertFalse(v.flatGround());
+    }
+
     @Test
     void aLevelCameraSeesTheGroundOnlyInTheLowerHalf() {
         CameraFootprint.Pose p = new CameraFootprint.Pose(LAT, LON, 100, 0, 0, 0, 0, 90, 60);

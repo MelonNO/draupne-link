@@ -181,29 +181,76 @@ class RadioHorizonTest {
         assertTrue(Double.isNaN(data.heightM(Mercator.lat(py, z), Mercator.lon(px + 400, z))), "no tile there: unknown");
     }
 
+    /** A Terrarium pixel for a height: (R * 256 + G + B / 256) - 32768. */
+    static int terrarium(double heightM) {
+        double v = heightM + 32768;
+        int r = (int) Math.floor(v / 256), g = (int) Math.floor(v - r * 256), b = (int) Math.round((v - Math.floor(v)) * 256);
+        return r << 16 | g << 8 | Math.min(255, b);
+    }
+
     /**
      * The terrain kept its heights in decimetres in a short: all ground above 3 276.7 m read as 3 276.7 m (Terrarium's
-     * own tiles at Kleiner Matterhorn, 3 883 m, Mont Blanc and Everest all did). Now from the deepest sea to Everest.
+     * own tiles at Kleiner Matterhorn, 3 883 m, Mont Blanc and Everest all did). Now up to Everest; below 0 (the sea
+     * floor, the Dead Sea's shore) reads 0 - Q-011.
      */
     @Test
-    void theTerrainKeepsHighMountainsAndDeepWater() {
+    void theTerrainKeepsHighMountainsAndReadsNothingBelowZero() {
         RadioHorizon.Data data = new RadioHorizon.Data(LAT, LON, true);
         int z = RadioHorizon.TERRAIN_ZOOM;
         int tx = (int) Math.floor(Mercator.x(LON, z) / Mercator.TILE), ty = (int) Math.floor(Mercator.y(LAT, z) / Mercator.TILE);
         double[] heights = {8848.86, 4808.7, 3883.0, 3276.8, 2469.0, 0, -430.5, -10_994.0};
+        double[] read = {8848.86, 4808.7, 3883.0, 3276.8, 2469.0, 0, 0, 0};
         BufferedImage img = new BufferedImage(256, 256, BufferedImage.TYPE_INT_RGB);
-        for (int y = 0; y < 256; y++) {
-            for (int x = 0; x < 256; x++) {
-                double v = heights[x / 32] + 32768; // Terrarium: (R * 256 + G + B / 256) - 32768
-                int r = (int) Math.floor(v / 256), g = (int) Math.floor(v - r * 256), b = (int) Math.round((v - Math.floor(v)) * 256);
-                img.setRGB(x, y, r << 16 | g << 8 | Math.min(255, b));
-            }
-        }
+        for (int y = 0; y < 256; y++) for (int x = 0; x < 256; x++) img.setRGB(x, y, terrarium(heights[x / 32]));
         data.putTerrain(tx, ty, img);
         for (int i = 0; i < heights.length; i++) {
             double px = tx * 256 + i * 32 + 16.5, py = ty * 256 + 128.5; // a pixel's centre inside each band
-            assertEquals(heights[i], data.heightM(Mercator.lat(py, z), Mercator.lon(px, z)), 0.3, "band " + i);
+            assertEquals(read[i], data.heightM(Mercator.lat(py, z), Mercator.lon(px, z)), 0.3, "band " + i);
         }
+        assertEquals(-430.5, RadioHorizon.terrariumHeight(terrarium(-430.5)), 0.01, "the pixel itself still says what it says");
+    }
+
+    /**
+     * Terrain tiles round (lat, lon) out to radiusM: the tile at (lat, lon) land at 0 m, every other one the sea floor
+     * at -305 m (as the tiles have it some 25 km off Jaeren).
+     */
+    static RadioHorizon.Data shore(double lat, double lon, double radiusM) {
+        RadioHorizon.Data data = new RadioHorizon.Data(lat, lon, true);
+        int z = RadioHorizon.TERRAIN_ZOOM;
+        int tx = (int) Math.floor(Mercator.x(lon, z) / Mercator.TILE), ty = (int) Math.floor(Mercator.y(lat, z) / Mercator.TILE);
+        BufferedImage land = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), sea = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+        land.setRGB(0, 0, terrarium(0));
+        sea.setRGB(0, 0, terrarium(-305));
+        for (int[] t : RadioHorizon.tilesAround(lat, lon, z, radiusM)) data.putTerrain(t[0], t[1], t[0] == tx && t[1] == ty ? land : sea);
+        return data;
+    }
+
+    /** The middle of the zoom-12 terrain tile a point is in: {lat, lon}. */
+    static double[] tileCentre(double lat, double lon) {
+        int z = RadioHorizon.TERRAIN_ZOOM;
+        double tx = Math.floor(Mercator.x(lon, z) / Mercator.TILE), ty = Math.floor(Mercator.y(lat, z) / Mercator.TILE);
+        return new double[]{Mercator.lat((ty + 0.5) * Mercator.TILE, z), Mercator.lon((tx + 0.5) * Mercator.TILE, z)};
+    }
+
+    /**
+     * Q-011 (the pilot, 2026-11-24: "zero"): out at sea the tiles give the sea floor, so a drone 120 m "above the
+     * ground" there was put 185 m under the water, and from a mast on the shore RADIO HORIZON showed nothing past the
+     * beach. Now the sea is the ground: out over it the reach is what it is over flat land at sea level.
+     */
+    @Test
+    void overTheSeaTheDroneIsAboveTheWaterNotTheSeaFloor() {
+        double[] c = tileCentre(58.75, 5.5);
+        RadioHorizon.Data shore = shore(c[0], c[1], RadioHorizon.MAX_RANGE_M);
+        RadioHorizon.Settings s = new RadioHorizon.Settings(10, 120, 0, 2400);
+        RadioHorizon.Result r = RadioHorizon.compute(c[0], c[1], s, shore, OPEN), flat = RadioHorizon.compute(c[0], c[1], s, flat(0), OPEN);
+        assertFalse(r.terrainMissing(), "the tiles reach 30 km every way");
+        for (int b = 0; b < RadioHorizon.BEARINGS; b += 15) {
+            assertArrayEquals(flat.spans()[b], r.spans()[b], 2 * (float) RadioHorizon.STEP_M, "bearing " + b);
+        }
+        assertEquals(2, r.spans()[90].length, "one stretch from the mast out over the sea, no gap past the beach");
+        assertEquals(RadioHorizon.MAX_RANGE_M, r.spans()[90][1], 0.1, "to 30 km");
+        double[] out = RadioHorizon.destination(c[0], c[1], 90, 6000);
+        assertEquals(0, shore.heightM(out[0], out[1]), 0.01, "6 km out: the sea, not its floor");
     }
 
     @Test

@@ -31,8 +31,9 @@ import java.util.stream.IntStream;
  * height above the ground at each of those points, a mast of the set height on every 100 m cell within 30 km of the
  * area's centre; a cell's score is the share of the area's points that see it (the line of sight works both ways).
  * <p>
- * The terrain: the open Terrarium height tiles (AWS, global; Norway from Kartverket's model). The trees: read off the
- * map's own pictures, since the land-cover datasets got Norway's forest wrong - Kartverket's topo map at zoom 15
+ * The terrain: the open Terrarium height tiles (AWS, global; Norway from Kartverket's model), the sea at 0 rather than
+ * its floor ({@link #groundM}). The trees: read off the map's own pictures, since the land-cover datasets got Norway's
+ * forest wrong - Kartverket's topo map at zoom 15
  * (2.4 m a pixel) over Norway, where forest is a yellow-green whatever the hill shading; OpenStreetMap's forest
  * green elsewhere at zoom 13 (its tile policy: no mass downloads). Lower zooms lose forest under the contour lines
  * and names (measured: 77 % forest at zoom 11, 85 % at 14, 90 % at 15 over the same woods).
@@ -395,6 +396,19 @@ public final class RadioHorizon {
     }
 
     /**
+     * The ground's height from a Terrarium pixel as the map's tools use it: never below 0 (the pilot's answer to
+     * Q-011, 2026-11-24: "zero"). Out at sea the tiles give the sea floor - -289 m at 64N 6E, -305 m some 25 km off
+     * Jaeren, -4 405 m in the Atlantic - so a drone "120 m above the ground" there was put under the water: RADIO
+     * HORIZON and 4G COVERAGE showed nothing over the sea, and the camera's view met a ground hundreds of metres down.
+     * The sea's top is 0. The few dry places below sea level read 0 too: accepted. Taken here, where the tiles become
+     * heights ({@link Data#putTerrain}): RADIO HORIZON, GCS SEARCH, 4G COVERAGE and the camera's view (OVERWATCH's too)
+     * all read their heights through {@link Data}.
+     */
+    static double groundM(int rgb) {
+        return Math.max(0, terrariumHeight(rgb));
+    }
+
+    /**
      * Forest on the map picture. Kartverket's topo: a yellow-green (#d2e096 in the light, darker in the hill shade)
      * - green above red, far above blue; fields (#f1ecb1) and bare mountain (#e8d7aa) have red on top. OpenStreetMap:
      * its forest green #add19e and the darker tree marks, not the lighter meadow, park or scrub greens.
@@ -419,9 +433,9 @@ public final class RadioHorizon {
         final int forestZoom;
         final boolean osm;
         /**
-         * The heights are kept in half-metres: -16 383 to 16 383 m in a short. In decimetres (before) a short ends at
-         * 3 276.7 m, and all ground above it - the Alps' high ground, Kleiner Matterhorn's 3 883 m, Mont Blanc - was
-         * cut flat there.
+         * The heights are kept in half-metres: up to 16 383 m in a short (none below 0: {@link #groundM}). In
+         * decimetres (before) a short ends at 3 276.7 m, and all ground above it - the Alps' high ground, Kleiner
+         * Matterhorn's 3 883 m, Mont Blanc - was cut flat there.
          */
         private static final double PER_M = 2;
         private final Map<Long, short[]> terrain = new ConcurrentHashMap<>();
@@ -451,7 +465,7 @@ public final class RadioHorizon {
             short[] heights = new short[Mercator.TILE * Mercator.TILE];
             for (int py = 0; py < Mercator.TILE; py++) {
                 for (int px = 0; px < Mercator.TILE; px++) {
-                    double m = terrariumHeight(img.getRGB(px * w / Mercator.TILE, py * h / Mercator.TILE));
+                    double m = groundM(img.getRGB(px * w / Mercator.TILE, py * h / Mercator.TILE)); // the sea at 0, not its floor
                     heights[py * Mercator.TILE + px] = (short) Math.max(-32767, Math.min(32767, Math.round(m * PER_M)));
                 }
             }
