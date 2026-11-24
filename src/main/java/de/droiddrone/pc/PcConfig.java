@@ -346,7 +346,11 @@ public class PcConfig {
      * Version 2: rcRate 100 -> 250 (less stick delay). Version 3: telemetryRate 10 -> 20 (OSD lags half as much).
      * Version 4: nothing left (it moved the camera's frame rate, which is no setting any more).
      * Version 5: bitrateLimitMbps 6 -> 4 (as good a 720p picture at 30 fps, more headroom before a 4G queue fills).
-     * @return true if the file was changed
+     * <p>
+     * A file that cannot be written now - a full disk, a file held by another program - does not stop the start: the
+     * app runs with the new values, and they go into the file with the next save that can write it. Until 2026-11-24
+     * (the test bench's full disk) the write's exception ended the start, and the app did not open at all.
+     * @return true if the settings were brought up to date (in the file, or with the next save)
      */
     public boolean upgrade(Path file) throws IOException {
         if (file == null || !Files.exists(file)) return false;
@@ -362,7 +366,11 @@ public class PcConfig {
         if (version < 3 && "10".equals(getString("telemetryRate"))) updates.put("telemetryRate", "20");
         if (version < 5 && "6".equals(getString("bitrateLimitMbps"))) updates.put("bitrateLimitMbps", "4");
         updates.put("settingsVersion", Integer.toString(SETTINGS_VERSION));
-        save(file, updates);
+        try {
+            save(file, updates);
+        } catch (IOException e) {
+            // in memory already (save applies first) and kept for the next write (unwritten)
+        }
         return true;
     }
 

@@ -167,6 +167,32 @@ class PcConfigTest {
         assertEquals(250, PcConfig.defaults().getRcRate(), "new default");
     }
 
+    /**
+     * An older settings file on a full disk (the test bench's full disk, 2026-11-24): bringing it up to date at the
+     * start is a write, and its failure ended the start - the app did not open. Now the app starts with the new
+     * values and the next save that can write takes them into the file. The disk that refuses is played by a folder
+     * standing where the new file is put together.
+     */
+    @Test
+    void anOlderFileThatCannotBeWrittenNowDoesNotStopTheStart() throws Exception {
+        Path file = dir.resolve(PcConfig.FILE_NAME);
+        Files.writeString(file, "rcRate=100\nip=100.64.0.20\n");
+        String before = Files.readString(file);
+        Path inTheWay = Files.createDirectories(file.resolveSibling(file.getFileName() + ".part"));
+        PcConfig config = PcConfig.load(file);
+        assertTrue(assertDoesNotThrow(() -> config.upgrade(file), "the start goes on"), "brought up to date");
+        assertEquals(250, config.getRcRate(), "the app runs with the new values");
+        assertEquals(Integer.toString(PcConfig.SETTINGS_VERSION), config.getString("settingsVersion"));
+        assertEquals(before, Files.readString(file), "the file as it was: nothing half written");
+
+        Files.delete(inTheWay); // room again
+        config.save(file, Map.of("ip", "100.64.0.21"));
+        PcConfig again = PcConfig.load(file);
+        assertEquals(250, again.getRcRate(), "the next save took the update into the file");
+        assertEquals("100.64.0.21", again.getIp());
+        assertFalse(again.upgrade(file), "once only");
+    }
+
     @Test
     void upgradeMovesTheOldTopBitrateTo4Once(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("p.properties");
