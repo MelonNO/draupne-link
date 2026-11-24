@@ -87,6 +87,13 @@ The test week (from 2026-11-21 evening), with the phone app **DRAUPNE Flight 2.3
 - **KML IMPORT keeps points written with spaces after the commas** ("10.7, 59.9, 0", as hand-made files and some converters write them); every such point was dropped and IMPORT said 0 (`Kml`; `KmlFromOtherProgramsTest`; F-099).
 - **DOWNLOAD AREA's PAUSE holds the download** and RESUME lets it go on; the button had no action (`MapDownloadDialog`; `MapDownloadDialogTest`; F-100).
 - **Ground above 3,277 m is read at its height.** RADIO HORIZON, GCS SEARCH, 4G COVERAGE and the camera's view on the map took it as 3,276.7 m (heights kept in decimetres in a short); now in half-metres, to 16,383 m (`RadioHorizon`; `RadioHorizonTest`; F-101).
+- **On a full disk, after an update, the app opens.** The settings' upgrade at the start writes the file, and a write that failed ended the start: with an older settings file and a full disk the window never came, without a word. Now the app starts with the new values and writes them with the next save that can (`PcConfig.upgrade`; `PcConfigTest`; found by the bench's real full disk; F-102).
+- **A video write that fails is said without rubbish after the reason** (FFmpeg's words read to their end; also a small leak) - the recording, the OSD copy, STANAG (`StreamRecorder.errorText`; `StreamRecorderTest`; F-103).
+- **A full disk no longer leaves a broken track file.** What a failed write left of a point is cut off before the track goes on, and the file's end is written at the end of the flight once there is room; map programs refused such a GPX (`FlightTrack`; `NotSavedIsSaidTest`; F-104).
+- **A recording that stops by itself is said in the window:** "RECORDING STOPPED: There is not enough space on the disk - VIDEO > RECORD VIDEO off and on to record again." Before, only the REC mark went (`StreamRecorder`, `MainWindow`; `StreamRecorderTest`; F-105).
+- **No empty video files from a full disk.** A part that got 0 bytes is deleted when it ends, with its empty .csv and -osd.mkv, and left out of the flight's record (a `novideo=` line; older versions ignore it); a file with any byte is never touched. Each try on a full disk left three before (`VideoRecording`, `OsdRecorder`, `FlightRecord`, `DiskSpace.deleteIfEmpty`; `StreamRecorderTest`, `OsdRecorderTest`, `FlightRecordTest`; F-106).
+- **Not-saved words without "IOException:"** - "TRACK NOT SAVED: There is not enough space on the disk" (pins and drawings the same; other kinds of error keep their name) (`DiskSpace.why`; `NotSavedIsSaidTest`; F-107).
+- **Overwatch: a clip that can't be stored is said once**, not every 5 s while the disk is full (`OverwatchHub`; `OverwatchHubTest`; F-108).
 
 ### The maintainer's answers, second round (2026-11-22)
 

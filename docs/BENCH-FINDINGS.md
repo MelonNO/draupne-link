@@ -661,6 +661,26 @@ sea the tiles give the sea floor (-305 m off Jaeren): question Q-011. DOWNLOAD A
 topo tiles over Aker Brygge, levels 12 - 16, 1.0 s, all whole, drawn from disk with no network - **F-100** (PAUSE had
 no action). Small: the size shown assumes 20 KB a tile, town tiles were 86 - 111 KB. Fast tests after: 2,555 of 2,555.
 
+**A disk that really runs full (2026-11-24, F-102 - F-108).** Plan item "nothing lost - disk full", until now only
+read in the code and unit-tested. The bench's new `DiskFullScenario` (ui suite, `SmallDisk`: a 64 or 16 MB tmpfs in
+WSL mounted with `wsl -u root`, no Windows admin; the app's Documents and Videos on it through the rig's new
+`homeOn` / `appDataOn`; unmounted at the end) flies a made-up drone with REC on, the track, pins and drawings, lets
+the disk run full, frees it and goes on; also the settings folder on a full disk, and an overwatch alert. Writes
+really fail there (Java: "There is not enough space on the disk"; FFmpeg: "No space left on device"); Windows reports
+about 1 TB free on it, so LOW DISK and the overwatch's 2 GB floor cannot show (unit tests cover them). Full in
+flight: no crash, the window's slowest answer 230 ms (frozen is 500), the longest gap between stick frames 38 ms,
+18.7 of 18.6 pictures a second shown, the header LINK READY and RC OUTPUT LIVE throughout, the drone following the
+sticks; nothing saved before was damaged (pins.txt, graphics.kml, the recordings begun before play back); TRACK /
+PINS / MAP DRAWINGS NOT SAVED, then "saved again" with room; the flight in PREVIOUS FLIGHTS. Found and mended:
+**F-102** an older settings file on a full disk stopped the app from opening (the upgrade's write ended the start);
+**F-103** rubbish after FFmpeg's reason (its buffer read past the words); **F-104** a half point and no end in the
+GPX; **F-105** the recording stopped without a word in the window (now "RECORDING STOPPED: ... - VIDEO > RECORD
+VIDEO off and on to record again"); **F-106** three empty files a try, named in the flight's record; **F-107**
+"IOException:" in the pilot's words; **F-108** the overwatch clip's line every 5 s. Proposal I-017: the recording
+starts again by itself when there is room (today it stays off for the connection). Runs: `1124-1600-ui` (4 of 4
+with F-102 - F-104), `1124-1631-ui` (4 of 4 with F-105 - F-108: RECORDING STOPPED once, 0 empty files - 15 before -,
+no "IOException:", the clip line once). Fast tests after: 2,565 of 2,565.
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
