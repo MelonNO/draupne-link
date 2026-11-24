@@ -87,7 +87,8 @@ public final class H264Encoder implements PictureEncoder {
         if (config.length > 0) enc.extradata().get(config);
         yuv = av_frame_alloc();
         pkt = av_packet_alloc();
-        long bytes = (long) width * height * 4;
+        // padded after the picture as FFmpeg pads its own (F-091): a SIMD read past the last row stays in the block
+        long bytes = (long) width * height * 4 + VideoDecoder.PICTURE_PADDING;
         bgr = new BytePointer(av_malloc(bytes)).capacity(bytes);
         sws = sws_getContext(width, height, AV_PIX_FMT_BGRA, width, height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, null, null, (DoublePointer) null);
         yuv.format(AV_PIX_FMT_YUV420P);

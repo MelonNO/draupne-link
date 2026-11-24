@@ -11,6 +11,7 @@ import org.bytedeco.javacpp.IntPointer;
 import org.bytedeco.javacpp.PointerPointer;
 
 import java.nio.ByteOrder;
+import java.nio.IntBuffer;
 
 import static org.bytedeco.ffmpeg.global.avcodec.*;
 import static org.bytedeco.ffmpeg.global.avutil.*;
@@ -170,17 +171,45 @@ public final class VideoDecoder implements AutoCloseable {
             src = copied;
         }
         converter(src, width, height);
-        long needed = (long) width * height * 4;
-        if (rgb == null || rgbCapacity < needed) {
+        long bytes = rgbBytes(width, height);
+        if (rgb == null || rgbCapacity < bytes) {
             if (rgb != null) av_free(rgb);
-            rgb = new BytePointer(av_malloc(needed)).capacity(needed);
-            rgbCapacity = needed;
+            rgb = new BytePointer(av_malloc(bytes)).capacity(bytes);
+            rgbCapacity = bytes;
         }
+        int stride = rgbStride(width);
         dstData.put(0, rgb);
-        dstStride.put(0, width * 4);
+        dstStride.put(0, stride);
         sws_scale(sws, src.data(), src.linesize(), 0, src.height(), dstData, dstStride);
-        // BGRA bytes read as little-endian ints are 0xAARRGGBB
-        rgb.position(0).limit(needed).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(dst, 0, width * height);
+        copyRows(rgb, stride, dst, width, height);
+    }
+
+    /**
+     * F-091: BGRA rows 64-byte aligned, 64 bytes more after the last - FFmpeg's own picture layout, which its YUV to BGRA
+     * at a picture's own size (16 pixels at a time) needs: with rows packed tight some widths came out wrong (854: a row's
+     * last pixels unpainted) or ended the app.
+     */
+    static final int ROW_ALIGN = 64, PICTURE_PADDING = 64;
+
+    /** Bytes from one BGRA row to the next for a picture this wide. */
+    static int rgbStride(int width) {
+        return (width * 4 + ROW_ALIGN - 1) & -ROW_ALIGN;
+    }
+
+    /** The BGRA buffer a picture of this size is converted into. */
+    static long rgbBytes(int width, int height) {
+        return (long) rgbStride(width) * height + PICTURE_PADDING;
+    }
+
+    /** The picture's pixels out of the BGRA rows: BGRA bytes read as little-endian ints are 0xAARRGGBB. */
+    private static void copyRows(BytePointer rows, int stride, int[] dst, int width, int height) {
+        IntBuffer px = rows.position(0).limit((long) stride * height).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer();
+        if (stride == width * 4) {
+            px.get(0, dst, 0, width * height);
+            return;
+        }
+        int rowInts = stride / 4;
+        for (int y = 0; y < height; y++) px.get(y * rowInts, dst, y * width, width);
     }
 
     /**
@@ -241,13 +270,12 @@ public final class VideoDecoder implements AutoCloseable {
                 if (sws_init_context(scaler, null, null) < 0) throw new IllegalStateException("No colour converter for pixel format " + src.format());
                 sws_setColorspaceDetails(scaler, sws_getCoefficients(coefficients(colorspace, h)), range == AVCOL_RANGE_JPEG ? 1 : 0,
                         sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16, 1 << 16);
-                long needed = (long) w * h * 4;
-                out = new BytePointer(av_malloc(needed)).capacity(needed);
+                long bytes = rgbBytes(w, h); // laid out as the screen's (F-091)
+                out = new BytePointer(av_malloc(bytes)).capacity(bytes);
                 data.put(0, out);
-                stride.put(0, w * 4);
+                stride.put(0, rgbStride(w));
                 sws_scale(scaler, src.data(), src.linesize(), 0, h, data, stride);
-                // BGRA bytes read as little-endian ints are 0xAARRGGBB
-                out.position(0).limit(needed).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(dst, 0, w * h);
+                copyRows(out, rgbStride(w), dst, w, h);
             } finally {
                 if (out != null) av_free(out.position(0));
                 sws_freeContext(scaler);
