@@ -34,6 +34,23 @@ class RadioHorizonTest {
         assertEquals(0, high.forestUnknownPct());
     }
 
+    /** The textbook's figures: the 4/3 earth radio horizon d km = 4.12 (sqrt h1 m + sqrt h2 m), over a few heights. */
+    @Test
+    void theSmoothEarthHorizonIsTheTextbooks() {
+        for (double[] h : new double[][]{{2, 10}, {10, 120}, {30, 2}, {100, 100}, {1.5, 400}, {50, 1000}}) {
+            double book = 4.12 * (Math.sqrt(h[0]) + Math.sqrt(h[1])) * 1000;
+            assertEquals(book, RadioHorizon.smoothEarthM(h[0], h[1]), book * 0.001, h[0] + " m and " + h[1] + " m");
+        }
+        // 4G COVERAGE's laws at their textbook points: free space at 1 km and 10 km on 800 MHz, ITU-R P.526's knife
+        // edge at v = 0 (6 dB) and v = 1 (13.9 dB), the plane earth loss of 10 km between 30 m and 50 m
+        assertEquals(90.5, CellCoverage.freeSpaceDb(1000), 0.05);
+        assertEquals(110.5, CellCoverage.freeSpaceDb(10_000), 0.05);
+        assertEquals(6.0, CellCoverage.knifeEdgeDb(0), 0.05);
+        assertEquals(13.9, CellCoverage.knifeEdgeDb(1), 0.05);
+        assertEquals(0, CellCoverage.knifeEdgeDb(-0.8), 1e-9);
+        assertEquals(160 - 20 * Math.log10(30 * 50), CellCoverage.planeEarthDb(10_000, 30, 50), 1e-9);
+    }
+
     @Test
     void aRidgeShadowsTheGroundBehindItButNotTheOtherWay() {
         // a 300 m ridge running north-south 5 km east of the mast
