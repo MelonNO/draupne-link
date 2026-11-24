@@ -1,5 +1,6 @@
 package de.droiddrone.pc.video;
 
+import de.droiddrone.testing.Waits;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;
 import org.bytedeco.ffmpeg.avformat.AVFormatContext;
 import org.bytedeco.ffmpeg.avutil.AVDictionary;
@@ -75,7 +76,7 @@ class RecordingAgainTest {
             assertTrue(rig.recording.isRecording(), "waiting for room, not given up");
             assertNull(rig.recording.file(), "no file being written: no REC mark");
             assertTrue(rig.copies.isEmpty(), "no copy with the OSD began on a part that got nothing on the disk: " + rig.copies);
-            rig.waitFor("the folder empty", () -> files(videos).isEmpty());
+            Waits.waitFor(() -> files(videos).isEmpty(), 5000, "the folder empty");
             Files.delete(videos); // the tries find no room
 
             long last = rig.now.get(); // the stop
@@ -96,7 +97,7 @@ class RecordingAgainTest {
                 last = rig.now.get();
                 if (i < waits.length - 1) assertEquals(1, rig.said.size(), "a try that found no room is not said: " + rig.said);
             }
-            rig.waitFor("RECORDING AGAIN", () -> rig.said.size() == 2);
+            Waits.waitFor(() -> rig.said.size() == 2, 5000, "RECORDING AGAIN: " + rig.said);
             assertEquals("RECORDING AGAIN.", rig.said.get(1));
             assertEquals(VideoRecording.MAX_WRITE_FAILURES + 1, rig.parts.size(), "no try that failed is a part of the flight: " + rig.parts);
             Path back = rig.parts.get(rig.parts.size() - 1);
@@ -159,7 +160,7 @@ class RecordingAgainTest {
         try {
             rig.recording.start(videos);
             rig.feedUntil("the stop", () -> rig.said.size() == 1);
-            rig.waitFor("the folder empty", () -> files(videos).isEmpty());
+            Waits.waitFor(() -> files(videos).isEmpty(), 5000, "the folder empty");
             Files.delete(videos);
             long t = rig.now.get();
             for (long wait : new long[]{5, 10}) { // two tries without room: the next wait is 20 s
@@ -261,12 +262,6 @@ class RecordingAgainTest {
             skipToNonKey();
             feed(12);
             Thread.sleep(300);
-        }
-
-        void waitFor(String what, BooleanSupplier done) throws InterruptedException {
-            long end = System.currentTimeMillis() + 5000;
-            while (!done.getAsBoolean() && System.currentTimeMillis() < end) Thread.sleep(5);
-            assertTrue(done.getAsBoolean(), "within 5 s: " + what + " (parts " + parts + ", said " + said + ")");
         }
 
         /** Every byte written into f from now on is refused. */
