@@ -422,6 +422,7 @@ public final class GroupController {
     // ------------------------------------------------------------------ the tick
 
     public Out tick(long now, Map<String, Report> reports, Report lead, List<Other> others, V2 wind) {
+        lastOthers = others;
         double dt = lastTick < 0 ? 0.2 : Math.min(1.0, (now - lastTick) / 1000.0);
         lastTick = now;
         stepGround(dt);
@@ -461,6 +462,7 @@ public final class GroupController {
                 m.state = State.GONE;
                 scheduler.releaseAll(m.id);
                 leadId = m.id;
+                if (m.rally != null) keptRallies.put(m.id, m.rally); // it may come down there one day: nobody else's
                 leaving = false;
                 newLead = m.id;
                 events.add("NEW LEAD " + m.id);
@@ -1662,8 +1664,42 @@ public final class GroupController {
 
     // ------------------------------------------------------------------ exit plans
 
+    /**
+     * AC-10: the rally points of drones that left the group still flying (a new lead, later an old one keeping its mode):
+     * their RTL comes down there. Before, a follower could be given such a point once its owner had left - and with the
+     * PC gone for good both came down on it (seed 124).
+     */
+    private final Map<String, V2> keptRallies = new HashMap<>();
+
+    /** The drones not of the group, as of the last tick. */
+    private List<Other> lastOthers = List.of();
+
+    /** Every follower's rally point clear of the others', the drones on their own, former members' and the lead's home. */
+    private void resolveRallies() {
+        List<V2> taken = new ArrayList<>(outsideRallies.values());
+        for (Map.Entry<String, V2> e : keptRallies.entrySet()) if (!members.containsKey(e.getKey())) taken.add(e.getValue());
+        if (leadHome != null) taken.add(leadHome);
+        List<Member> clash = new ArrayList<>();
+        for (Member m : members.values()) {
+            if (m.rally == null || m.state == State.LOST || m.state == State.LEAVING || m.state == State.GONE) {
+                if (m.rally != null) taken.add(m.rally); // cut off or leaving: its point can't change any more
+                continue;
+            }
+        }
+        for (Member m : members.values()) {
+            if (m.rally == null || m.state == State.LOST || m.state == State.LEAVING || m.state == State.GONE) continue;
+            if (RallyPoints.free(m.rally, taken, p)) taken.add(m.rally);
+            else clash.add(m);
+        }
+        for (Member m : clash) {
+            m.rally = RallyPoints.firstFree(rallySite == null ? m.rally : rallySite, centre, taken, p);
+            taken.add(m.rally);
+        }
+    }
+
     private Map<String, ExitPlan> makePlans(long now, Map<String, Report> reports, Report lead, List<String> events) {
         lastProofAt = now;
+        resolveRallies();
         List<ExitPlanner.Input> in = new ArrayList<>();
         int topLayer = 0;
         double top = groundAmsl + cube.layerAlt(0);
@@ -1676,7 +1712,7 @@ public final class GroupController {
         top = Math.max(top, groundAmsl + cube.layerAlt(topLayer));
         // above every cut-off drone's return height from an earlier set: whoever flies home over it is higher (AC-36,
         // losses one after another)
-        for (Member m : members.values()) if (m.state == State.LOST && m.plan != null) top = Math.max(top, m.homeAmsl + m.plan.returnAltRelM);
+        for (Member m : members.values()) if ((m.state == State.LOST || m.state == State.LEAVING) && m.plan != null) top = Math.max(top, m.homeAmsl + m.plan.returnAltRelM);
         if (lead != null) top = Math.max(top, lead.altAmsl());
         for (Member m : members.values()) {
             if (m.state == State.GONE || m.state == State.LOST || m.state == State.GNSS_LOST || m.state == State.LEAVING) continue;
@@ -1695,8 +1731,30 @@ public final class GroupController {
         }
         // AC-41: the lead's way home (from where it is to its home, or where it was last heard) proven with the plans
         V2 lh = leadHome != null ? leadHome : lead == null ? null : lead.pos();
-        ExitPlanner.Lead lp = lead == null ? null : new ExitPlanner.Lead(lead.pos(), lead.altAmsl(), lh, lead.homeAmsl());
-        ExitPlanner.Result res = new ExitPlanner(p).plan(centre, vel, in, top, lp, prover);
+        List<ExitPlanner.Lead> leads = new ArrayList<>();
+        if (lead != null) leads.add(new ExitPlanner.Lead(lead.pos(), lead.altAmsl(), lh, lead.homeAmsl()));
+        // old leads keeping their mode (E3): when the PC goes they go home by their own rule, to the point they had as
+        // followers - before, a follower's way home crossed an old lead's way down there (seed 124)
+        for (Other o : lastOthers) {
+            V2 home = keptRallies.get(o.id());
+            if (home == null || o.lead() || members.containsKey(o.id()) || o.id().equals(leadId)) continue;
+            leads.add(new ExitPlanner.Lead(o.pos(), o.altAmsl(), home, groundAmsl, o.id()));
+        }
+        // AC-36 / AC-37: the drones already cut off fly the plans they were sent - proven with the new set, unchanged
+        List<ExitPlanner.Hanging> hanging = new ArrayList<>();
+        for (Member m : members.values()) {
+            boolean lost = m.state == State.LOST && m.lostAt >= 0;
+            // the new lead on its way out keeps the plan it had as a follower (it gets no new one): fixed as well
+            boolean leaver = m.state == State.LEAVING;
+            if (!lost && !leaver || m.plan == null) continue;
+            ExitPlan pl = m.plan;
+            V2 lc = !lost || m.lostCentre == null ? centre : m.lostCentre;
+            V2 off = lost && m.lostOff != null ? m.lostOff : !lost && m.sentOff != null ? m.sentOff : m.lastPos.minus(lc);
+            V2 rally = new V2(GeoLocal.east(lat0, lon0, pl.rallyLat, pl.rallyLon), GeoLocal.north(lat0, lon0, pl.rallyLat, pl.rallyLon));
+            hanging.add(new ExitPlanner.Hanging(m.id, m.lastPos, m.lastAlt, m.homeAmsl, lc, off, m.lostAt >= 0 ? (now - m.lostAt) / 1000.0 : 0,
+                    pl.laneEndRadiusM, pl.startDelayS, pl.returnAltRelM, rally, pl.layerAltAmsl, (pl.flags & ExitPlan.FLAG_BOTTOM_ROW) != 0));
+        }
+        ExitPlanner.Result res = new ExitPlanner(p).plan(centre, vel, in, top, leads, hanging, prover);
         if (prover != null && !res.proven()) {
             events.add("EXIT PLANS NOT PROVEN");
             return null; // the drones keep the last proven set
@@ -1704,11 +1762,9 @@ public final class GroupController {
         lastPlansAt = now;
         int seq = ++planSeq;
         Map<String, ExitPlan> out = new LinkedHashMap<>();
-        Map<String, ExitPlanner.Input> inputs = new HashMap<>();
-        for (ExitPlanner.Input i : in) inputs.put(i.id(), i);
         for (ExitPlanner.Plan pl : res.plans().values()) {
             double[] rally = GeoLocal.offset(lat0, lon0, pl.rally().e(), pl.rally().n());
-            double delay = Math.max(pl.startDelayS(), waitForHanging(inputs.get(pl.id()), pl, now));
+            double delay = pl.startDelayS(); // proven with the drones already cut off
             out.put(pl.id(), new ExitPlan(pl.bottomRow() ? ExitPlan.FLAG_BOTTOM_ROW : 0, seq, pl.laneEndRadiusM(), delay,
                     pl.returnAltRelM(), rally[0], rally[1], pl.layerAltAmsl()));
         }
@@ -1821,26 +1877,6 @@ public final class GroupController {
             }
         }
         return out;
-    }
-
-    /**
-     * A drone cut off earlier hangs where it is until its hold is over: a plan whose lane passes it (within two radii, at
-     * its height) gets a start delay that lets it go first (AC-36 for losses that come one after another - the set's
-     * proof is for everyone cut off at once). Seconds after this drone's own hold; 0: nothing in its way.
-     */
-    private double waitForHanging(ExitPlanner.Input i, ExitPlanner.Plan pl, long now) {
-        if (i == null) return 0;
-        V2 from = centre.plus(i.rel()), dir = i.rel().length() < 0.5 ? new V2(0, 1) : i.rel().unit();
-        V2 to = from.plus(dir.times(Math.max(pl.laneEndRadiusM() - i.rel().length(), 0)));
-        double wait = 0;
-        for (Member l : members.values()) {
-            if (l.state != State.LOST || l.plan == null) continue;
-            if (Math.abs(l.lastAlt - i.altAmsl()) >= p.layerM() - ExitPlanner.VERTICAL_TOLERANCE_M) continue;
-            if (V2.segDist(l.lastPos, from, to) >= 2 * p.radiusM() + 5) continue;
-            double gone = (l.lostAt + p.holdMs() - now) / 1000.0 + l.plan.startDelayS + (2 * p.radiusM() + 5) / 8 + 10;
-            wait = Math.max(wait, gone - p.holdMs() / 1000.0);
-        }
-        return wait;
     }
 
     public Map<String, ExitPlan> plans() {

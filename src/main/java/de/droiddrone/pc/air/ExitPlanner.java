@@ -29,7 +29,7 @@ import java.util.Set;
  */
 public final class ExitPlanner {
     public static final double LANE_STEP_M = 15;
-    public static final int MAX_TRIES = 12;
+    public static final int MAX_TRIES = 24;
     public static final double DELAY_STEP_S = 15;
 
     /** Where a follower is: in a cell, or elsewhere round the cube (lane, shaft, approach or abort layer). */
@@ -73,7 +73,8 @@ public final class ExitPlanner {
      * as they are, braking into LOITER as the phones do; returns the worst moment.
      */
     public interface Prover {
-        Closest fly(V2 centre, V2 velocity, List<Input> inputs, Map<String, Plan> plans, double leadReturnAltAmsl, Lead lead);
+        Closest fly(V2 centre, V2 velocity, List<Input> inputs, Map<String, Plan> plans, double leadReturnAltAmsl, List<Lead> leads,
+                    List<Hanging> hanging);
     }
 
     /**
@@ -82,7 +83,11 @@ public final class ExitPlanner {
      * {@link #LEAD_HOME_AFTER_S} climbs where it is to its return height, flies over and comes down there - well ahead of
      * the followers, whose hold is longer: its way down crosses every layer, and a lane may run under it.
      */
-    public record Lead(V2 pos, double altAmsl, V2 home, double homeAmsl) {}
+    public record Lead(V2 pos, double altAmsl, V2 home, double homeAmsl, String id) {
+        public Lead(V2 pos, double altAmsl, V2 home, double homeAmsl) {
+            this(pos, altAmsl, home, homeAmsl, LEAD_ID);
+        }
+    }
 
     /** The lead's link-loss rule: RTL this long after the PC went silent (A4). */
     public static final double LEAD_HOME_AFTER_S = 20;
@@ -108,6 +113,36 @@ public final class ExitPlanner {
 
     /** @param lead the lead's way home, proven against too (null: no lead) */
     public Result plan(V2 centre, V2 velocity, List<Input> inputs, double topAltAmsl, Lead lead, Prover prover) {
+        return plan(centre, velocity, inputs, topAltAmsl, lead, List.of(), prover);
+    }
+
+    /**
+     * AC-36 / AC-37: a drone already cut off flies the plan it was sent - the PC can't change it any more. Where it
+     * hangs (its brake's stop), how high, the centre and offset its last order carried (its lane runs out through it),
+     * its plan, and how long ago it was cut off ({@code aheadS}: its hold ends that much before a drone cut off now).
+     */
+    public record Hanging(String id, V2 pos, double altAmsl, double homeAmsl, V2 lostCentre, V2 lostOff, double aheadS,
+                          double laneEndRadiusM, double startDelayS, double returnAltRelM, V2 rally, double layerAltAmsl,
+                          boolean bottomRow) {}
+
+    /**
+     * @param hanging the drones already cut off, flying (or about to fly) the plans they were sent: the new set is
+     *                proven together with them, as if the PC went now for good, and only the new set changes (later
+     *                starts) - a hanging drone can't be reached. Before, each set was proven alone: once the PC was
+     *                gone for good, a drone cut off earlier met one of the later set on its way out (seeds 7, 9, 154, 180).
+     */
+    public Result plan(V2 centre, V2 velocity, List<Input> inputs, double topAltAmsl, Lead lead, List<Hanging> hanging, Prover prover) {
+        return plan(centre, velocity, inputs, topAltAmsl, lead == null ? List.of() : List.of(lead), hanging, prover);
+    }
+
+    /**
+     * @param leads the lead and the old leads keeping their mode (E3) - each goes home by its own rule when the PC goes:
+     *              proven with the plans, never changed by them
+     */
+    public Result plan(V2 centre, V2 velocity, List<Input> inputs, double topAltAmsl, List<Lead> leads, List<Hanging> hanging, Prover prover) {
+        Set<String> fixed = new HashSet<>();
+        for (Lead l : leads) fixed.add(l.id());
+        for (Hanging h : hanging) fixed.add(h.id());
         Map<String, Double> radius = new HashMap<>();
         int maxBelow = inputs.stream().filter(i -> i.where() == Where.CELL).mapToInt(Input::layersAbove).max().orElse(0);
         for (Input i : inputs) {
@@ -175,11 +210,13 @@ public final class ExitPlanner {
         if (prover == null) return new Result(plans, false, null, leadAlt);
         Closest worst = null;
         for (int t = 0; t < MAX_TRIES; t++) {
-            worst = prover.fly(centre, velocity, inputs, plans, leadAlt, lead);
+            worst = prover.fly(centre, velocity, inputs, plans, leadAlt, leads, hanging);
             if (worst == null || !worst.loss(p)) return new Result(plans, true, worst, leadAlt);
-            // the lead never waits (its rule is the phone's own): the follower in its way leaves later
-            String later = LEAD_ID.equals(worst.a()) ? worst.b() : LEAD_ID.equals(worst.b()) ? worst.a()
-                    : order.indexOf(worst.a()) > order.indexOf(worst.b()) ? worst.a() : worst.b();
+            // the lead and the drones already cut off never change (the lead's rule is the phone's own; a hanging drone can't be
+            // reached): the one of the new set in their way leaves later
+            boolean fa = fixed.contains(worst.a()), fb = fixed.contains(worst.b());
+            if (fa && fb) break; // two that nothing here changes
+            String later = fa ? worst.b() : fb ? worst.a() : order.indexOf(worst.a()) > order.indexOf(worst.b()) ? worst.a() : worst.b();
             Plan old = plans.get(later);
             if (old == null) break; // the lead in the worst pair with no follower to delay: give up
             plans.put(later, new Plan(old.id(), old.laneEndRadiusM(), old.returnAltAmsl(), old.startDelayS() + DELAY_STEP_S, old.rally(),
