@@ -86,15 +86,14 @@ class SitlReturnTest {
         double startH = phone.fc.position()[3];
         assertTrue(startH < planned - 15, "below its return height at the slot: " + startH);
         phone.mode(SitlFleetPhone.RTL);
-        double top = startH, distAtTop = Double.NaN;
+        double top = startH, distAtTop = Double.NaN; // where it first came within 1 m of its RTL_ALT (the highest point
+        // itself may come a few centimetres later, on the way home: measured there, the check failed under load at 88 m)
         long end = System.currentTimeMillis() + 180_000;
         boolean home = false;
         while (System.currentTimeMillis() < end && !home) {
             double[] p = phone.fc.position();
-            if (p[3] > top) {
-                top = p[3];
-                distAtTop = GeoLocal.distance(target[0], target[1], p[0], p[1]);
-            }
+            if (p[3] > top) top = p[3];
+            if (Double.isNaN(distAtTop) && p[3] >= planned - 1) distAtTop = GeoLocal.distance(target[0], target[1], p[0], p[1]);
             home = GeoLocal.distance(LAT, LON, p[0], p[1]) < 60 && top > planned - 3;
             Thread.sleep(200);
         }
