@@ -22,7 +22,7 @@ class TrafficCodecTest {
                     i - 3.5, 2.25 - i, i % 2 == 0 ? -1.5 : 2.5, i % 4, i * 30));
         }
         byte[] bytes = new Traffic(in).encode();
-        assertEquals(2 + 8 * Traffic.ENTRY_BYTES, bytes.length, "194 bytes at most");
+        assertEquals(2 + 8 * Traffic.ENTRY_BYTES + 2, bytes.length, "196 bytes at most (with its sequence)");
         byte[] wire = FleetCmd.wrap("DD", FleetCmd.traffic(bytes));
         FleetCmd c = FleetCmd.read(wire, wire.length);
         assertNotNull(c);

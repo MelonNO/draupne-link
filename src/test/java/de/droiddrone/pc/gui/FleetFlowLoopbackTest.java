@@ -335,8 +335,9 @@ class FleetFlowLoopbackTest {
                 "both called: " + log);
         double[] top = {Double.NaN, Double.NaN};
         until(() -> {
-            if (Double.isNaN(top[0]) && r1.launchState() == LaunchSequence.ON_THE_WAY) top[0] = r1.copter.u;
-            if (Double.isNaN(top[1]) && r2.launchState() == LaunchSequence.ON_THE_WAY) top[1] = r2.copter.u;
+            // the top of the climb: ON THE WAY, or already past it (the group's first order moves a reserve on at once)
+            if (Double.isNaN(top[0]) && r1.launchState() >= LaunchSequence.ON_THE_WAY && r1.launchState() <= LaunchSequence.IN_GROUP) top[0] = r1.copter.u;
+            if (Double.isNaN(top[1]) && r2.launchState() >= LaunchSequence.ON_THE_WAY && r2.launchState() <= LaunchSequence.IN_GROUP) top[1] = r2.copter.u;
             return !Double.isNaN(top[0]) && !Double.isNaN(top[1]);
         }, 90_000, "both at the top of their climbs");
         assertTrue(Math.abs(top[0] - top[1]) >= 9, "each its own approach layer: " + top[0] + " / " + top[1]);

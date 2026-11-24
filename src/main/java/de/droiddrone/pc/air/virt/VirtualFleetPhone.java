@@ -131,14 +131,17 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 case FleetCmd.GROUP -> {
                     GroupOrder o = GroupOrder.decode(c.data, c.at + 1);
                     if (o == null || inSession()) break; // the piloted drone is never a follower (FL-7)
+                    if (!gates.group.take(o.seq, now)) break; // as the phone: an older order is dropped (SeqGate)
                     FollowerBrain b = brain;
                     if (b == null) brain = b = new FollowerBrain(1000);
                     b.order(o, now);
+                    double[] cell = de.droiddrone.common.group.FollowerRule.place(o, 0), at = latLon(); // as the phone: a reserve moves on
+                    act(seq.followerOrder(now, GeoLocal.distance(cell[0], cell[1], at[0], at[1]), copter.u - cell[2]));
                 }
                 case FleetCmd.EXIT -> {
                     ExitPlan plan = ExitPlan.decode(c.data, c.at + 1);
                     FollowerBrain b = brain;
-                    if (plan != null && b != null) b.plan(plan);
+                    if (plan != null && b != null && gates.exit.take(plan.seq, now)) b.plan(plan);
                 }
                 case de.droiddrone.common.MissionBlock.PACKET -> { // a route: kept, "read back" at once (the real phone uploads it over USB)
                     // one part of it: whole when every part has come (as the phone's Mavlink.missionPart)
@@ -174,7 +177,7 @@ public final class VirtualFleetPhone implements AutoCloseable {
                 }
                 case FleetCmd.TRAFFIC -> {
                     de.droiddrone.common.group.Traffic t = de.droiddrone.common.group.Traffic.decode(c.data, c.at + 1, c.length - 1);
-                    if (t != null) {
+                    if (t != null && gates.traffic.take(t.seq, now)) {
                         traffic = t;
                         trafficCount.incrementAndGet();
                     }
@@ -675,6 +678,9 @@ public final class VirtualFleetPhone implements AutoCloseable {
 
     /** Refuses the next session blocks with this reason (null: takes them). */
     public volatile String refuseBlocks;
+
+    /** As the phone's FleetRole: the commander's order, plan and traffic sequences. */
+    private final de.droiddrone.common.group.OrderGates gates = new de.droiddrone.common.group.OrderGates();
 
     /** The parts of the blocks sent to this phone (both paths), put together as the real phone does. */
     private final de.droiddrone.common.MissionBlock.Assembler parts = new de.droiddrone.common.MissionBlock.Assembler();

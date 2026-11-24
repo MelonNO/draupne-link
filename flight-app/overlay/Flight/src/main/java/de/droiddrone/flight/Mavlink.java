@@ -590,6 +590,11 @@ public class Mavlink {
         }
     }
 
+    /** Height above sea level now (GLOBAL_POSITION_INT), NaN before. */
+    double altAmslNow() {
+        return altAmslM;
+    }
+
     double latNow() {
         return latExact;
     }

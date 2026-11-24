@@ -61,6 +61,11 @@ public final class LaunchWire {
         public int reason;
         public double heightM, climbMps;
         public boolean passedFloor, markValid, connected, armed;
+        /**
+         * The phone's sequence (1..65535, counting up from a random start; SeqGate): the PC drops a status older than its
+         * newest (a late CLIMBING after IN GROUP). 0 in the spare bytes of an older phone: none (-1), always taken.
+         */
+        public int seq = -1;
     }
 
     public static byte[] encode(Order o) {
@@ -116,6 +121,9 @@ public final class LaunchWire {
         return o;
     }
 
+    private static final java.util.concurrent.atomic.AtomicInteger STATUS_SEQ =
+            new java.util.concurrent.atomic.AtomicInteger(de.droiddrone.common.SeqGate.randomStart());
+
     public static byte[] encode(Status s) {
         byte[] b = new byte[STATUS_SIZE];
         int at = 0;
@@ -128,8 +136,9 @@ public final class LaunchWire {
         at = putShort(b, at, clampShort(Math.round(s.climbMps * 100)));
         int flags = (s.passedFloor ? 1 : 0) | (s.markValid ? 2 : 0) | (s.connected ? 4 : 0) | (s.armed ? 8 : 0);
         b[at++] = (byte) flags;
-        b[at++] = 0; // spare
-        b[at++] = 0;
+        int seq = s.seq > 0 ? s.seq & 0xffff : Math.floorMod(STATUS_SEQ.getAndIncrement(), 65535) + 1; // never 0: an older phone's spare bytes
+        b[at++] = (byte) (seq >>> 8);
+        b[at++] = (byte) seq;
         b[at] = crc8(b, at);
         return b;
     }
@@ -156,6 +165,8 @@ public final class LaunchWire {
         s.markValid = (flags & 2) != 0;
         s.connected = (flags & 4) != 0;
         s.armed = (flags & 8) != 0;
+        int q = (b[at + 1] & 0xff) << 8 | (b[at + 2] & 0xff);
+        s.seq = q == 0 ? -1 : q;
         return s;
     }
 

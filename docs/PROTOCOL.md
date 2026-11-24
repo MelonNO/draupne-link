@@ -195,8 +195,8 @@ See the table in `Spectate.java`. `PILOT_VIEW [0x76][version u8 = 1][flags u8][r
 
 Datagram sizes: the phone reads at most 1100 bytes of a datagram (`UdpCommon.packetLength`), a Tailscale path carries
 about 1250. Every fleet datagram fits: a `FleetCmd` is 2 + key (at most 64) + its inner packet - GroupOrder 49, ExitPlan
-25, LAUNCH 26, TRAFFIC at most 194, CLEAR 13, MARK 7, LEAD 4, RETURN 3, a `MissionBlock` part at most 855 (921 in all;
-`FleetCmd.wrap` refuses over 1100); `FleetStatus` 36; LAUNCH_STATUS 18; `FcCommand` at most 10; the tunnel carries one
+25, LAUNCH 26, TRAFFIC at most 196, CLEAR 13, MARK 7, LEAD 4, RETURN 3, a `MissionBlock` part at most 855 (921 in all;
+`FleetCmd.wrap` refuses over 1100); `FleetStatus` 38; LAUNCH_STATUS 18; `FcCommand` at most 10; the tunnel carries one
 MAVLink frame (at most 280 bytes) a datagram each way. Only a `MissionBlock` could ever be longer: it goes in parts.
 
 - **`FleetCmd` 0x34** (PC to phone, unnumbered, the drone's commander only - `FleetCommandGate`):
@@ -215,14 +215,28 @@ MAVLink frame (at most 280 bytes) a datagram each way. Only a `MissionBlock` cou
   known][follower phase u8, 255 none][error radius dm u16][home height above sea level dm i32][the PC's newest route
   block u16][its state u8][percent u8][RTL_ALT dm u16, 65535 not known]`, 36 bytes - RTL_ALT as the FC last answered
   it (PARAM_VALUE), the PC's check that a RETURN is on the drone; an older PC reads 34, a 34-byte report (an older
-  phone) reads as not known. Numbers past a field's range are saturated, never wrapped.
+  phone) reads as not known. Then `[sequence u16]`, 38 bytes (see Stale datagrams). Numbers past a field's range are
+  saturated, never wrapped.
 - **LAUNCH_STATUS `0x3E`** (phone to its commander): `[0x3E][LaunchWire status]`. `LaunchWire` order `[version 1][kind
   u8: 1 launch, 2 cancel][mark id i32][call id u16][approach height dm u16][floor dm u16][column lat i32][lon i32,
   i32 min = not known][lead sysid u8][join layer u8][join cell u8][min battery % u8][CRC-8]`, 25 bytes; status
-  `[version 1][call id u16][mark id i32][state u8][reason u8][height dm i16][climb cm/s i16][flags u8][0][0][CRC-8]`,
+  `[version 1][call id u16][mark id i32][state u8][reason u8][height dm i16][climb cm/s i16][flags u8][sequence u16, 0 none][CRC-8]`,
   17 bytes. The PC repeats an order at 5 Hz: the same call (call and mark id) within 60 s is answered with the
   status and changes nothing (a copy after the launch ended was refused as a new call and IN GROUP reported as NOT
   LAUNCHED). Call and block ids start at a random point at every start of the PC (`RouteSender.randomId`), so a
   repeat after a restart is not a copy. With the commander silent the phone keeps the FC's ground station heartbeat
   from the call to the group and the climb goes on (AL-14); on its way to the group (ON THE WAY to IN TRANSIT) the
-  silence is a follower's link loss (AC-37): LOITER after 12 s (TRACK comes every 5 s), RTL after 2 min.
+  silence is a follower's link loss (AC-37): LOITER after 12 s (TRACK comes every 5 s), RTL after 2 min - until the
+  group's first order: from then on it is a follower and only the follower's rules apply. The group's orders move the
+  launch on (`LaunchSequence.followerOrder`): WAITING FOR TRANSIT and IN TRANSIT at the first, IN GROUP within 3 m
+  sideways and 2 m in height of its order's place.
+- **Stale datagrams.** FleetStatus, GROUP, EXIT, TRAFFIC and the launch status carry the sender's 16-bit sequence,
+  counting up from a random start at every start of the sender (`SeqGate.randomStart`): FleetStatus `[seq u16]` after
+  its 36 bytes; GroupOrder and ExitPlan their own seq field (it began at 0 before); TRAFFIC `[seq u16]` after its
+  entries (196 bytes at most; a version 1 reader reads past it); the launch status in its two spare bytes (0: none).
+  The receiver (`SeqGate`: the PC's GroupLink per drone - only a newer report counts as heard; the phone's FleetRole per
+  commander, its order, plan and traffic) drops anything older than the newest seen by at most 1024 (a delayed
+  datagram; before, a late report overwrote a newer one and a late order moved a follower back, after a DISBAND even
+  made it a follower again); older by more, or after 3 s with nothing newer, is a sender started again. A copy is
+  taken. Older peers stay readable: a datagram without a sequence (an older phone's 36-byte report, an older PC's
+  traffic, 0 in the spare bytes) is always taken; an older reader reads past the new bytes.

@@ -86,10 +86,11 @@ final class ArduLinkLoss {
         boolean inSession = u.inSession();
         if (inSession) Udp.fleet.pilotWas(u.pilotAddress(), now);
         Udp.fleet.tick(u, mavlink, now, inSession);
+        if (!inSession && Udp.fleet.isFollower()) return; // its own rules: also a reserve the group has taken (AC-37)
         if (!inSession && Udp.fleet.launch.underWay()) {
             // a reserve's launch: the climb is the phone's own (AL-14); on its way to the group the commander's silence is a
             // follower's link loss (AC-37): LOITER, home by RTL after 2 min (LaunchSequence.linkLossApplies; LOITER after 12 s: TRACK comes every 5 s)
-            boolean applies = de.droiddrone.common.launch.LaunchSequence.linkLossApplies(Udp.fleet.launch.state());
+            boolean applies = de.droiddrone.common.launch.LaunchSequence.launchRuleApplies(Udp.fleet.launch.state(), Udp.fleet.isFollower());
             act(launchRule.tick(now, applies ? Udp.fleet.commanderHeardAt() : now, mavlink.armedNow(now), mavlink.customModeNow(),
                     mavlink.gnssOk(), true), launchRule, mavlink, u, " (reserve on its way)");
             return;
