@@ -75,6 +75,70 @@ class NotSavedIsSaidTest {
         assertEquals(2, FlightTrack.read(file).points().size(), "the point before and the point after");
     }
 
+    /**
+     * A write that a full disk took part of (the test bench's full disk, 2026-11-24): "<trkpt lat="60.86" stayed in
+     * the file and the next point came after it - this app read the track, a map program did not. Now what the failed
+     * write left is taken off before the next point. The part of a line is played by this test writing it while the
+     * file is locked (the lock makes the track's own write fail).
+     */
+    @Test
+    void whatAFailedWriteLeftOfAPointIsTakenOffBeforeTheNext(@TempDir Path root) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"), "a lock that stops a write is Windows' way");
+        Path tracks = Files.createDirectories(root.resolve("Tracks"));
+        FlightTrack track = new FlightTrack(tracks);
+        List<String> said = new CopyOnWriteArrayList<>();
+        track.setProblemListener(said::add);
+        long now = System.currentTimeMillis();
+        track.sample(fix(59.9139, 10.7522, now - 5000), true);
+        track.flush();
+        Path file = track.file();
+        try (java.nio.channels.FileChannel other = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.WRITE);
+             java.nio.channels.FileLock lock = other.lock(0, Long.MAX_VALUE, false)) {
+            other.write(java.nio.ByteBuffer.wrap("   <trkpt lat=\"59.91".getBytes(java.nio.charset.StandardCharsets.UTF_8)), other.size());
+            track.sample(fix(59.9149, 10.7522, now - 4000), true);
+            track.flush();
+            assertEquals(1, said.size(), said.toString());
+        }
+        track.sample(fix(59.9159, 10.7522, now - 3000), true);
+        track.close();
+        assertEquals("Track saved again (1 point missing).", said.get(1));
+        assertNull(strictXml(file), "a whole GPX file, as a map program reads it");
+        assertEquals(2, FlightTrack.read(file).points().size(), "the point before and the point after");
+    }
+
+    /** The disk full at the last point and room at the end of the flight: the file's end is written all the same. */
+    @Test
+    void aTrackWhoseLastWriteFailedIsEndedWholeAtTheClose(@TempDir Path root) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"), "a lock that stops a write is Windows' way");
+        Path tracks = Files.createDirectories(root.resolve("Tracks"));
+        FlightTrack track = new FlightTrack(tracks);
+        long now = System.currentTimeMillis();
+        track.sample(fix(59.9139, 10.7522, now - 5000), true);
+        track.flush();
+        Path file = track.file();
+        try (java.nio.channels.FileChannel other = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.WRITE);
+             java.nio.channels.FileLock lock = other.lock(0, Long.MAX_VALUE, false)) {
+            other.write(java.nio.ByteBuffer.wrap("   <trkpt lat=\"59.91".getBytes(java.nio.charset.StandardCharsets.UTF_8)), other.size());
+            track.sample(fix(59.9149, 10.7522, now - 4000), true);
+            track.flush();
+        }
+        track.close();
+        assertNull(strictXml(file), "a whole GPX file, as a map program reads it");
+        assertEquals(1, FlightTrack.read(file).points().size(), "the point that was written");
+    }
+
+    /** Null when a strict XML reader reads the file (as map programs do); else what it says. */
+    private static String strictXml(Path file) {
+        try {
+            javax.xml.parsers.DocumentBuilderFactory f = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            f.setNamespaceAware(true);
+            f.newDocumentBuilder().parse(file.toFile());
+            return null;
+        } catch (Exception e) {
+            return e.getClass().getSimpleName() + ": " + e.getMessage();
+        }
+    }
+
     @Test
     void mapDrawingsThatCannotBeSavedAreSaidOnce(@TempDir Path root) throws Exception {
         Path inTheWay = Files.writeString(root.resolve("DRAUPNE Link"), "a file where the folder should be");

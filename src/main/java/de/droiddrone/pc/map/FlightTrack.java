@@ -310,6 +310,13 @@ public final class FlightTrack {
         Path f = file;
         boolean flewAtClose = armedSeen;
         writer.execute(() -> {
+            if (out == null && begun && f != null) {
+                try {
+                    reopen(f); // the last write failed: the end goes after what is whole
+                } catch (IOException e) {
+                    return;
+                }
+            }
             if (out == null) return;
             try {
                 out.write("  </trkseg>\n </trk>\n</gpx>\n");
@@ -344,16 +351,16 @@ public final class FlightTrack {
         return Kml.xml(text); // the same rules: a GPX other programs can open
     }
 
+    /** The bytes of the file written whole: its head and every point that went in (writer thread only). */
+    private long written;
+
     private void write(Path f, Point p) throws IOException {
-        if (out == null && begun) {
-            // after a write that failed: carried on where it stopped, its head is there already
-            out = Files.newBufferedWriter(f, StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-        }
+        if (out == null && begun) reopen(f); // after a write that failed: carried on where it stopped, its head is there already
+        StringBuilder text = new StringBuilder();
         if (out == null) {
             Files.createDirectories(dir);
             out = Files.newBufferedWriter(f, StandardCharsets.UTF_8);
-            begun = true;
-            out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+            text.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                     + "<gpx version=\"1.1\" creator=\"DRAUPNE Link " + de.droiddrone.pc.AppInfo.version() + "\""
                     + " xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:dl=\"https://github.com/MelonNO/draupne-link/gpx\">\n"
                     + " <metadata><time>" + ISO.format(Instant.ofEpochMilli(startedAt)) + "</time></metadata>\n"
@@ -361,12 +368,29 @@ public final class FlightTrack {
                     + (label.isEmpty() ? "" : " " + xml(label)) + "</name>\n"
                     + "  <trkseg>\n");
         }
-        out.write(String.format(Locale.ROOT,
+        text.append(String.format(Locale.ROOT,
                 "   <trkpt lat=\"%.7f\" lon=\"%.7f\"><ele>%d</ele><time>%s</time><sat>%d</sat>"
                         + "<extensions><dl:speed_kmh>%.1f</dl:speed_kmh><dl:course>%d</dl:course><dl:armed>%d</dl:armed><dl:source>%s</dl:source>%s</extensions></trkpt>\n",
                 p.lat(), p.lon(), p.altM(), ISO.format(Instant.ofEpochMilli(p.timeMs())), p.sats(), p.speedKmh(), p.courseDeg(), p.armed() ? 1 : 0,
                 p.phone() ? "phone" : "drone", p.accuracyM() > 0 ? "<dl:accuracy_m>" + p.accuracyM() + "</dl:accuracy_m>" : ""));
+        out.write(text.toString());
         out.flush(); // every point: a crash loses nothing
+        written += text.toString().getBytes(StandardCharsets.UTF_8).length;
+        begun = true; // the head is in the file (a first write that failed writes it again)
+    }
+
+    /**
+     * The file opened again after a write that failed, to be added to - what that write left of a point taken off
+     * first. The test bench's full disk (2026-11-24) took part of a line: "<trkpt lat="60.86" stayed in the file with
+     * the next point after it, and the end of the file did not come at all when the disk was full at the last point.
+     * This app read such a track; a map program did not.
+     */
+    private void reopen(Path f) throws IOException {
+        try (java.nio.channels.FileChannel file = java.nio.channels.FileChannel.open(f, java.nio.file.StandardOpenOption.WRITE,
+                java.nio.file.StandardOpenOption.CREATE)) {
+            if (file.size() > written) file.truncate(written);
+        }
+        out = Files.newBufferedWriter(f, StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
     }
 
     /** "± 7 m (phone GPS)" for a phone point with a known accuracy; "" otherwise. */
