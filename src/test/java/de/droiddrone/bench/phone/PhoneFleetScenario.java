@@ -8,6 +8,7 @@ import de.droiddrone.bench.Pilot;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.bench.hw.AppLinkLog;
 import de.droiddrone.common.PacketIds;
+import de.droiddrone.pc.ArmedCheck;
 import de.droiddrone.pc.fleet.Fleet;
 import de.droiddrone.pc.fleet.VirtualFleet;
 import de.droiddrone.testing.Waits;
@@ -16,9 +17,11 @@ import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
+import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.SwingUtilities;
 import java.awt.Component;
+import java.awt.Dialog;
 import java.awt.Window;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -98,6 +101,40 @@ class PhoneFleetScenario {
      */
     private static void mainInFront(AppRig rig, Ui ui) {
         ui.front(rig.main());
+    }
+
+    /**
+     * The app's question before an action that stops the sticks (F-062), as Pilot.standby takes it: "not known yet if
+     * the drone is armed" - a link's first seconds, before its flight controller is read (the emulator's phone has
+     * none: FC LOST comes after a grace) - is answered with the action, as a pilot on the ground does, and the film says
+     * so; "while armed?" (armed, or armed moments ago) is never answered: the press fails on it.
+     * @return whether a question was answered
+     */
+    private static boolean answerNotKnown(AppRig rig, Ui ui, String action) {
+        Dialog asked = null;
+        PhoneFleet.Question kind = PhoneFleet.Question.NONE;
+        for (Window w : Window.getWindows()) {
+            if (!(w instanceof Dialog d) || !Ui.edt(d::isShowing)) continue;
+            PhoneFleet.Question q = PhoneFleet.question(Ui.edt(d::getTitle), action);
+            if (q != PhoneFleet.Question.NONE) {
+                asked = d;
+                kind = q;
+            }
+        }
+        if (kind == PhoneFleet.Question.NONE) return false;
+        ui.shot("the app asks: " + Ui.edt(asked::getTitle));
+        if (kind == PhoneFleet.Question.ARMED) {
+            throw new AssertionError(action + " asked \"" + Ui.edt(asked::getTitle) + "\" - the drone is armed or was moments ago: not answered");
+        }
+        String notKnown = ArmedCheck.NOT_KNOWN.question(action).lines().findFirst().orElse("");
+        if (!ui.sees(notKnown)) throw new AssertionError(action + " asked \"" + Ui.edt(asked::getTitle) + "\" without \"" + notKnown + "\": not answered");
+        Component yes = null;
+        Dialog in = asked;
+        for (Component c : ui.all(action)) if (c instanceof JButton && Ui.edt(() -> SwingUtilities.getWindowAncestor(c)) == in) yes = c;
+        if (yes == null) throw new AssertionError("The question \"" + Ui.edt(asked::getTitle) + "\" has no " + action + " button");
+        rig.film.remark(action + " asked first (\"" + notKnown + "\", the link's first seconds): answered " + action + ".");
+        ui.click(yes);
+        return true;
     }
 
     /** A picture of FLEET: the map window in front for it, the main window back in front after. */
@@ -184,6 +221,9 @@ class PhoneFleetScenario {
                 fleetShot(rig, ui, "FLEET: " + real + " flown from this PC");
 
                 // ---- DEEP SLEEP from the LINK card, a check every minute: ASLEEP
+                // the link's first seconds go by first: whether the drone is armed is read by then (FC LOST on the emulator's
+                // phone, after its grace) - pressed earlier, the app asks first (answered below, as Pilot.standby does)
+                Ui.pause(5000);
                 int presses = 0, linesBefore = rig.log().size();
                 boolean asked = false;
                 while (!asked) {
@@ -192,10 +232,20 @@ class PhoneFleetScenario {
                     ui.click(inMain(rig, ui, "DEEP SLEEP"));
                     presses++;
                     int seen = linesBefore;
-                    asked = Waits.until(() -> {
+                    java.util.function.BooleanSupplier said = () -> {
                         List<String> lines = rig.log();
                         return lines.subList(Math.min(seen, lines.size()), lines.size()).stream().anyMatch(l -> l.contains("DEEP SLEEP asked"));
-                    }, 6000);
+                    };
+                    // the question, when it comes, is answered (not known only) and the wait for the app's word starts again
+                    boolean answered = false;
+                    long end = System.currentTimeMillis() + 6000;
+                    while (!(asked = said.getAsBoolean()) && System.currentTimeMillis() < end) {
+                        if (!answered && answerNotKnown(rig, ui, "DEEP SLEEP")) {
+                            answered = true;
+                            end = System.currentTimeMillis() + 6000;
+                        }
+                        Ui.pause(200);
+                    }
                     if (!asked && presses >= 6) throw new AssertionError("DEEP SLEEP pressed " + presses + " times and never taken");
                     if (!asked) Ui.pause(4000); // WAIT while the link is settling, as a pilot presses again
                 }

@@ -2,6 +2,7 @@ package de.droiddrone.bench.phone;
 
 import de.droiddrone.bench.FleetRows;
 import de.droiddrone.bench.hw.AppLinkLog;
+import de.droiddrone.pc.ArmedCheck;
 import de.droiddrone.pc.Names;
 
 import java.util.ArrayList;
@@ -70,6 +71,23 @@ final class PhoneFleet {
             last = h;
         }
         return n;
+    }
+
+    /** The question the app asks before an action that stops the sticks (F-062, ArmedCheck), by its window's title. */
+    enum Question {
+        /** No such question. */
+        NONE,
+        /** "DEEP SLEEP - armed?": not known yet - the link's first seconds; answered with the action, as a pilot on the ground does. */
+        NOT_KNOWN,
+        /** "DEEP SLEEP while armed?": armed, or armed moments ago - never answered by the bench. */
+        ARMED
+    }
+
+    static Question question(String windowTitle, String action) {
+        if (windowTitle == null || action == null) return Question.NONE;
+        if (windowTitle.equals(ArmedCheck.NOT_KNOWN.title(action))) return Question.NOT_KNOWN;
+        if (windowTitle.equals(ArmedCheck.ARMED.title(action)) || windowTitle.equals(ArmedCheck.MAY_FLY.title(action))) return Question.ARMED;
+        return Question.NONE;
     }
 
     static long count(String text, String part) {

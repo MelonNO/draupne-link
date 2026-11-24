@@ -70,6 +70,20 @@ class PhoneFleetTest {
         assertEquals(3, PhoneFleet.count(check + "\nx\n" + check + " " + check, check));
     }
 
+    /** Only the app's "not known yet" question is one the scenario answers; armed, or armed moments ago, never. */
+    @Test
+    void onlyTheNotKnownQuestionIsOneToAnswer() {
+        String action = "DEEP SLEEP";
+        assertEquals(PhoneFleet.Question.NOT_KNOWN, PhoneFleet.question(de.droiddrone.pc.ArmedCheck.NOT_KNOWN.title(action), action));
+        assertEquals("DEEP SLEEP - armed?", de.droiddrone.pc.ArmedCheck.NOT_KNOWN.title(action), "the title the first runs met");
+        assertEquals(PhoneFleet.Question.ARMED, PhoneFleet.question(de.droiddrone.pc.ArmedCheck.ARMED.title(action), action));
+        assertEquals(PhoneFleet.Question.ARMED, PhoneFleet.question(de.droiddrone.pc.ArmedCheck.MAY_FLY.title(action), action));
+        assertEquals(PhoneFleet.Question.NONE, PhoneFleet.question(de.droiddrone.pc.ArmedCheck.NOT_KNOWN.title("Standby mode"), action), "another action's");
+        assertEquals(PhoneFleet.Question.NONE, PhoneFleet.question("Out of action", action));
+        assertEquals(PhoneFleet.Question.NONE, PhoneFleet.question(null, action));
+        assertTrue(de.droiddrone.pc.ArmedCheck.NOT_KNOWN.question(action).startsWith("Not known yet if the drone is armed"), "the words the scenario looks for first");
+    }
+
     /** The words the scenario waits for in a FLEET row are the app's (FleetCards.badge). */
     @Test
     void theRowsWordsAreStillTheApps() throws Exception {
