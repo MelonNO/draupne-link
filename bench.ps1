@@ -16,6 +16,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 hw -Tests *HwDroneSetup*          every Drone setup row on the real board, then CONFIRM (battery out, props off)
   .\bench.ps1 hw -Tests *HwNetworkSwitch* -Quick   the phone's own network switched under the link (Wi-Fi off / on, airplane 10 s)
   .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
+  .\bench.ps1 phone -Tests *PhoneNight* -Hours 8 -Sleep both   the phone's night with OVERWATCH too (-Sleep deep | overwatch | both)
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.
 The real mouse and screen are used while no real drone is armed (-Mode quiet: never; -Mode desktop: always).
@@ -41,7 +42,11 @@ param(
     # the Betaflight the sitl suite runs as a program (tools\sitl): 4.4.1 (the drone's), 4.5.5, 2025.12.5, 4.3.2
     [string]$Betaflight = '4.4.1',
     # a suite's scenarios with a quick cut of their own run only that (BENCH_QUICK): the bad-link tables' few cells
-    [switch]$Quick
+    [switch]$Quick,
+    # the sleep of the phone's night rounds (*PhoneNight*, BENCH_SLEEP): deep - DEEP SLEEP every round, as always;
+    # overwatch - OVERWATCH every round; both - the two by turns, OVERWATCH first
+    [ValidateSet('deep', 'overwatch', 'both')]
+    [string]$Sleep = 'deep'
 )
 $ErrorActionPreference = 'Stop'
 $repo = $PSScriptRoot
@@ -68,6 +73,7 @@ if ($javaRelease -and (Test-Path $javaRelease) -and ((Get-Content $javaRelease -
     if ($own) { $env:JAVA_HOME = $own } else { throw "JAVA_HOME is a JDK older than 21 ($env:JAVA_HOME): start the bench in a new window." }
 }
 if ($Run -eq 'quick' -or $Quick) { $env:BENCH_QUICK = 'true' } else { $env:BENCH_QUICK = 'false' }
+$env:BENCH_SLEEP = $Sleep   # always set: a word left in this window by an earlier run must not carry over
 if ($Scale) { $env:BENCH_SCALE = $Scale }   # Windows' text scaling for the app under test: 1, 1.25, 1.5, 2
 if ($Screen) { $env:BENCH_SIZE = $Screen }   # the app on a screen this small, e.g. 1093x584 (a 1366 x 768 laptop at 125 %): every scenario
 # everything started from here inherits it: a real drone's link on this PC goes first

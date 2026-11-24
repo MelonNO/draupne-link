@@ -67,6 +67,14 @@ public final class PhoneWords {
     public static final String ON_TAILSCALE = "on Tailscale, ";
     /** ... or that address could not be bound (the other DRAUPNE Flight holds the port): silent, tried again. */
     public static final String LINK_NOT_BOUND = "could not be bound";
+    /** OVERWATCH taken: the camera watches for motion (the countdown over). */
+    public static final String OVERWATCH_WATCHING = "Overwatch: watching (sensitivity";
+    /** ... motion seen: the alert to the PC, an event begun. */
+    public static final String OVERWATCH_MOTION = "Overwatch: MOTION - event";
+    /** ... a piece of an event's clip recorded, waiting for the PC to fetch it (the end of its line). */
+    public static final String OVERWATCH_CLIP_WAITS = " KB) waits for the PC";
+    /** ... its floor (battery or heat) met: DEEP SLEEP instead, by itself (the end of its line). */
+    public static final String OVERWATCH_TO_DEEP_SLEEP = " C) - deep sleep instead";
     /** The camera closed while a change of the picture's size was being set up (F-047), met and survived. */
     public static final String CAMERA_CLOSED_MEANWHILE = "the camera was closed meanwhile";
     /** The camera's session set up; the camera closed; the encoder started anew. */
@@ -128,6 +136,11 @@ public final class PhoneWords {
             new Origin(NO_TAILSCALE, MAIN + "Udp.java", "static final String NO_TAILSCALE = \"" + NO_TAILSCALE + "\";", "log(\"Link socket: \" + where(at));"),
             new Origin(ON_TAILSCALE, MAIN + "Udp.java", ": \"" + ON_TAILSCALE + "\" + at.address.getHostAddress() + \":\" + port;"),
             new Origin(LINK_NOT_BOUND, MAIN + "Udp.java", "\" " + LINK_NOT_BOUND + " (\" + e + \") - silent, tried again\""),
+            new Origin(OVERWATCH_WATCHING, MAIN + "Overwatch.java", "log(\"" + OVERWATCH_WATCHING + " \" + sensitivity"),
+            new Origin(OVERWATCH_MOTION, MAIN + "Overwatch.java", "log(\"" + OVERWATCH_MOTION + " \" + event.event()"),
+            new Origin(OVERWATCH_CLIP_WAITS, MAIN + "Overwatch.java", "log(\"Overwatch: clip \" + c.file.getName() + \" (\" + c.size() / 1024 + \"" + OVERWATCH_CLIP_WAITS + "\");"),
+            new Origin(OVERWATCH_TO_DEEP_SLEEP, MAIN + "Overwatch.java", "log(\"Overwatch: \" + PowerFloor.describe(reason) + \" (battery \" + battery + \" %, \" + tempDeci / 10.0 + \""
+                    + OVERWATCH_TO_DEEP_SLEEP + "\");", "PowerMode.floorDrop(reason);"),
             new Origin(CAMERA_CLOSED_MEANWHILE, MAIN + "InternalCamera.java", "log(\"createCaptureRequest: " + CAMERA_CLOSED_MEANWHILE + ": \"+ e);"),
             new Origin(CAMERA_CONFIGURED, MAIN + "InternalCamera.java", "log(\"CameraCaptureSession - " + CAMERA_CONFIGURED + "\");"),
             new Origin(CAMERA_CLOSED, MAIN + "InternalCamera.java", "log(\"" + CAMERA_CLOSED + ".\");"),

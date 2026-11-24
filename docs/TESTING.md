@@ -505,8 +505,15 @@ screen lock and with a PIN, and 8 hours over mobile data ([BENCH-RUNS.md](BENCH-
 .\bench.ps1 phone                                    every phone scenario once, then gradlew phoneReset
 .\bench.ps1 phone -Tests *PhoneCrash*                one of them
 .\bench.ps1 phone -Tests *PhoneNight* -Hours 8       the app left running for hours
+.\bench.ps1 phone -Tests *PhoneNight* -Hours 8 -Sleep both   the same, OVERWATCH and DEEP SLEEP by turns (overwatch: OVERWATCH only)
 gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that was killed outright
 ```
+
+- **OVERWATCH at night** (`-Sleep overwatch | both`, BENCH_SLEEP; left out: DEEP SLEEP every round, as before): an
+  OVERWATCH round has the deep round's proofs and the phone's word that its camera watches; the alerts, clips, a fall to
+  DEEP SLEEP by the app's own floor, the battery's heat and the app's memory while it watched go into
+  `soak/phone-night.tsv` (it has a mode column) unjudged. Under 25 % battery, or when the PC says NO PICTURE TO WATCH or
+  UPDATE THE PHONE APP, the round takes DEEP SLEEP and the film says why.
 
 - **Which phone, which app.** From the hardware file: `phone.adb` (its serial), `phone.ip` and `phone.port` (where
   this PC reaches its link port: adb's cable carries no UDP, so the link goes over Tailscale - since 2.3.0-pc.58 the

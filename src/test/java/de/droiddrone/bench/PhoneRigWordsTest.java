@@ -52,7 +52,8 @@ class PhoneRigWordsTest {
                 PhoneWords.STANDBY, PhoneWords.DEEP_SLEEP, PhoneWords.SLEEP_LOCKED_SCREEN, PhoneWords.SLEEP_CHECK, PhoneWords.OPENED_OVER_LOCK, PhoneWords.FATAL,
                 PhoneWords.OPENING_AGAIN, PhoneWords.NOT_OPENED_AGAIN, PhoneWords.LAST_ENDED_BY, PhoneWords.NEW_SESSION, PhoneWords.NEW_SESSION_SAME_PC, PhoneWords.LINK_SOCKET,
                 PhoneWords.CAMERA_CLOSED_MEANWHILE, PhoneWords.CAMERA_CONFIGURED, PhoneWords.CAMERA_CLOSED, PhoneWords.ENCODER_STARTED, PhoneWords.STATS_PC_CONNECTED,
-                PhoneWords.STATS_SERVICE_RUNNING, PhoneWords.STATS_SERIAL)) {
+                PhoneWords.STATS_SERVICE_RUNNING, PhoneWords.STATS_SERIAL, PhoneWords.OVERWATCH_WATCHING, PhoneWords.OVERWATCH_MOTION, PhoneWords.OVERWATCH_CLIP_WAITS,
+                PhoneWords.OVERWATCH_TO_DEEP_SLEEP)) {
             assertTrue(words.contains(own), "\"" + own + "\" has its place in the app's sources written down");
         }
     }

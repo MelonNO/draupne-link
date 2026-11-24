@@ -5,6 +5,7 @@ import de.droiddrone.bench.BadLink;
 import de.droiddrone.bench.PhoneRig;
 import de.droiddrone.bench.PhoneWords;
 import de.droiddrone.bench.Pilot;
+import de.droiddrone.bench.Sandbox;
 import de.droiddrone.bench.Ui;
 import de.droiddrone.bench.Watch;
 import de.droiddrone.pc.fleet.VirtualFleet;
@@ -14,8 +15,14 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
+import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -42,6 +49,14 @@ import java.util.regex.Pattern;
  * phone's own checks (its log), the wake within its interval, its memory, its sessions, no crash, the service alive.
  * "Connected to PC" comes from the bench build (STATS) instead of the screen; with the released app it is skipped and
  * listed. How the woken app shows in front of the lock screen is filed for the first three rounds (TO LOOK AT).
+ * <p>
+ * OVERWATCH too (BENCH_SLEEP, bench.ps1 {@code -Sleep overwatch | both}; left out: DEEP SLEEP every round, as above -
+ * {@link PhoneNightSleep}): an OVERWATCH round is held to the same proofs - the PC's "OVERWATCH asked", the phone's
+ * camera watching (its log), its own check, PILOT UAV within its interval and the same margin - and records beside
+ * them, without judging, the alerts and clips the phone told of (the camera sees the bench, nothing is staged for it),
+ * a fall to DEEP SLEEP by its own floor, the battery's temperature at the end of the watch and the app's memory while
+ * it watched. A round that cannot have OVERWATCH (the battery near the app's floor, the PC's refusal) takes DEEP SLEEP
+ * and the film says why.
  */
 @Tag("night")
 @Tag("hwphone")
@@ -49,9 +64,32 @@ class PhoneNightScenario {
     private static final Pattern PSS = Pattern.compile("TOTAL(?: PSS)?:?\\s+([\\d,]+)");
 
     private static long count(String text, String part) {
-        long n = 0;
-        for (int at = text.indexOf(part); at >= 0; at = text.indexOf(part, at + 1)) n++;
-        return n;
+        return PhoneNightSleep.count(text, part);
+    }
+
+    /** The titles of the PC's notices showing now: it paints them (LockedNotice), so they are no label to read. */
+    private static List<String> notices(Ui ui) {
+        List<String> titles = new ArrayList<>();
+        for (JComponent c : ui.all(JComponent.class)) {
+            if (!c.getClass().getSimpleName().equals("LockedNotice")) continue;
+            try {
+                Field title = c.getClass().getDeclaredField("title");
+                title.setAccessible(true);
+                titles.add(String.valueOf(Ui.edt(() -> title.get(c))));
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // a notice whose title cannot be read: the press is tried again as any other
+            }
+        }
+        return titles;
+    }
+
+    /** The free room on the disk that holds this run's folder (the sealed app's clips with it); -1 when not known. */
+    private static long freeBytes() {
+        try {
+            return Files.getFileStore(Sandbox.runRoot()).getUsableSpace();
+        } catch (IOException | RuntimeException e) {
+            return -1;
+        }
     }
 
     /** The phone app's memory as Android counts it (PSS), in MB; -1 when it can't be read. */
@@ -79,6 +117,7 @@ class PhoneNightScenario {
     void theRealPhoneAppForHours() throws Exception {
         PhoneRig.Target target = PhoneRig.Target.ofRun();
         Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        PhoneNightSleep.Mode sleepMode = PhoneNightSleep.Mode.ofRun(); // a word it does not know stops the run here, before anything starts
         long endAt = System.currentTimeMillis() + Math.max(8 * 60_000L, Night.runMs() - 5 * 60_000L);
         AppRig.scenario("night-phone").drones(0).reach(target.reach()).run(rig -> {
             Ui ui = rig.ui;
@@ -95,8 +134,12 @@ class PhoneNightScenario {
             phone.shell("logcat -G 16M"); // the night's lines are read round by round, by time; the buffer holds hours all the same
             java.net.InetSocketAddress link = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its address
             BadLink clean = BadLink.clean(21);
-            Night.Table table = new Night.Table("phone-night", "minutes", "round", "phone app MB", "PC heap MB", "PC threads", "woke after s",
-                    "phone's own checks", "new sessions on the phone", "socket opened anew");
+            Night.Table table = new Night.Table("phone-night", PhoneNightSleep.COLUMNS.toArray(new String[0]));
+            if (sleepMode != PhoneNightSleep.Mode.DEEP) {
+                rig.film.remark("The sleep this night: " + sleepMode.words + ".");
+                String disk = PhoneNightSleep.diskNote(freeBytes());
+                if (disk != null) rig.film.remark(disk + ".");
+            }
             try (Wire wire = new Wire(link.getAddress(), link.getPort())) {
                 wire.rule(clean);
                 rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
@@ -108,9 +151,25 @@ class PhoneNightScenario {
                 int round = 0, failures = 0, failedInARow = 0, appRestarts = 0;
                 long reopened = 0;
                 long firstMb = -1, lastMb = -1, slowestWake = 0;
+                // OVERWATCH: the PC's word that it will not put this phone to it (the rounds after take DEEP SLEEP), what the rounds told of
+                String overwatchRefused = null;
+                int watchedRounds = 0;
+                long alerts = 0, clips = 0, toDeepSleep = 0;
+                double hottest = Double.NaN;
                 while ((System.currentTimeMillis() < endAt || round < 1) && failures < 5) {
                     long wokeS = -1;
-                    phone.checkBattery(); // a real phone: too hot, the wait is here, between rounds, with its camera off; too low, the night ends
+                    // a real phone: too hot, the wait is here, between rounds, with its camera off; too low, the night ends
+                    PhoneRig.Battery battery = phone.checkBattery();
+                    boolean overwatch = PhoneNightSleep.overwatch(sleepMode, round) && overwatchRefused == null;
+                    if (overwatch) {
+                        String low = PhoneNightSleep.lowForOverwatch(battery == null || !battery.live() ? -1 : battery.percent());
+                        if (low != null) {
+                            overwatch = false;
+                            rig.film.remark("Round " + (round + 1) + ": DEEP SLEEP instead of OVERWATCH - " + low + ".");
+                        }
+                    }
+                    double batteryC = Double.NaN;
+                    long watchingMb = -1;
                     String roundFrom = phone.now();
                     boolean roundFailed = false;
                     try {
@@ -141,47 +200,80 @@ class PhoneNightScenario {
                         ui.until("round " + at + ": the link good again on a good network", 60_000, () -> pilot.linkUp());
                         phone.checkConnectedToPc(rig::check, "round " + at + ": the phone's screen says Connected to PC after five poor minutes and a cut");
 
-                        // ---- DEEP SLEEP, a check every minute; left through a check of its own; woken by PILOT UAV
+                        // ---- DEEP SLEEP (or OVERWATCH), a check every minute; left through a check of its own; woken by PILOT UAV
                         // as a pilot presses it: a press the app does not take (its notice says why - WAIT while the
                         // link is coming back, as it does every minute on the emulator) is pressed again a little later
                         int presses = 0;
                         String refused = "";
                         while (true) {
+                            String sleep = PhoneNightSleep.button(overwatch), askedWords = PhoneNightSleep.asked(overwatch);
                             int linesBefore = rig.log().size();
                             java.util.Set<String> before = new java.util.HashSet<>(ui.texts());
-                            ui.until("round " + at + ": the link up for DEEP SLEEP", 30_000, pilot::linkUp);
-                            ui.click("DEEP SLEEP");
+                            ui.until("round " + at + ": the link up for " + sleep, 30_000, pilot::linkUp);
+                            ui.click(sleep);
                             presses++;
                             Ui.pause(400);
                             java.util.List<String> notice = new java.util.ArrayList<>(ui.texts());
                             notice.removeAll(before);
+                            List<String> painted = overwatch ? notices(ui) : List.of(); // read now: such a notice shows for 4 s
                             long end = System.currentTimeMillis() + 6000;
                             boolean asked = false;
                             while (!asked && System.currentTimeMillis() < end) {
                                 java.util.List<String> lines = rig.log();
-                                asked = lines.subList(Math.min(linesBefore, lines.size()), lines.size()).stream().anyMatch(l -> l.contains("DEEP SLEEP asked"));
+                                asked = lines.subList(Math.min(linesBefore, lines.size()), lines.size()).stream().anyMatch(l -> l.contains(askedWords));
                                 if (!asked) Ui.pause(200);
                             }
                             if (asked) break;
+                            String pcSays = PhoneNightSleep.refusal(painted);
+                            if (pcSays != null) {
+                                // the PC will not put this phone to OVERWATCH (its camera gives no picture to watch, an old app):
+                                // said once, and this round and the rest of the night take DEEP SLEEP
+                                overwatchRefused = pcSays;
+                                overwatch = false;
+                                rig.check(false, "round " + at + ": the PC would not put the phone to OVERWATCH - it said " + pcSays
+                                        + "; this round and the rest of the night take DEEP SLEEP");
+                                presses = 0;
+                                refused = "";
+                                Ui.pause(4000);
+                                continue;
+                            }
+                            notice.addAll(painted);
                             refused += (refused.isEmpty() ? "" : "; ") + (notice.isEmpty() ? "no word" : String.join(" / ", notice.subList(0, Math.min(3, notice.size()))));
-                            if (presses >= 6) throw new AssertionError("DEEP SLEEP pressed " + presses + " times and never taken: " + refused);
+                            if (presses >= 6) throw new AssertionError(sleep + " pressed " + presses + " times and never taken: " + refused);
                             Ui.pause(4000);
                         }
-                        if (presses > 1) rig.film.remark("Round " + at + ": DEEP SLEEP was taken at the " + presses + ". press; before that the app said: " + refused);
+                        String sleep = PhoneNightSleep.button(overwatch);
+                        if (presses > 1) rig.film.remark("Round " + at + ": " + sleep + " was taken at the " + presses + ". press; before that the app said: " + refused);
                         ui.until("round " + at + ": the link ended, the phone asleep", 120_000, () -> ui.has("PILOT UAV"));
                         if (phone.sleepsOnBattery()) phone.onBattery(); // a real phone on its cable would not doze: pretended off it
                         Ui.pause(100_000 + random.nextInt(40_000));
-                        long alarms = count(phone.logSince(roundFrom), PhoneWords.SLEEP_CHECK);
+                        String asleepLog = phone.logSince(roundFrom);
+                        long alarms = count(asleepLog, PhoneWords.SLEEP_CHECK);
                         rig.check(alarms >= 1, "round " + at + ": asleep for two minutes the phone woke itself to check at least once (" + alarms + " time(s))");
+                        if (overwatch) {
+                            // the phone's own word that it took OVERWATCH: its camera watches. Its floor may since have sent it to
+                            // DEEP SLEEP (battery, heat): counted in the table, not judged
+                            rig.check(asleepLog.contains(PhoneWords.OVERWATCH_WATCHING), "round " + at + ": the phone took OVERWATCH - its camera watches (its log)");
+                            if (asleepLog.contains(PhoneWords.OVERWATCH_TO_DEEP_SLEEP)) {
+                                rig.film.remark("Round " + at + ": the phone left OVERWATCH for DEEP SLEEP by itself (its floor: battery or heat) - counted, not judged.");
+                            }
+                            PhoneRig.Battery b = phone.readBattery(); // read while it watches; while pretended off the cable not every phone lets adb have it
+                            if (b != null && b.live()) batteryC = b.celsius();
+                            watchingMb = phoneMb(phone);
+                        }
                         long pressed = System.currentTimeMillis();
                         ui.click("PILOT UAV");
                         ui.until("round " + at + ": the sleeping phone back at its next check", 150_000, () -> pilot.linkUp());
                         wokeS = (System.currentTimeMillis() - pressed) / 1000;
                         slowestWake = Math.max(slowestWake, wokeS);
-                        rig.check(wokeS <= 95, "round " + at + ": PILOT UAV had the sleeping phone back after " + wokeS + " s (it checks every minute)");
+                        rig.check(wokeS <= 95, "round " + at + ": PILOT UAV had the sleeping phone back after " + wokeS + " s (it checks every minute" + (overwatch ? ", in OVERWATCH" : "") + ")");
                         // a real phone: woken, the app puts itself in front of the lock screen - what adb can see of that, for the first rounds' film
-                        if (round < 3) phone.lookOverTheLock("round " + at + ": woken from its deep sleep by PILOT UAV");
+                        if (round < 3) phone.lookOverTheLock("round " + at + ": woken from its " + (overwatch ? "OVERWATCH" : "deep sleep") + " by PILOT UAV");
                         if (phone.sleepsOnBattery()) phone.plugged();
+                        if (overwatch && Double.isNaN(batteryC)) {
+                            PhoneRig.Battery b = phone.readBattery(); // its figures as they really are again: the watch's warmth still in the battery
+                            if (b != null && b.live()) batteryC = b.celsius();
+                        }
                         Ui.pause(5000);
                         pilot.standby();
                         Ui.pause(5000);
@@ -230,8 +322,16 @@ class PhoneNightScenario {
                     long sessions = count(log, PhoneWords.NEW_SESSION_SAME_PC) + count(log, PhoneWords.NEW_SESSION);
                     long anew = count(log, PhoneWords.LINK_SOCKET);
                     reopened += anew;
-                    table.row((System.currentTimeMillis() - t0) / 60_000.0, round, mb, Watch.usedMb(), rig.watch.threads(), wokeS,
-                            count(log, PhoneWords.SLEEP_CHECK), sessions, anew);
+                    PhoneNightSleep.Overwatched watched = overwatch ? PhoneNightSleep.Overwatched.of(log, batteryC, watchingMb) : null;
+                    table.row(PhoneNightSleep.row(new Object[]{(System.currentTimeMillis() - t0) / 60_000.0, round, PhoneNightSleep.word(overwatch), mb, Watch.usedMb(),
+                            rig.watch.threads(), wokeS, count(log, PhoneWords.SLEEP_CHECK), sessions, anew}, watched));
+                    if (watched != null) {
+                        watchedRounds++;
+                        alerts += watched.alerts();
+                        clips += watched.clips();
+                        toDeepSleep += watched.toDeepSleep();
+                        if (!Double.isNaN(batteryC) && (Double.isNaN(hottest) || batteryC > hottest)) hottest = batteryC;
+                    }
                     if (anew > 0) {
                         rig.film.remark("Round " + round + ": the phone opened its link socket anew " + anew + " time(s) - nothing had left it for seconds though it heard the PC.");
                     }
@@ -258,6 +358,11 @@ class PhoneNightScenario {
                 rig.film.remark(round + " rounds in " + (System.currentTimeMillis() - t0) / 60_000 + " min, " + failures + " gone wrong; the slowest wake " + slowestWake
                         + " s after PILOT UAV; the phone app's memory " + firstMb + " MB after the first round, " + lastMb + " MB after the last; its link socket opened anew "
                         + reopened + " time(s); the app started again " + appRestarts + " time(s).");
+                if (sleepMode != PhoneNightSleep.Mode.DEEP) {
+                    rig.film.remark(watchedRounds + " of the " + round + " rounds in OVERWATCH: " + alerts + " alert(s) and " + clips + " clip(s) the phone told of, "
+                            + toDeepSleep + " time(s) to DEEP SLEEP by its own floor; the battery " + (Double.isNaN(hottest) ? "not read" : String.format(Locale.ROOT, "%.1f C at the most", hottest))
+                            + " at the end of a watch (counted, not judged)" + (overwatchRefused == null ? "" : "; the PC would not put the phone to OVERWATCH: " + overwatchRefused) + ".");
+                }
                 rig.check(round - failures >= 1, "at least one whole round ran");
                 if (round >= 6 && firstMb > 0 && lastMb > 0) {
                     rig.check(lastMb < firstMb * 1.5 + 60, "the phone app's memory does not climb over the rounds: " + firstMb + " MB, then " + lastMb + " MB");
