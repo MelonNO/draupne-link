@@ -182,6 +182,32 @@ class AirspaceTest {
         assertEquals(List.of("A1234/26", "A1200/26"), NotamParser.replaced(text), "the saved ones that go");
     }
 
+    /**
+     * Copied from a web page, a NOTAM's spaces may be no-break or thin ones: one after "Q)" left the NOTAM out
+     * ("without an area"), one between a point's latitude and longitude lost E)'s polygon to the Q) circle.
+     */
+    @Test
+    void aNotamCopiedFromAWebPageWithItsOddSpacesIsReadAsTyped() {
+        String typed = "A1240/26 NOTAMR A1239/26\n"
+                + "Q) ENOR/QRTCA/IV/BO/W/000/020/5955N01045E002\n"
+                + "A) ENOR B) 2611110000 C) 2611302359\n"
+                + "E) UAS AREA 595500N 0104500E - 595700N 0105000E - 595400N 0105200E.\n"
+                + "F) GND G) 2000FT AMSL\n";
+        String copied = typed.replace("Q) ", "Q) ").replace("B) ", "B) ").replace("N 0104500E", "N  0104500E")
+                .replace("N 0105000E", "N 0105000E").replace(" NOTAMR", " NOTAMR").replace("UAS", "​UAS");
+        NotamParser.Notam want = NotamParser.parse(typed).get(0);
+        List<NotamParser.Notam> got = NotamParser.parse(copied);
+        assertEquals(1, got.size(), "not left out");
+        NotamParser.Notam n = got.get(0);
+        assertEquals("A1240/26", n.id());
+        assertEquals(3, n.ring().size(), "E)'s polygon, not the Q) circle");
+        for (int i = 0; i < 3; i++) assertArrayEquals(want.ring().get(i), n.ring().get(i), 1e-9);
+        assertEquals(want.start(), n.start());
+        assertEquals(want.end(), n.end());
+        assertEquals("2000FT AMSL", n.upper());
+        assertEquals(List.of("A1239/26"), NotamParser.replaced(copied), "the one it replaces goes too");
+    }
+
     @Test
     void pointsAreReadInTheirForms() {
         assertArrayEquals(new double[]{59 + 55 / 60.0, 10 + 45 / 60.0}, NotamParser.point("5955N01045E"), 1e-9);

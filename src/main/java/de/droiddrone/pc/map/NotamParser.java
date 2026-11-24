@@ -47,11 +47,21 @@ public final class NotamParser {
     /** A Q-line radius this wide (NM) covers a FIR, not a place: not drawn. */
     static final int WIDE_NM = 100;
 
+    /**
+     * The pasted text with a web page's spaces made plain: a no-break, thin or narrow space between a point's
+     * latitude and longitude, or after "Q)" or "B)", is not one to a regular expression's \s, and copied from a
+     * browser such a NOTAM was left out ("without an area") or lost its polygon to the Q) circle. Zero-width
+     * characters go.
+     */
+    static String plain(String text) {
+        return text.replaceAll("[\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000]", " ").replaceAll("[\\u200B-\\u200D\\u2060\\uFEFF]", "");
+    }
+
     /** The ids the pasted text replaces or cancels (NOTAMR, NOTAMC): saved ones of these ids go. */
     public static List<String> replaced(String text) {
         List<String> out = new ArrayList<>();
         if (text == null) return out;
-        Matcher m = HEAD.matcher(text.toUpperCase(Locale.ROOT));
+        Matcher m = HEAD.matcher(plain(text).toUpperCase(Locale.ROOT));
         while (m.find()) if (m.group(3) != null && !m.group(2).equals("N")) out.add(m.group(3));
         return out;
     }
@@ -72,7 +82,7 @@ public final class NotamParser {
     public static List<Notam> parse(String text) {
         List<Notam> out = new ArrayList<>();
         if (text == null) return out;
-        String t = text.replace('\r', '\n').toUpperCase(Locale.ROOT);
+        String t = plain(text).replace('\r', '\n').toUpperCase(Locale.ROOT);
         // each one starts at its id (A1234/26 NOTAMN, "(A1234/26 ..."), or where there is none, at its Q)
         List<Integer> starts = new ArrayList<>();
         Matcher q = Pattern.compile("Q\\)").matcher(t);
