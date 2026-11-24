@@ -37,6 +37,11 @@ import static org.junit.jupiter.api.Assertions.fail;
  * waking a sleeping phone) still opens it over the lock screen: {@code PhoneNightScenario} shows that every round. The
  * emulator's lock screen (a swipe) is put up by its sleep key; a real phone's lock is never touched - the bench has no
  * key for it - so a phone found unlocked is waited for while a hand locks it, and else the check is skipped by name.</li>
+ * <li><b>Storage and backup</b> ({@link #noBackupOfTheAppAndNoClipInTheGallery}): no backup is started - it would send
+ * the app's data off the phone. Read instead: Android's flags of each DRAUPNE Flight installed (no ALLOW_BACKUP), what
+ * Android's backup holds or queues of it (nothing), and the gallery's index of videos, pictures and sound (nothing of
+ * DRAUPNE's: its recordings and clips lie in folders the index leaves out). Only the lines that name the app are kept
+ * of what Android says; of the gallery, only the count of what it lists and the entries of DRAUPNE's.</li>
  * </ul>
  * On the emulator and on the real phone (the task benchHwPhone). On a real phone nothing is cleared, granted or
  * stopped here: the app on the phone is opened as a hand opens it ({@code am start}) and read.
@@ -253,6 +258,65 @@ class PhoneHardeningScenario {
                 }
             }
             finish("phone-wake-from-outside", phone);
+        }
+    }
+
+    /** The gallery's indexes: what a gallery app lists. */
+    static final List<String> GALLERY = List.of("video", "images", "audio");
+
+    /** BS9: Android's word on the app's backup, and the gallery's index - read; nothing is backed up or changed. */
+    @Test
+    void noBackupOfTheAppAndNoClipInTheGallery() throws Exception {
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        film = film("phone-backup-and-gallery");
+        PhoneRig phone = new PhoneRig(film, target);
+        try {
+            phone.ensureRunning();
+            if (!phone.device()) phone.installApp(); // the emulator's newest bench build, as its other scenarios have it
+            // ---- what Android keeps of each DRAUPNE Flight on the phone
+            List<String> installed = new ArrayList<>();
+            for (String app : List.of(target.app(), target.benchBuild() ? PhoneRig.APP : de.droiddrone.bench.BenchControl.PACKAGE)) {
+                if (phone.shell("pm path " + app).contains("package:")) installed.add(app);
+            }
+            check(installed.contains(target.app()), target.app() + " is on the phone");
+            for (String app : installed) {
+                String d = phone.shell("dumpsys package " + app);
+                java.util.Set<String> flags = PhoneStore.flags(d, app);
+                String who = app + " " + PhoneStore.versionName(d, app);
+                if (flags.isEmpty()) {
+                    check(false, who + ": Android's flags for it could be read (dumpsys package)");
+                    continue;
+                }
+                check(!PhoneStore.allowsBackup(flags), who + ": Android holds it as an app that allows no backup - ALLOW_BACKUP is not among its flags " + flags);
+            }
+            say("Where its data may go on Android 12 and later - nothing to a cloud backup, nothing to a new phone - its data extraction rules say, and dumpsys "
+                    + "does not show them: they are in the app's manifest, and NoBackupNoGalleryTest holds the manifest to them at every build.");
+            // ---- what Android's backup holds or queues of it
+            PhoneStore.Backup b = PhoneStore.backup(phone.shell("dumpsys backup"), installed);
+            say("Android's backup on this phone: " + (b.enabled() == null ? "its state not said" : b.enabled() ? "ON" : "off")
+                    + (Boolean.FALSE.equals(b.enabled()) ? " - so nothing would go now anyway; the flags above are what holds when it is on" : "") + ".");
+            check(b.lines().isEmpty(), "Android's backup holds and queues nothing of DRAUPNE Flight" + (b.lines().isEmpty() ? " (dumpsys backup names it nowhere)"
+                    : ": " + String.join(" | ", b.lines().subList(0, Math.min(5, b.lines().size())))));
+            // ---- the gallery's index
+            for (String kind : GALLERY) {
+                String uri = "content://media/external/" + kind + "/media";
+                int items = PhoneStore.count(phone.shell("content query --uri " + uri + " --projection _id 2>&1 | grep -c -e Row:"));
+                String besides = phone.shell("content query --uri " + uri + " --projection _id 2>&1 | grep -v -e Row: | head -2").trim();
+                if (!PhoneStore.answered(items, besides)) {
+                    check(false, "the gallery's index of " + kind + " could be read: " + (besides.isEmpty() ? "no answer" : besides.lines().findFirst().orElse("")));
+                    continue;
+                }
+                List<String> ours = PhoneStore.rows(phone.shell("content query --uri " + uri + " --projection _data 2>&1 | grep -i -e droiddrone -e draupne"));
+                check(ours.isEmpty(), "the gallery's index of " + kind + " (" + items + " item(s) on the phone) lists nothing of DRAUPNE's"
+                        + (ours.isEmpty() ? "" : ": " + ours.size() + " - " + String.join("; ", ours.subList(0, Math.min(5, ours.size())))));
+            }
+            say("What a gallery would list of DRAUPNE's are its recordings and overwatch clips, in its media folders (Android/media/<the app>/Video and "
+                    + "Overwatch), which carry a .nomedia marker. A phone that never recorded lists none either way.");
+        } catch (Throwable t) {
+            stopped(t, phone);
+        } finally {
+            finish("phone-backup-and-gallery", phone);
         }
     }
 
