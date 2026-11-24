@@ -679,7 +679,28 @@ VIDEO off and on to record again"); **F-106** three empty files a try, named in 
 "IOException:" in the pilot's words; **F-108** the overwatch clip's line every 5 s. Proposal I-017: the recording
 starts again by itself when there is room (today it stays off for the connection). Runs: `1124-1600-ui` (4 of 4
 with F-102 - F-104), `1124-1631-ui` (4 of 4 with F-105 - F-108: RECORDING STOPPED once, 0 empty files - 15 before -,
-no "IOException:", the clip line once). Fast tests after: 2,565 of 2,565.
+no "IOException:", the clip line once). Fast tests after: 2,565 of 2,565. With the pilot's I-017 (recording again by
+itself when there is room): `1124-1811-ui` 4 of 4 - RECORDING STOPPED and RECORDING AGAIN each said once, again 14 s
+after room, the new part playing with its OSD copy and figures and named in the flight's record.
+
+**The link's packets fuzzed, both ways (2026-11-24, F-109 - F-111).** `gradlew protocolFuzz` (the decoder fuzz's
+frame: a child JVM at the lowest priority, findings replayed alone, results under `fuzz\`): valid streams of every
+kind made by the apps' own senders - Connect and its answer, config, StartVideo, sticks in every layout, audio,
+video fragments with parity, telemetry, detection areas, power modes, overwatch, update offers, names, fleet modes,
+observers, spectators, sleep check-ins - lost, doubled, replayed, reordered, late, cut, spliced, bit-damaged, with
+edge values in lengths, counts and sequence numbers, fed to the PC's real receive and buffer threads, frame assembler
+and readers, and to the phone's receive rules (its session gate, buffer, sticks, gates and readers, in its order).
+Checked: no session without the key, a refused packet changes nothing, no numbered packet handed on twice, no stick
+frame taken that is not newer or past its lag limit, whole frames as sent, values in range, budgets kept, no throw.
+Runs: `20261124-172200-protocol-seed1` (3 min, 862,171 inputs), `20261124-172813-protocol-seed2` (30 min, 9,876,556
+inputs, 5,485 a second). Found: **F-109** a numbered packet of 1 - 2 bytes, or a Connect cut inside its key, threw on
+the receive thread (both apps); **F-110** the PC counted a Connect answer before its check, so a damaged one could
+leave it at "reconnecting" until a restart; **F-111** (proposed, not in) after a short fade the PC's resends of
+commands the phone already took push the phone's buffer to start over and hand them on again - StartVideo or config
+again (the picture black about 2 s), ChangeCamera again (the other camera), RECORD again; the PC's buffer the same for
+the phone's VideoInitialFrame. Not covered: the phone's Android code itself (a model of its receive thread runs),
+the state machines of spectators, mirror, observer, names and fleet (only their readers), threads racing each other.
+The link has no integrity check of its own beyond UDP's and WireGuard's: a damaged mode byte is another command.
 
 ## Fixed (2026-11-19, on `beta`)
 
