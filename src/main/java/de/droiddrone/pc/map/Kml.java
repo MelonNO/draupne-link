@@ -258,11 +258,15 @@ public final class Kml {
         }
     }
 
-    /** "lon,lat,alt lon,lat,alt ..." (KML's order) to points. */
+    /**
+     * "lon,lat,alt lon,lat,alt ..." (KML's order) to points. A space after a comma ("10.7, 59.9, 0"), which KML asks
+     * not to have but hand-made files and some converters write, is taken as part of the tuple: split at it, every
+     * point of such a line was dropped and the import said 0.
+     */
     static List<MapGraphics.LatLon> coords(Element coordinates) {
         List<MapGraphics.LatLon> out = new ArrayList<>();
         if (coordinates == null) return out;
-        for (String tuple : text(coordinates).trim().split("\\s+")) {
+        for (String tuple : tightCommas(text(coordinates)).trim().split("\\s+")) {
             String[] p = tuple.split(",");
             if (p.length < 2) continue;
             try {
@@ -272,6 +276,27 @@ public final class Kml {
             }
         }
         return out;
+    }
+
+    /**
+     * The text with the white space on either side of each comma taken out, in one pass: a regular expression for it
+     * takes the square of a long blank run's length, and a file of blanks within IMPORT's 10 MB would hold the import.
+     */
+    private static String tightCommas(String s) {
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != ',') {
+                b.append(c);
+                continue;
+            }
+            int end = b.length();
+            while (end > 0 && Character.isWhitespace(b.charAt(end - 1))) end--;
+            b.setLength(end);
+            b.append(',');
+            while (i + 1 < s.length() && Character.isWhitespace(s.charAt(i + 1))) i++;
+        }
+        return b.toString();
     }
 
     /** The value of {@code <Data name="...">} in the placemark's ExtendedData, or null. */
