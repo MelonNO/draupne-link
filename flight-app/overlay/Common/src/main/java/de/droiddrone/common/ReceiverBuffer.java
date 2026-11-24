@@ -34,6 +34,9 @@
  *  The unnumbered packets waiting for the buffer thread are held to MAX_UNNUMBERED (the oldest dropped, DropOldest).
  *  A numbered packet cut before its number, and a Connect whose key runs past its end, are dropped (2026-11-24: they
  *  threw on the receive thread).
+ *  F-111 (2026-11-24): the far side's resends of a packet already handed on (its acknowledgement lost) no longer count
+ *  toward recoverCounter - the ninth started the buffer over and handed the packet on again. They are acknowledged and
+ *  never handed on again; only another packet under an old number counts (see HANDED).
  */
 
 package de.droiddrone.common;
@@ -122,6 +125,7 @@ public class ReceiverBuffer {
         isActive = true;
         isConnected = false;
         createdTimestamp = System.currentTimeMillis();
+        forgetHandedOn();
     }
 
     public long getCreatedTimestamp(){
@@ -156,6 +160,7 @@ public class ReceiverBuffer {
                         // every answer is taken (an older phone starts a new session on each Connect); a pc.31 phone
                         // answers only the first of the Connects in flight after a loss (Udp.receiverRun)
                         restart();
+                        forgetHandedOn(); // a new session: its numbers are new ones
                         udpSender.connect(ip, port);
                         isConnected = true;
                         lastPacketTimer = disconnectTimeMs;
@@ -172,10 +177,20 @@ public class ReceiverBuffer {
                     // as the answer would have - before, the numbering stayed apart until recoverCounter mended it,
                     // a second more to LINK READY
                     restart();
+                    forgetHandedOn();
                     udpSender.connect(ip, port);
                     nextPacketNum = 0;
                     answerAwaited = false;
                     unansweredStarts++;
+                }
+                if (handedOnAlready(num, data, packetSize)) {
+                    // F-111: the very packet handed on under its number, come again - the far side resends it until it
+                    // hears it was taken: acknowledged again (its acknowledgement was lost), never handed on again, and
+                    // it says nothing of the numbering (not counted toward recoverCounter). Behind the window as a rule;
+                    // inside it only once recoverCounter has started the numbering over at another number - a late
+                    // copy from before that
+                    rejectedPackets.add(new SavedPacket(packetName, num, data, ip, port));
+                    return;
                 }
                 if (ahead(num) < MAX_PACKET_NUM_DIFF){
                     if (packetName != UdpCommon.Connect) answerAwaited = false; // the session's numbering goes on: no new one
@@ -185,11 +200,11 @@ public class ReceiverBuffer {
                 }else{
                     // taken before (its acknowledgement lost): acknowledged again; skipped over: not (it never was)
                     if (isDuplicate(num)) rejectedPackets.add(new SavedPacket(packetName, num, data, ip, port));
-                    // every packet outside the window counts, as upstream: the two sides' numbering apart (a restart
-                    // on one side only) mends itself
+                    // any other packet outside the window counts, as upstream: the two sides' numbering apart (a
+                    // restart on one side only) mends itself - F-111: another packet under a number taken, not a copy
                     recoverCounter++;
                     if (recoverCounter > bufferSize * 2){
-                        restart();
+                        restart(); // what was handed on stays known: a late copy of it is no new packet
                         numberedBuffer.put(num, new SavedPacket(packetName, num, data, ip, port));
                         nextPacketNum = num;
                     }
@@ -249,6 +264,52 @@ public class ReceiverBuffer {
         return behind >= 1 && behind <= MAX_PACKET_NUM_DIFF && !skipped.containsKey(num);
     }
 
+    /**
+     * F-111 (2026-11-24): the packets handed on lately, by number - each one's number, length and CRC32, in the slot of
+     * its number's low byte (the last HANDED numbers; fixed arrays, nothing made per packet). A packet that is the one
+     * handed on under its number is the far side's resend of a packet whose acknowledgement was lost. Before, each such
+     * copy counted toward recoverCounter as if the numbering had gone apart: on sparse traffic (the buffer at
+     * MIN_BUFFER_SIZE) the ninth started the buffer over at its number and the packet was handed on a second time - two
+     * unacknowledged packets, resent 8 times each, did it: the phone took Config and StartVideo again (the picture
+     * black for 2 s), ChangeCamera again (the other camera), the PC the video config again. Only another packet under
+     * an old number counts now. Kept when recoverCounter starts the numbering over (a late copy from before is still no
+     * new packet), forgotten with a new session (a Connect, F-057), whose numbers are new ones. A number inside the
+     * window is never the one in a slot but after such a start over: the slots hold numbers just handed on.
+     */
+    static final int HANDED = 256;
+    private final short[] handedNum = new short[HANDED];
+    private final int[] handedLength = new int[HANDED];
+    private final int[] handedCrc = new int[HANDED];
+    /** No number in a slot: below -1, where no numbered packet is taken. */
+    private static final short NO_NUM = Short.MIN_VALUE;
+    /** Under the lock: the CRC32 of the packets handed on and of the copies held against them. */
+    private final java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+
+    /** Under the lock: the packet is handed on - remembered under its number. */
+    private void handedOn(SavedPacket p) {
+        int slot = p.packetNum & (HANDED - 1);
+        handedNum[slot] = p.packetNum;
+        handedLength[slot] = p.data.length;
+        handedCrc[slot] = crcOf(p.data, p.data.length);
+    }
+
+    /** Under the lock: these bytes are the packet handed on lately under num (its length and CRC32 alike). */
+    private boolean handedOnAlready(short num, byte[] data, int length) {
+        int slot = num & (HANDED - 1);
+        return handedNum[slot] == num && handedLength[slot] == length && handedCrc[slot] == crcOf(data, length);
+    }
+
+    private int crcOf(byte[] data, int length) {
+        crc.reset();
+        crc.update(data, 0, length);
+        return (int) crc.getValue();
+    }
+
+    /** Under the lock (or before the buffer is shared): a new session - nothing handed on in it yet. */
+    private void forgetHandedOn() {
+        java.util.Arrays.fill(handedNum, NO_NUM);
+    }
+
     private void advance() {
         nextPacketNum = nextPacketNum == Short.MAX_VALUE ? 0 : (short) (nextPacketNum + 1);
     }
@@ -272,6 +333,7 @@ public class ReceiverBuffer {
             SavedPacket packet = numberedBuffer.remove(nextPacketNum);
             if (packet != null) {
                 advance();
+                handedOn(packet);
                 return packet;
             }
             if (numberedBuffer.isEmpty()) return null;
@@ -295,7 +357,10 @@ public class ReceiverBuffer {
                 }
                 nextPacketNum = first;
                 packet = numberedBuffer.remove(first);
-                if (packet != null) advance();
+                if (packet != null) {
+                    advance();
+                    handedOn(packet);
+                }
                 return packet;
             }
             requestedPackets = new ArrayList<>();

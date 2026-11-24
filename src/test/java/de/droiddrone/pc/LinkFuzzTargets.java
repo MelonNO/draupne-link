@@ -295,8 +295,15 @@ public final class LinkFuzzTargets {
         /** NAME_QUERY with the key: who asked this phone's name, when (KnownPcs). */
         final Map<InetAddress, Long> askedName = new HashMap<>();
         // the checks' memory
-        /** Numbered packets the buffer handed on in its session (a new buffer or a restart: anew). */
-        Set<Short> delivered = new HashSet<>();
+        /**
+         * What the buffer handed on in its session, by number (the last packet under each): anew only with a new session
+         * (a new buffer, or the buffer's Connect while it was down). A numbered packet is never handed on twice - the
+         * same bytes under the same number again - without exceptions: the far side's resends of a packet whose
+         * acknowledgement was lost, copies, replays, all (F-111: the ninth resend started the buffer over and the packet
+         * was handed on again). Another packet under a number taken is the far side's numbering started over, which
+         * the buffer mends (recoverCounter): handed on, it is the one under that number from then on.
+         */
+        Map<Short, byte[]> delivered = new HashMap<>();
         /** The last stick frame taken: its layout (bytes after the channels), sequence, time; -1: none in this session. */
         int lastTail = -1, lastStickSeq;
         long lastStickAt;
@@ -413,9 +420,11 @@ public final class LinkFuzzTargets {
             if (d[0] == UdpCommon.Connect) SessionGate.markAnswer(d, len);
             boolean was = buffer.isConnected();
             buffer.addPacket(datagram(Arrays.copyOf(d, len), ip, port));
-            if (buffer.isConnected() && (!was || d[0] == UdpCommon.Connect && keyed)) {
+            // the buffer's numbering starts over only with its session (a Connect while it is down; one while it is up
+            // is the gate's to judge - a new session is a new buffer): the record of what it handed on, only then
+            if (buffer.isConnected() && !was) {
                 if (!keyed) report.broken("the phone's buffer took a session without this phone's key", hex(d, len));
-                delivered = new HashSet<>();
+                delivered = new HashMap<>();
                 report.count("phone session up");
             }
         }
@@ -427,7 +436,7 @@ public final class LinkFuzzTargets {
             rcPath.restart(now, samePc);
             sticksAnew();
             idleSticks = null;
-            delivered = new HashSet<>();
+            delivered = new HashMap<>();
             report.count("phone new session");
         }
 
@@ -441,7 +450,7 @@ public final class LinkFuzzTargets {
             SavedPacket p;
             int guard = 0;
             while ((p = buffer.getNextPacket()) != null && guard++ < 10_000) {
-                if (UdpCommon.isPacketNumbered(p.packetName) && p.packetNum >= 0 && !delivered.add(p.packetNum)) {
+                if (UdpCommon.isPacketNumbered(p.packetName) && p.packetNum >= 0 && Arrays.equals(delivered.put(p.packetNum, p.data), p.data)) {
                     report.broken("a numbered packet was handed on twice in one session", "number " + p.packetNum + ": " + hex(p.data, p.data.length));
                 }
                 if (in.intact() && p.packetName != UdpCommon.Connect && !sentAsIs(p.data)) {
@@ -745,7 +754,12 @@ public final class LinkFuzzTargets {
         final VideoCheck video;
         long now = 100_000;
         int next;
-        Set<Short> delivered = new HashSet<>();
+        /**
+         * What the buffer handed on in its session, by number: anew only when its numbering started over with a session
+         * (see after). No numbered packet handed on twice, without exceptions - the phone's resends included (as the
+         * phone's model, PhoneModel.delivered).
+         */
+        Map<Short, byte[]> delivered = new HashMap<>();
         long lastMarkedId = -1;
         long starts;
         /** The session ids the link gave out (its Connects of PC_LINK_TRIES tries, before the input). */
@@ -846,7 +860,7 @@ public final class LinkFuzzTargets {
             // the buffer's numbering started over: the session up, an answer taken (the link counts it, and only then
             // hands it to the buffer, which starts over on it), or the phone's new session without its answer (F-057)
             if (!wasConnected && buffer.isConnected() || link.getSessionStarts() != startsBefore || buffer.getUnansweredStarts() != unansweredBefore) {
-                delivered = new HashSet<>();
+                delivered = new HashMap<>();
             }
             if (fromPhone && len > 0 && d[0] == UdpCommon.Connect && SessionGate.answeredById(d, len) && !given.contains(SessionGate.sessionId(d, len))) {
                 // an answer told by the id counts only for an id this PC gave out lately: any other changes nothing
@@ -888,7 +902,7 @@ public final class LinkFuzzTargets {
             SavedPacket p;
             int guard = 0;
             while ((p = buffer.getNextPacket()) != null && guard++ < 10_000) {
-                if (UdpCommon.isPacketNumbered(p.packetName) && p.packetNum >= 0 && !delivered.add(p.packetNum)) {
+                if (UdpCommon.isPacketNumbered(p.packetName) && p.packetNum >= 0 && Arrays.equals(delivered.put(p.packetNum, p.data), p.data)) {
                     report.broken("a numbered packet was handed on twice in one session", "number " + p.packetNum + ": " + hex(p.data, p.data.length));
                 }
                 report.count("pc packet handed on");
@@ -1223,10 +1237,81 @@ public final class LinkFuzzTargets {
             for (int i = 0; i < 6; i++) out.add(pcVideo(r, i));
             for (int i = 0; i < 3; i++) out.add(pcTelemetry(r, i));
             for (int i = 0; i < 3; i++) out.add(pcOutsideSeed(r, i));
+            // F-111 (a Random of their own: the seeds above stay as they were)
+            Random f = new Random(seed ^ 0xF111L);
+            out.add(phoneResends(f));
+            out.add(pcResends(f));
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
         return out;
+    }
+
+    /**
+     * F-111, the phone's side: a session a second old (its buffer settled at its least, on sparse numbered traffic), then
+     * the PC's Config #0 and StartVideo #1, their acknowledgements lost - resent as the PC's transport does, 8 times
+     * each about 125 ms apart, nothing else numbered meanwhile - then the session goes on (#2). Numbered here, not by
+     * the transport, whose resend timer would put copies in by the clock.
+     */
+    static LinkInput phoneResends(Random r) throws IOException {
+        PcSender pc = new PcSender(r);
+        pc.connect(0);
+        for (int i = 0; i < 120; i++) pc.sticks(r, 3, 10);
+        byte[] config = pc.link.buildConfigPacket(); // [21][number 0][...]
+        UdpPacketData sv = new UdpPacketData(UdpCommon.StartVideo, 1);
+        sv.daos.writeBoolean(true);
+        byte[] startVideo = sv.getData();
+        resent(pc.packets, config, startVideo, () -> {
+            for (int i = 0; i < 12; i++) pc.sticks(r, 3, 10);
+        });
+        pc.raw(new UdpPacketData(UdpCommon.FcInfo, 2).getData(), 5);
+        for (int i = 0; i < 10; i++) pc.sticks(r, 3, 10);
+        pc.close();
+        return new LinkInput(Target.PHONE_LINK, LinkInput.BYTES_INTACT | PHONE_DISARMED, pc.packets);
+    }
+
+    /** F-111, the PC's side: the same with the phone's ConfigReceived #0 and VideoInitialFrame #1, among its telemetry. */
+    static LinkInput pcResends(Random r) throws IOException {
+        PcSender pc = new PcSender(r);
+        sharedIds(pc.link, PC_LINK_IDS_SEED);
+        PhoneSender phone = new PhoneSender();
+        byte[] answer = pc.link.buildConnectPacket(pc.clockMs, 0);
+        SessionGate.markAnswer(answer, answer.length);
+        phone.raw(answer, 0);
+        for (int i = 0; i < 24; i++) phone.raw(telemetryPacket(r, FLIGHT_CONTROLLERS[1], 1 + r.nextInt(3)), 50);
+        UdpPacketData vc = new UdpPacketData(UdpCommon.VideoInitialFrame, 1);
+        vc.daos.writeShort(1280);
+        vc.daos.writeShort(720);
+        vc.daos.writeBoolean(false);
+        vc.daos.writeBoolean(false);
+        byte[] cfg = new byte[20 + r.nextInt(30)];
+        r.nextBytes(cfg);
+        vc.daos.write(cfg);
+        resent(phone.packets, new UdpPacketData(UdpCommon.ConfigReceived, 0).getData(), vc.getData(), () -> {
+            for (int i = 0; i < 3; i++) phone.raw(telemetryPacket(r, FLIGHT_CONTROLLERS[1], 1 + r.nextInt(3)), 40);
+        });
+        UdpPacketData fi = new UdpPacketData(UdpCommon.FcInfo, 2);
+        for (int v : new int[]{FcInfo.FC_VARIANT_BETAFLIGHT, 4, 5, 1, 0, 1, 46, 0}) fi.daos.writeByte(v);
+        phone.raw(fi.getData(), 5);
+        for (int i = 0; i < 5; i++) phone.raw(telemetryPacket(r, FLIGHT_CONTROLLERS[1], 1 + r.nextInt(3)), 40);
+        pc.close();
+        phone.close();
+        return new LinkInput(Target.PC_LINK, LinkInput.BYTES_INTACT, phone.packets);
+    }
+
+    /** Two numbered packets sent, then resent 8 times each, about 125 ms apart, with the sender's other traffic between. */
+    private static void resent(List<Packet> out, byte[] first, byte[] second, IoRun between) throws IOException {
+        out.add(new Packet(LinkInput.FROM_PEER, 10, first));
+        out.add(new Packet(LinkInput.FROM_PEER, 5, second));
+        for (int round = 0; round < 8; round++) {
+            between.run(); // about 120 ms of it
+            out.add(new Packet(LinkInput.FROM_PEER, 5, first));
+            out.add(new Packet(LinkInput.FROM_PEER, 0, second));
+        }
+    }
+
+    private interface IoRun {
+        void run() throws IOException;
     }
 
     /** The PC's sender for the phone: a ControlLink's builders, numbered by the transport as a link sends them. */
