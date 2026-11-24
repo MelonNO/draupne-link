@@ -33,10 +33,18 @@ public final class DiskSpace {
         }
     }
 
-    /** Why a file could not be written, in a few words: Windows' own reason when it gives one. */
-    public static String why(Exception e) {
+    /**
+     * Why a file could not be written, in a few words: Windows' own reason when it gives one. A plain IOException's
+     * name says nothing - the full disk said "TRACK NOT SAVED: IOException: There is not enough space on the disk"
+     * (the test bench, 2026-11-24) - so only its words are given; other kinds keep their name, which tells something
+     * (a NoSuchFileException's words are the file's name alone).
+     */
+    public static String why(Throwable e) {
+        if (e instanceof java.io.UncheckedIOException u && u.getCause() != null) return why(u.getCause());
         if (e instanceof FileSystemException f && f.getReason() != null && !f.getReason().isBlank()) return f.getReason().trim();
         String m = e.getMessage();
-        return e.getClass().getSimpleName() + (m == null || m.isBlank() ? "" : ": " + m.trim());
+        boolean words = m != null && !m.isBlank();
+        if (e.getClass() == IOException.class && words) return m.trim();
+        return e.getClass().getSimpleName() + (words ? ": " + m.trim() : "");
     }
 }

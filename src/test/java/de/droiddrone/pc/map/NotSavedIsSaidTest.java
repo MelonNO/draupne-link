@@ -156,6 +156,21 @@ class NotSavedIsSaidTest {
         assertEquals(3, new MapGraphics(inTheWay.resolve("graphics.kml")).list().size());
     }
 
+    /**
+     * The reason in the pilot's words: the test bench's full disk (2026-11-24) said "TRACK NOT SAVED: IOException:
+     * There is not enough space on the disk" - a plain IOException's name tells the pilot nothing. Other kinds keep it.
+     */
+    @Test
+    void theReasonHasNoPlainIOExceptionsName() {
+        String full = "There is not enough space on the disk";
+        assertEquals(full, DiskSpace.why(new java.io.IOException(full)));
+        assertEquals(full, DiskSpace.why(new java.io.UncheckedIOException(new java.io.IOException(full))));
+        assertEquals(full, DiskSpace.why(new java.nio.file.FileSystemException("pins.txt", null, full)));
+        assertEquals("NoSuchFileException: pins.txt", DiskSpace.why(new java.nio.file.NoSuchFileException("pins.txt")));
+        assertEquals("IllegalStateException: broken", DiskSpace.why(new IllegalStateException("broken")));
+        assertEquals("IOException", DiskSpace.why(new java.io.IOException()), "no words: its name, not nothing");
+    }
+
     @Test
     void aNearlyFullDiskIsSaidWhenARecordingStarts(@TempDir Path dir) {
         assertNull(DiskSpace.warning(3_000_000_000L));
