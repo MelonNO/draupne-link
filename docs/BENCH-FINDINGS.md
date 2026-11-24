@@ -698,7 +698,8 @@ the receive thread (both apps); **F-110** the PC counted a Connect answer before
 leave it at "reconnecting" until a restart; **F-111** (proposed, not in) after a short fade the PC's resends of
 commands the phone already took push the phone's buffer to start over and hand them on again - StartVideo or config
 again (the picture black about 2 s), ChangeCamera again (the other camera), RECORD again; the PC's buffer the same for
-the phone's VideoInitialFrame. Not covered: the phone's Android code itself (a model of its receive thread runs),
+the phone's VideoInitialFrame. Since then an answer that says it took the session by the Connect's id counts only
+for an id among this PC's last eight tries, and the fuzz checks that too. Not covered: the phone's Android code itself (a model of its receive thread runs),
 the state machines of spectators, mirror, observer, names and fleet (only their readers), threads racing each other.
 The link has no integrity check of its own beyond UDP's and WireGuard's: a damaged mode byte is another command.
 
