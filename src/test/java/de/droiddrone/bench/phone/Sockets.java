@@ -5,7 +5,6 @@ import de.droiddrone.common.TailscaleOnly;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -242,9 +241,5 @@ final class Sockets {
         String s = pidof == null ? "" : pidof.trim();
         if (s.isEmpty() || !s.matches("[\\d\\s]+")) return "";
         return s.split("\\s+")[0];
-    }
-
-    static String lower(Where w) {
-        return w.name().toLowerCase(Locale.ROOT).replace('_', ' ');
     }
 }
