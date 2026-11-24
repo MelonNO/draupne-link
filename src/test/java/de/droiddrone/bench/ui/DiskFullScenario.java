@@ -38,7 +38,8 @@ import static org.bytedeco.ffmpeg.global.avformat.avformat_open_input;
  * writing to a disk that really runs out of room - not a folder that refuses (the unit tests' stand-in) but a small
  * disk of WSL's memory ({@link SmallDisk}) that the recording and the track fill. What was saved stays whole; what can't
  * be saved is said in the window's log in the app's words; the link, the sticks and the picture go on; once there is
- * room again the saving goes on and says so. Then the app's own settings and logs on a full disk: it starts, keeps its
+ * room again the saving goes on and says so, and the recording starts again by itself (I-017: until 2026-11-24 it
+ * stayed off for the connection). Then the app's own settings and logs on a full disk: it starts, keeps its
  * settings, and a change made while the disk was full is in the file once there is room.
  * <p>
  * Windows asks the small disk for its free room and gets WSL's own big disk: the app's LOW DISK warning cannot show
@@ -138,21 +139,28 @@ class DiskFullScenario {
         pilot.throttle(HOVER);
         rig.check(alt1 < alt0 - 1 && alt2 > alt1 + 1, String.format("the drone follows the sticks with the disk full: down %.1f -> %.1f m, up again to %.1f m", alt0, alt1, alt2));
         Ui.pause(8000); // the recording's tries, and the picture going on meanwhile
-        // F-105: the recording gives up after five tries - and the window says so, once (before, only the app's log file did)
+        // F-105: the recording stops after five tries - and the window says so, once (before, only the app's log file did);
+        // I-017: and that it starts again by itself
         ui.until("RECORDING STOPPED in the window's log", 30_000, () -> windowLog(ui).contains("RECORDING STOPPED"));
+        // I-017: it tries a new part 5 s, 10 s, 20 s ... after the stop; a try that finds no room is the app's log's alone
+        pilot.until("a try for room while the disk is full", 40_000, () -> rig.logged("no room yet"));
         long fullUntil = System.currentTimeMillis();
         ui.shot("the disk full for " + (fullUntil - fullFrom) / 1000 + " s");
         List<String> appLog = rig.log();
         rig.film.remark("The app's log, the recording, while the disk was full: " + matching(appLog, "RECORDING", "OSD recording", "Recording"));
-        rig.film.remark("The window's log, the disk full: " + lines(windowLog(ui), "SAVED", "Could not", "stopped", "STOPPED", "empty", "Link log", "LOW DISK"));
+        rig.film.remark("The window's log, the disk full: " + lines(windowLog(ui), "SAVED", "Could not", "stopped", "STOPPED", "empty", "Link log", "LOW DISK", "OSD recording"));
         rig.film.remark("The OSD's REC mark with the disk full: " + (recordingNow(rig) ? "shown (a file is open)" : "gone (no file is being written)"));
         List<String> stopped = linesOf(windowLog(ui), "RECORDING STOPPED");
-        rig.check(stopped.size() == 1 && stopped.get(0).contains("VIDEO > RECORD VIDEO off and on"),
-                "the window's log says once that the recording stopped, and how to start it again: " + stopped);
+        rig.check(stopped.size() == 1 && stopped.get(0).contains("starts again when there is room"),
+                "the window's log says once that the recording stopped, and that it starts again: " + stopped);
+        List<String> triesSaid = afterLine(windowLog(ui), "RECORDING STOPPED", "OSD recording to", "RECORDING", "no room");
+        rig.check(rig.logged("no room yet") && triesSaid.isEmpty(), "the recording tried for room while the disk was full ("
+                + matching(rig.log(), "no room yet").size() + " tries in the app's log), and the window said none of them: " + triesSaid);
         // F-107: the reason in Windows' words, no "IOException:" before it
         rig.check(!windowLog(ui).contains("IOException:"), "no \"IOException:\" in the window's words: " + lines(windowLog(ui), "IOException"));
 
         // ---------------------------------------------------------------- 3. room again
+        Map<String, Long> beforeRoom = sizes(videos);
         Files.delete(filler);
         long roomFrom = System.currentTimeMillis();
         rig.film.remark("The filler deleted: " + disk.df());
@@ -170,34 +178,23 @@ class DiskFullScenario {
         rig.check(drawings(documents) == 3, "graphics.kml has all three lines, the one drawn while the disk was full too: " + drawings(documents));
         ui.shot("room again: saved again");
 
-        // the recording: does it come back by itself?
-        long newVideoAt = waitForNewVideo(videos, sizes(videos), 20_000);
-        boolean cameBack = newVideoAt > 0;
-        rig.film.remark("The recording, room again: " + (cameBack ? "a new file " + (newVideoAt - roomFrom) / 1000 + " s after" : "NO new file within 20 s by itself")
-                + ". REC on the OSD: " + (recordingNow(rig) ? "shown" : "not shown") + ".");
-        if (!cameBack) {
-            // what a pilot can do: VIDEO > RECORD VIDEO off and on (in the main window, the map window in front of it)
-            Map<String, Long> beforeToggle = sizes(videos);
-            ui.front(rig.main());
-            MenusScenario.open(ui, "VIDEO");
-            ui.click("RECORD VIDEO");
-            Ui.pause(800);
-            if (!MenusScenario.rowShowing(ui, "RECORD VIDEO")) MenusScenario.open(ui, "VIDEO");
-            ui.click("RECORD VIDEO");
-            Ui.pause(500);
-            ui.key(java.awt.event.KeyEvent.VK_ESCAPE);
-            rig.film.remark("The window's log at RECORD VIDEO off and on: " + lines(windowLog(ui), "Recording", "recording", "LOW DISK"));
-            long again = System.currentTimeMillis();
-            long at = waitForNewVideo(videos, beforeToggle, 20_000);
-            rig.film.remark("VIDEO > RECORD VIDEO off and on: " + (at > 0 ? "recording again, a new file " + (at - again) / 1000 + " s after" : "STILL no new file"));
-            rig.check(at > 0, "with room again, RECORD VIDEO off and on records again");
-        }
-        ui.shot("room again: the recording");
+        // I-017: the recording comes back by itself - the next try after the room came (the longest wait is 30 s)
+        String back = newPart(videos, beforeRoom, roomFrom + 45_000);
+        long backAt = System.currentTimeMillis();
+        rig.film.remark("The recording, room again: " + (back != null ? "a new part by itself, " + (backAt - roomFrom) / 1000 + " s after: " + back
+                : "NO new part within 45 s by itself") + ". REC on the OSD: " + (recordingNow(rig) ? "shown" : "not shown") + ".");
+        rig.check(back != null, "with room again the recording starts again by itself: a new part with pictures in it, " + back);
+        ui.until("RECORDING AGAIN in the window's log", 10_000, () -> windowLog(ui).contains("RECORDING AGAIN"));
+        List<String> again = linesOf(windowLog(ui), "RECORDING AGAIN");
+        rig.check(again.size() == 1, "the window's log says once that it records again: " + again);
+        rig.film.remark("The window's log, room again: " + lines(windowLog(ui), "RECORDING", "OSD recording", "saved again"));
+        ui.shot("room again: recording again by itself");
 
         // ---------------------------------------------------------------- 4. landed: what is on the disk
         pilot.throttle(-1);
         pilot.until("the drone to come down", 60_000, () -> drone.readout().altM() < 0.5);
         pilot.disarm(drone);
+        ui.front(rig.main()); // the map window was in front, for the pins and the lines
         pilot.standby();
         pilot.until("the flight's record ended on disk", 15_000, () -> FlyScenario.names(tracks).stream().anyMatch(f -> f.endsWith(".record")
                 && read(tracks.resolve(f)).contains("end=")));
@@ -226,6 +223,14 @@ class DiskFullScenario {
             Integer n = frames.get(f);
             rig.check(n != null && n > 0, "the recording begun before the disk ran full plays: " + f + " " + n + " frames");
         }
+        if (back != null) { // I-017: the part that started again by itself, with its copy with the OSD and its figures, as any part
+            String stem = back.replaceFirst("\\.mkv$", "");
+            Integer n = frames.get(back), osd = frames.get(stem + "-osd.mkv");
+            long csv = size(keptVideos.resolve(stem + ".csv"));
+            rig.check(n != null && n > 0, "the part that started again by itself plays: " + back + " " + n + " frames");
+            rig.check(osd != null && osd > 0, "its copy with the OSD is there and plays: " + stem + "-osd.mkv " + osd + " frames");
+            rig.check(csv > 0, "its figures are there: " + stem + ".csv " + csv + " bytes");
+        }
         List<String> empty = new ArrayList<>();
         for (String f : FlyScenario.names(keptVideos)) {
             try {
@@ -237,9 +242,11 @@ class DiskFullScenario {
         // F-106: a part that got nothing on the disk is deleted when it ends, and is no part of the flight
         rig.check(empty.isEmpty(), "no file of no byte left in Videos: " + empty);
         List<String> namedEmpty = new ArrayList<>();
+        boolean backNamed = false;
         for (String f : FlyScenario.names(tracks)) {
             if (!f.endsWith(".record")) continue;
             de.droiddrone.pc.flights.FlightRecord flight = de.droiddrone.pc.flights.FlightRecord.read(tracks.resolve(f));
+            if (flight != null && back != null) backNamed |= flight.videos().stream().anyMatch(v -> v.getFileName().toString().equals(back));
             for (Path v : flight == null ? List.<Path>of() : flight.videos()) {
                 Path there = keptVideos.resolve(v.getFileName().toString());
                 try {
@@ -252,6 +259,7 @@ class DiskFullScenario {
                     + flight.videos().stream().map(p -> p.getFileName().toString()).toList()));
         }
         rig.check(namedEmpty.isEmpty(), "the flight's record names only parts with something in them: " + (namedEmpty.isEmpty() ? "yes" : namedEmpty));
+        rig.check(backNamed, "the flight's record names the part that started again by itself: " + back);
 
         // what the pilot finds of this flight afterwards
         ui.front(ui.window("DRAUPNE Link map"));
@@ -274,6 +282,8 @@ class DiskFullScenario {
         ui.closeWindow(ui.window("Previous flights"));
         List<String> stoppedAll = linesOf(windowLog(ui), "RECORDING STOPPED");
         rig.check(stoppedAll.size() == 1, "RECORDING STOPPED said once in the whole flight: " + stoppedAll);
+        List<String> againAll = linesOf(windowLog(ui), "RECORDING AGAIN");
+        rig.check(againAll.size() == 1, "RECORDING AGAIN said once in the whole flight: " + againAll);
         rig.check(!windowLog(ui).contains("IOException:"), "no \"IOException:\" in the window's words, the whole flight: " + lines(windowLog(ui), "IOException"));
 
         // the link log of the flight (on the normal disk): the picture and the sticks before, while full, after
@@ -557,16 +567,40 @@ class DiskFullScenario {
         return false;
     }
 
-    /** When a recording file that was not there before has some picture in it (20 kB); -1 when none came within ms. */
-    private static long waitForNewVideo(Path videos, Map<String, Long> before, long ms) {
-        long end = System.currentTimeMillis() + ms;
-        while (System.currentTimeMillis() < end) {
+    /**
+     * The name of a part of the recording (not its copy with the OSD) that was not there before and has some picture in
+     * it (20 kB), once there is one; null when none came by untilMs.
+     */
+    private static String newPart(Path videos, Map<String, Long> before, long untilMs) {
+        while (true) {
             for (Map.Entry<String, Long> e : sizes(videos).entrySet()) {
-                if (e.getKey().endsWith(".mkv") && !before.containsKey(e.getKey()) && e.getValue() > 20_000) return System.currentTimeMillis();
+                String f = e.getKey();
+                if (f.endsWith(".mkv") && !f.endsWith("-osd.mkv") && !before.containsKey(f) && e.getValue() > 20_000) return f;
             }
+            if (System.currentTimeMillis() >= untilMs) return null;
             Ui.pause(500);
         }
-        return -1;
+    }
+
+    /** The lines after the last one that has this in it that have one of the parts in them, each stripped. */
+    private static List<String> afterLine(String text, String after, String... parts) {
+        String[] all = text.split("\\R");
+        int from = -1;
+        for (int i = 0; i < all.length; i++) if (all[i].contains(after)) from = i;
+        List<String> out = new ArrayList<>();
+        for (int i = from + 1; from >= 0 && i < all.length; i++) for (String p : parts) if (all[i].contains(p)) {
+            out.add(all[i].strip());
+            break;
+        }
+        return out;
+    }
+
+    private static long size(Path file) {
+        try {
+            return Files.size(file);
+        } catch (java.io.IOException e) {
+            return -1;
+        }
     }
 
     private static Map<String, Long> sizes(Path dir) {
