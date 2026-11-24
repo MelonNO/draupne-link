@@ -208,6 +208,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         recording.setFileListener(listener);
     }
 
+    /** Told once, in the pilot's words, when the recording stops by itself (a disk that keeps refusing). */
+    public void setRecordingProblemListener(Consumer<String> listener) {
+        recording.setProblemListener(listener);
+    }
+
     /** 1.0.71: the drone's name in the recording's file names; "" or null: none. */
     public void setRecordingLabel(String label) {
         recording.setLabel(label);

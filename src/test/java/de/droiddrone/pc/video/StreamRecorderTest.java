@@ -120,6 +120,35 @@ class StreamRecorderTest {
         Files.delete(files.get(0)); // the first was closed (an open file can't be deleted on Windows)
     }
 
+    /**
+     * A disk that keeps refusing (F-105, the test bench's full disk, 2026-11-24): the recording ends after five failed
+     * writes and the window is told once, in the pilot's words, with what starts it again. Before, only the app's log
+     * file said it; the pilot saw the REC mark go without a word.
+     */
+    @Test
+    void aRecordingThatStopsByItselfIsSaidOnceInThePilotsWords(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 16, 2); // a key frame every other frame: a new try each time
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        java.util.List<Path> files = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.List<String> said = new java.util.concurrent.CopyOnWriteArrayList<>();
+        pipeline.setRecordingFileListener(f -> {
+            files.add(f);
+            throw new java.io.UncheckedIOException(new java.io.IOException("There is not enough space on the disk"));
+        });
+        pipeline.setRecordingProblemListener(said::add);
+        pipeline.startRecording(dir);
+        pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+        feed(pipeline, s, 0, 16, 1);
+        long end = System.currentTimeMillis() + 3000;
+        while (pipeline.isRecording() && System.currentTimeMillis() < end) Thread.sleep(10);
+        assertFalse(pipeline.isRecording(), "given up");
+        assertEquals(VideoRecording.MAX_WRITE_FAILURES, files.size(), "tried five times: " + files);
+        assertEquals(java.util.List.of("RECORDING STOPPED: There is not enough space on the disk - VIDEO > RECORD VIDEO off and on to record again."), said);
+        pipeline.close();
+        assertEquals("RECORDING STOPPED: could not write a frame (No space left on device) - VIDEO > RECORD VIDEO off and on to record again.",
+                VideoRecording.stoppedLine(new java.io.IOException("Recording: could not write a frame (No space left on device)")), "FFmpeg's words");
+    }
+
     /** A screen the pictures go to, so frames are presented (each one writes a row of the OSD sidecar). */
     private static final class SmallScreen implements VideoPipeline.FrameSink {
         final java.util.concurrent.atomic.AtomicInteger presented = new java.util.concurrent.atomic.AtomicInteger();

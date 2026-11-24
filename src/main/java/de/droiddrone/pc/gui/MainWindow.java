@@ -4052,6 +4052,7 @@ public class MainWindow extends JFrame {
                 de.droiddrone.pc.flights.FlightRecord record = flightRecord;
                 if (record != null) record.video(file);
             });
+            v.setRecordingProblemListener(this::logLine); // a recording that stops by itself is said in the window
             v.startRecording(dir);
             logLine("Recording to " + dir + (withOsd ? ", plus a copy with the OSD." : "."));
             String low = de.droiddrone.pc.DiskSpace.warning(dir);

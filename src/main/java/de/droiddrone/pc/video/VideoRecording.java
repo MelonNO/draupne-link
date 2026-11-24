@@ -82,6 +82,8 @@ final class VideoRecording {
     private volatile VideoPipeline.RecordingTap tap;
     /** Told each new recording file as it is created (record thread), or null - the tour notes its own files by path. */
     private volatile Consumer<Path> fileListener;
+    /** Told (record thread) when the recording stops by itself, in the pilot's words; null: the app's log is. */
+    private volatile Consumer<String> problemListener;
     private volatile String label = "";
 
     VideoRecording(Supplier<VideoPipeline.Config> currentConfig, Runnable requestKeyFrame, Supplier<AudioConfig> defaultAudio) {
@@ -92,6 +94,21 @@ final class VideoRecording {
 
     void setFileListener(Consumer<Path> listener) {
         fileListener = listener;
+    }
+
+    /**
+     * Told once when the recording stops by itself - a disk that keeps refusing. Until 2026-11-24 (the test bench's
+     * full disk) only the app's log file said it: the pilot saw the REC mark go without a word.
+     */
+    void setProblemListener(Consumer<String> listener) {
+        problemListener = listener;
+    }
+
+    /** What the window says when the recording stopped by itself: why, and how to start it again. */
+    static String stoppedLine(Throwable e) {
+        String why = de.droiddrone.pc.DiskSpace.why(e);
+        if (why.startsWith("Recording: ")) why = why.substring("Recording: ".length()); // StreamRecorder's own words
+        return "RECORDING STOPPED: " + why + " - VIDEO > RECORD VIDEO off and on to record again.";
     }
 
     /** 1.0.71: the drone's name in each new file's name (flight-DATE-label.mkv); "" or null: none. */
@@ -326,7 +343,17 @@ final class VideoRecording {
             }
         } catch (InterruptedException ignored) {
         } catch (IOException | RuntimeException | Error e) { // an Error too: it left "recording" set, and nothing more was recorded in that connection
-            log("RECORDING STOPPED: " + e.getMessage());
+            String line = stoppedLine(e);
+            Consumer<String> to = problemListener;
+            boolean told = false;
+            if (to != null) {
+                try {
+                    to.accept(line); // the window's log, which writes the app's log too
+                    told = true;
+                } catch (RuntimeException ignored) {
+                }
+            }
+            if (!told) log(line);
             synchronized (this) {
                 if (recording == r) recording = null;
             }
