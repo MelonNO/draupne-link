@@ -310,7 +310,9 @@ public final class VideoDecoder implements AutoCloseable {
         av_opt_set_int(sws, "dst_format", AV_PIX_FMT_BGRA, 0);
         // up-scaling (a 720p picture on a 1080p screen) bicubic: visibly sharper edges for 0.4 ms more a frame (720p to
         // 1080p: 2.6 ms fast bilinear, 3.0 ms bicubic on an i7-14700); 1:1 and down-scaling fast bilinear as before
-        av_opt_set_int(sws, "sws_flags", width > src.width() ? SWS_BICUBIC : SWS_FAST_BILINEAR, 0);
+        int flags = width > src.width() ? SWS_BICUBIC : SWS_FAST_BILINEAR;
+        if (src.width() > FAR * width || src.height() > FAR * height) flags = SWS_POINT;
+        av_opt_set_int(sws, "sws_flags", flags, 0);
         av_opt_set_int(sws, "threads", oneThread ? 1 : SCALE_THREADS, 0);
         if (sws_init_context(sws, null, null) < 0) {
             sws_freeContext(sws);
@@ -342,6 +344,13 @@ public final class VideoDecoder implements AutoCloseable {
             default -> height >= 720 ? SWS_CS_ITU709 : SWS_CS_ITU601;
         };
     }
+
+    /**
+     * F-092: a picture more than this many times the view's size in a direction - a damaged stream's, such as
+     * 128 x 131072 - is sampled point by point. With its other filters FFmpeg makes a scale of about 64 times or more
+     * in two steps of its own, and that way, with the picture's colour matrix set, ended the app.
+     */
+    static final int FAR = 32;
 
     /** The scaler's slice threads: 0 = one per core. Measured on 720p -> 1080p BGRA, see VideoTest.decodeAndDrawTimeAt720p. */
     static final int SCALE_THREADS = 0;
