@@ -73,8 +73,22 @@ public final class ExitPlanner {
      * as they are, braking into LOITER as the phones do; returns the worst moment.
      */
     public interface Prover {
-        Closest fly(V2 centre, V2 velocity, List<Input> inputs, Map<String, Plan> plans, double leadReturnAltAmsl);
+        Closest fly(V2 centre, V2 velocity, List<Input> inputs, Map<String, Plan> plans, double leadReturnAltAmsl, Lead lead);
     }
+
+    /**
+     * AC-41: the lead as the plans must keep clear of it when the PC goes - where it is now (airspace frame, AMSL) and
+     * where its RTL takes it down (its home or its rally point; its home's height). It holds, then after
+     * {@link #LEAD_HOME_AFTER_S} climbs where it is to its return height, flies over and comes down there - well ahead of
+     * the followers, whose hold is longer: its way down crosses every layer, and a lane may run under it.
+     */
+    public record Lead(V2 pos, double altAmsl, V2 home, double homeAmsl) {}
+
+    /** The lead's link-loss rule: RTL this long after the PC went silent (A4). */
+    public static final double LEAD_HOME_AFTER_S = 20;
+
+    /** The lead's name in a proof's worst pair. */
+    public static final String LEAD_ID = "LEAD:";
 
     private final AirParams p;
 
@@ -89,6 +103,11 @@ public final class ExitPlanner {
      * @param prover      null: no proof (the plans are made, not proven)
      */
     public Result plan(V2 centre, V2 velocity, List<Input> inputs, double topAltAmsl, Prover prover) {
+        return plan(centre, velocity, inputs, topAltAmsl, null, prover);
+    }
+
+    /** @param lead the lead's way home, proven against too (null: no lead) */
+    public Result plan(V2 centre, V2 velocity, List<Input> inputs, double topAltAmsl, Lead lead, Prover prover) {
         Map<String, Double> radius = new HashMap<>();
         int maxBelow = inputs.stream().filter(i -> i.where() == Where.CELL).mapToInt(Input::layersAbove).max().orElse(0);
         for (Input i : inputs) {
@@ -156,9 +175,11 @@ public final class ExitPlanner {
         if (prover == null) return new Result(plans, false, null, leadAlt);
         Closest worst = null;
         for (int t = 0; t < MAX_TRIES; t++) {
-            worst = prover.fly(centre, velocity, inputs, plans, leadAlt);
+            worst = prover.fly(centre, velocity, inputs, plans, leadAlt, lead);
             if (worst == null || !worst.loss(p)) return new Result(plans, true, worst, leadAlt);
-            String later = order.indexOf(worst.a()) > order.indexOf(worst.b()) ? worst.a() : worst.b();
+            // the lead never waits (its rule is the phone's own): the follower in its way leaves later
+            String later = LEAD_ID.equals(worst.a()) ? worst.b() : LEAD_ID.equals(worst.b()) ? worst.a()
+                    : order.indexOf(worst.a()) > order.indexOf(worst.b()) ? worst.a() : worst.b();
             Plan old = plans.get(later);
             if (old == null) break; // the lead in the worst pair with no follower to delay: give up
             plans.put(later, new Plan(old.id(), old.laneEndRadiusM(), old.returnAltAmsl(), old.startDelayS() + DELAY_STEP_S, old.rally(),

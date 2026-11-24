@@ -62,19 +62,32 @@ class PcNetworkLossTest {
     }
 
     /**
-     * FINDING (not fixed, tag finding): the PC gone for over 2 min with the lead's home right beside the group (here
-     * 100 m north of its centre, where the lead hovered): the lead's RTL comes down over its home while the north face's
-     * followers fly out along their lanes through that column - 8.4 m sideways, 7.7 m in height. The PC dead (not only
-     * its network) gives the same. The exit plans don't know where the lead will come down (its home or rally point).
+     * AC-41: the PC gone for over 2 min with the lead's home right beside the group (where it hovered, 100 m out on
+     * any side): the lead's RTL comes down over its home while the followers on that side fly out along their lanes.
+     * Before, the exit plans didn't know where the lead comes down: on the north side 8.4 m sideways, 7.7 m in height.
+     * Now its way home is proven with the plans, and a lane under it leaves later.
      */
-    @org.junit.jupiter.api.Tag("finding")
-    @Test
-    void overTwoMinutesEveryoneLeavesAndKeepsApart() {
-        VirtualAirspace a = flying();
+    @ParameterizedTest
+    @ValueSource(ints = {0, 45, 90, 135, 180, 225, 270, 315})
+    void overTwoMinutesEveryoneLeavesAndKeepsApart(int bearing) {
+        VirtualAirspace a = Groups.group(8, 11);
+        double e = 100 * Math.sin(Math.toRadians(bearing)), n = 100 * Math.cos(Math.toRadians(bearing));
+        a.copters.get("LEAD").rallyE = e; // its home: where it hovers
+        a.copters.get("LEAD").rallyN = n;
+        a.pilot = Groups.goTo(e, n, Groups.GROUND + Groups.leadAgl(a.params, 8));
+        a.run(40);
         links(a, false);
         a.run(160);
         links(a, true);
         a.run(400);
+        assertTrue(a.separated(), "lead's home at " + bearing + " deg: " + Groups.describe(a));
+    }
+
+    @Test
+    void thePcDeadTheLeadsHomeBesideTheGroup() {
+        VirtualAirspace a = flying();
+        a.pcAlive = false;
+        a.run(560);
         assertTrue(a.separated(), Groups.describe(a));
     }
 }

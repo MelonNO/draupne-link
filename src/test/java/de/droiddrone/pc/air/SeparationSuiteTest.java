@@ -493,6 +493,43 @@ class SeparationSuiteTest {
     }
 
     /**
+     * Two seeds the round of 2026-11-23 broke (they kept separation before it): 160 - the new lead, cut off on its way out
+     * of the group, taken as left after 30 s and its phone's RTL climbing where it hung, through the follower over it
+     * (now: the group steps aside from a silent new lead's column at once, and a silent lead stays in everyone's way);
+     * 164 - a drone near 3 % chasing its cell at speed, its FC's LAND braking it across a neighbour (now: its
+     * speed is held down, its braking way short); and 113, which a first try at 164 broke - a cut-off drone back after the
+     * group had moved rose in place to its approach layer under the drone over its old cell (now: it holds its height
+     * until its way out and up is granted).
+     */
+    @Test
+    void seedsOnceBrokenKeepSeparation() {
+        randomCase(160, 600);
+        randomCase(164, 600);
+        randomCase(113, 600);
+    }
+
+    /**
+     * FINDING (tag finding, not fixed): the random cases, then the PC gone for good - every follower out on its lane at
+     * once with whatever plans the overlapping failures left (drones cut off earlier with older plans, GNSS lost for the
+     * group and landing column by column, reserves on their way). 2026-11-24: seeds 7, 9, 154 and 180 of 1-12 and 100-189
+     * lose separation (7-9 m sideways and in height) a few minutes after the PC went. The plans of the drones cut off
+     * before it went are not proven with the later set (only kept clear while the PC lives).
+     */
+    @Tag("finding")
+    @Test
+    void randomCasesThenThePcGoes() {
+        List<String> lost = new ArrayList<>();
+        for (long seed : new long[]{7, 9, 154, 180}) {
+            try {
+                randomCase(seed, seed < 100 ? 300 : 600, true);
+            } catch (AssertionError e) {
+                lost.add(String.valueOf(e.getMessage()).split("\n")[0]);
+            }
+        }
+        assertTrue(lost.isEmpty(), lost.size() + " lost separation:\n" + String.join("\n", lost));
+    }
+
+    /**
      * The integrator's case on the real wire (GroupLinkLoopbackTest), here without UDP: ground at sea level, the lead
      * standing at (150, 0) 80 m in PILOT, four followers starting off their cells at 60 - 90 m, 8 s of following, then
      * F2's link cut for 4 s (it brakes and holds, its reports stop: the PC takes it as cut off), then back.
@@ -525,6 +562,11 @@ class SeparationSuiteTest {
     }
 
     static void randomCase(long seed, double seconds) {
+        randomCase(seed, seconds, false);
+    }
+
+    /** @param thenPcGone end with the PC gone for good (the lead home over everyone, every follower out on its lane) */
+    static void randomCase(long seed, double seconds, boolean thenPcGone) {
         Random r = new Random(seed);
         VirtualAirspace a = Groups.group(8 + r.nextInt(17), seed);
         a.wind = new V2(r.nextGaussian() * 3, r.nextGaussian() * 3);
@@ -532,6 +574,13 @@ class SeparationSuiteTest {
         double[] goal = {0, 100};
         a.pilot = (t, l) -> new double[]{goal[0], goal[1], alt};
         a.onNewLead = id -> a.pilot = (t, l) -> new double[]{l.e + 150, l.n - 150, alt + 20};
+        // AC-41: the lead's home (where its RTL comes down) beside the group, from any side; with thenPcGone, half the cases end with
+        // the PC gone for good - every follower out along its lane, the lead home over and down past them
+        Random h = new Random(seed * 31 + 7);
+        double ang = h.nextDouble() * 2 * Math.PI, far = 80 + h.nextInt(80);
+        a.copters.get("LEAD").rallyE = far * Math.sin(ang);
+        a.copters.get("LEAD").rallyN = far * Math.cos(ang);
+        boolean pcGoes = h.nextBoolean() && thenPcGone;
         List<String> ids = new ArrayList<>(a.gc.members().keySet());
         int reserves = 0;
         for (double t = 0; t < seconds; t += 10) {
@@ -549,6 +598,10 @@ class SeparationSuiteTest {
             }
             a.run(10);
         }
-        record("random case, seed " + seed, a);
+        if (pcGoes) {
+            a.pcAlive = false;
+            a.run(480);
+        }
+        record("random case, seed " + seed + (pcGoes ? ", then the PC gone" : ""), a);
     }
 }
