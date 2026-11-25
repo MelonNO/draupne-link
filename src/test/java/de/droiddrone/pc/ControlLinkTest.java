@@ -1414,6 +1414,90 @@ class ControlLinkTest {
         waitFor(() -> link.getState() == ControlLink.State.VERSION_MISMATCH, 5000, "version mismatch");
     }
 
+    /**
+     * F-112: VersionMismatch is the phone's answer to a Config it can't take. One that comes while the link is up - its
+     * Config taken - changes nothing: the link stays READY and the sticks go on (before, they stopped until DISCONNECT).
+     */
+    @Test
+    void aVersionAnswerWhileTheLinkIsUpChangesNothing() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        short[] sticks = {1500, 1500, 1500, 1000};
+        assertTrue(link.sendRc(sticks));
+        waitFor(() -> !phone.rcFrames.isEmpty(), 2000, "sticks at the phone");
+
+        phone.sendVersionMismatch();
+        Thread.sleep(500); // on loopback it is there and handed on within milliseconds
+        assertEquals(ControlLink.State.READY, link.getState());
+        assertTrue(link.sticksWanted(), "the sticks are still wanted");
+        int before = phone.rcFrames.size();
+        for (int i = 0; i < 10; i++) {
+            assertTrue(link.sendRc(sticks), "frame " + i + " goes out");
+            Thread.sleep(20);
+        }
+        waitFor(() -> phone.rcFrames.size() >= before + 10, 2000, "every frame at the phone");
+        assertEquals(ControlLink.State.READY, link.getState());
+    }
+
+    /**
+     * F-112: a phone that can't serve this version is asked again every VERSION_RETRY_MS, not given up and never at the
+     * handshake's pace: the Config while the link is up (the phone judges the version by it), a Connect while it is
+     * down. Each Config is answered with VersionMismatch again: VERSION_MISMATCH stays, and no stick frame goes.
+     */
+    @Test
+    void aPhoneThatCantServeThisVersionIsAskedAgainEveryFiveSeconds() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode + 1);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.VERSION_MISMATCH, 5000, "version mismatch");
+        short[] sticks = {1500, 1500, 1500, 1000};
+        assertFalse(link.sticksWanted());
+        assertFalse(link.sendRc(sticks), "no stick frame");
+        // the link stays up (the phone answers the pings): the Config again, 5 s later - not every 250 ms
+        int configs = phone.configPackets.get();
+        long since = System.currentTimeMillis();
+        waitFor(() -> phone.configPackets.get() > configs, ControlLink.VERSION_RETRY_MS + 1500, "the Config again");
+        long took = System.currentTimeMillis() - since;
+        assertTrue(took >= ControlLink.VERSION_RETRY_MS - 1000, "about 5 s later: " + took + " ms");
+        assertEquals(configs + 1, phone.configPackets.get(), "one Config");
+        Thread.sleep(300);
+        assertEquals(ControlLink.State.VERSION_MISMATCH, link.getState(), "answered with VersionMismatch again");
+        // the phone gone quiet: a Connect every 5 s - not every 150 or 500 ms
+        phone.silent = true;
+        waitFor(() -> !link.isConnected(), ControlLink.LINK_LOST_MS + 1500, "link lost");
+        assertEquals(ControlLink.State.VERSION_MISMATCH, link.getState(), "the words stay");
+        int connects = phone.connects.get();
+        waitFor(() -> phone.connects.get() > connects, ControlLink.VERSION_RETRY_MS + 1500, "a Connect");
+        int first = phone.connects.get();
+        Thread.sleep(ControlLink.VERSION_RETRY_MS - 1000);
+        assertEquals(first, phone.connects.get(), "no Connect for 4 s");
+        waitFor(() -> phone.connects.get() > first, 2500, "the next Connect, about 5 s after");
+        assertFalse(link.sticksWanted());
+        assertTrue(phone.rcFrames.isEmpty(), "no stick frame reached the phone");
+    }
+
+    /**
+     * F-112: one VersionMismatch while connecting, then the phone takes the Config: asked again 5 s later, the link
+     * comes up READY and the sticks go (before, it stayed at VERSION MISMATCH until DISCONNECT).
+     */
+    @Test
+    void oneVersionAnswerWhileConnectingThenTheConfigTakenBringsTheLinkUp() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        phone.mismatchesLeft.set(1);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.VERSION_MISMATCH, 5000, "version mismatch");
+        assertFalse(link.sticksWanted());
+        waitFor(() -> link.getState() == ControlLink.State.READY, ControlLink.VERSION_RETRY_MS + 3000, "READY once the phone takes the Config");
+        assertTrue(link.sticksWanted());
+        assertNotNull(phone.config, "the phone has the config");
+        short[] sticks = {1500, 1500, 1500, 1000};
+        assertTrue(link.sendRc(sticks));
+        waitFor(() -> !phone.rcFrames.isEmpty(), 2000, "sticks at the phone");
+    }
+
     static class ParsedConfig {
         int cameraWidth, cameraFpsMin, cameraFpsMax, rcRefreshRate, fcProtocol, trailingBytes;
     }
@@ -1453,6 +1537,15 @@ class ControlLinkTest {
         final AtomicInteger dropKeyFrameRequests = new AtomicInteger(), dropProfiles = new AtomicInteger();
         /** Disconnect packets received. */
         final AtomicInteger disconnects = new AtomicInteger();
+        /** Every Config that reached the buffer thread, taken or not. */
+        final AtomicInteger configPackets = new AtomicInteger();
+        /** The next this many Configs are answered with VersionMismatch, whatever version they carry. */
+        final AtomicInteger mismatchesLeft = new AtomicInteger();
+
+        /** A VersionMismatch now, numbered in this session's numbering as the phone's answers are. */
+        void sendVersionMismatch() throws java.io.IOException {
+            udpSender.sendPacket(new UdpPacketData(UdpCommon.VersionMismatch).getData());
+        }
         /** The answers to the next this many BoxNames requests are lost on the way. */
         final AtomicInteger dropBoxNames = new AtomicInteger();
         /** Goes deaf the moment it has taken a config: the way to it dies right after the (re)connect. */
@@ -1667,7 +1760,8 @@ class ControlLinkTest {
             if (UdpCommon.isPacketNumbered(name)) r.readShort();
             switch (name) {
                 case UdpCommon.Config -> {
-                    if (r.readShort() != versionCode) {
+                    configPackets.incrementAndGet();
+                    if (r.readShort() != versionCode || mismatchesLeft.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
                         udpSender.sendPacket(new UdpPacketData(UdpCommon.VersionMismatch).getData());
                         return;
                     }

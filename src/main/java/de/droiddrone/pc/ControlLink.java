@@ -308,6 +308,12 @@ public class ControlLink {
     static final long CONNECT_FAST_MS = 150, CONNECT_MS = 500, RECONNECT_FAST_MS = 5000;
     /** Config goes out this often until the phone has taken it. */
     static final long CONFIG_RETRY_MS = 250;
+    /**
+     * F-112: VERSION_MISMATCH is not for good - the handshake goes on at this pace: the Config while the link is up
+     * (the phone judges the version by it), a Connect while it is down. A phone that can't serve this version answers
+     * each Config with VersionMismatch again; one that takes it ends the mismatch, and the link goes on to READY.
+     */
+    static final long VERSION_RETRY_MS = 5000;
     /** The session thread's tick while connecting: a Connect answered is followed by the Config within this. */
     private static final long SESSION_TICK_MS = 50;
     /**
@@ -351,7 +357,13 @@ public class ControlLink {
     /** Tailscale's way to the phone is a relay (DERP): the sticks ride TCP there, and AUTO holds bad coverage mode. */
     private volatile boolean relayed;
     private volatile long lastVideoConfigRequest;
+    /**
+     * The phone said it can't take this version's Config: counted only while this session's Config is not taken yet,
+     * ended when the phone takes one (F-112; asked again every VERSION_RETRY_MS).
+     */
     private volatile boolean versionMismatch;
+    /** When a version answer that changed nothing was last said in the log (buffer thread). */
+    private long versionAnswerSaidAt;
     private volatile FcInfo fcInfo;
     private volatile int pingMs;
     private volatile long lastPingTimestamp;
@@ -938,18 +950,18 @@ public class ControlLink {
                     telemetry.forgetBoxIds(); // a restarted phone app has to read them again
                     telemetry.forgetBoxNames(); // and a different FC has its modes on other bits: read them again too
                 }
-                if (versionMismatch) {
-                    Thread.sleep(1000);
-                } else if (!connected && (dormant || holdConnects)) {
+                // F-112: a version mismatch is no stop - the handshake goes on at VERSION_RETRY_MS (was: a sleep until DISCONNECT)
+                boolean mismatch = versionMismatch;
+                if (!connected && (dormant || holdConnects)) {
                     Thread.sleep(250); // the phone sleeps on purpose: a Connect in its listening window would wake it
                 } else if (!connected) {
                     boolean phoneHoldsOldSession = now - ownSessionNamedAt < RECENT_SESSION_MS;
-                    long every = phoneHoldsOldSession ? OWN_SESSION_RETRY_MS
+                    long every = mismatch ? VERSION_RETRY_MS : phoneHoldsOldSession ? OWN_SESSION_RETRY_MS
                             : lostAt > 0 && now - lostAt < RECONNECT_FAST_MS ? CONNECT_FAST_MS : CONNECT_MS;
                     long sinceRound = connectRoundAt == 0 ? Long.MAX_VALUE : now - connectRoundAt;
                     // F-001: the phone heard again after a try's id was kept for not being heard - the new id at once,
                     // not at the next turn of the pace
-                    boolean heardAgain = trying && lastReceivedAt > lastConnect && sessionIds.renewDue(now, lastReceivedAt);
+                    boolean heardAgain = !mismatch && trying && lastReceivedAt > lastConnect && sessionIds.renewDue(now, lastReceivedAt);
                     if ((now - lastConnect >= every || heardAgain) && !connectHeld(sinceRound, connectRoundLen)) {
                         if (sinceRound >= connectRoundLen) { // a new round begins (see SLOW_PATH_PING_MS)
                             long pong = lastPingTimestamp;
@@ -962,7 +974,7 @@ public class ControlLink {
                     }
                     Thread.sleep(SESSION_TICK_MS);
                 } else if (!configReceived) {
-                    if (now - lastConfig >= CONFIG_RETRY_MS) {
+                    if (now - lastConfig >= (mismatch ? VERSION_RETRY_MS : CONFIG_RETRY_MS)) {
                         decideForcedTier(now); // ROBUST set: the first config already carries the small size
                         sendProfile(); // the phone keeps its profile across sessions (pc.26): told every time, normal too
                         sendConfig();
@@ -1221,9 +1233,19 @@ public class ControlLink {
                 if (!configReceived) readyAt = MonoClock.ms();
                 configReceived = true;
                 everReady = true;
+                versionMismatch = false; // F-112: the phone took this version's Config
             }
             case UdpCommon.VersionMismatch -> {
-                configReceived = false;
+                // F-112: the phone's answer to a Config it can't take - it counts while this session's Config is not
+                // taken yet; with the link up it changes nothing
+                if (configReceived) {
+                    long now = MonoClock.ms();
+                    if (now - versionAnswerSaidAt >= 5000) {
+                        versionAnswerSaidAt = now;
+                        log("Link: a version answer from the phone while the link is up - nothing changed.");
+                    }
+                    return;
+                }
                 versionMismatch = true;
             }
             case UdpCommon.FcInfo -> {
