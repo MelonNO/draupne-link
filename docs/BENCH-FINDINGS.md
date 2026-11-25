@@ -703,6 +703,16 @@ for an id among this PC's last eight tries, and the fuzz checks that too. Not co
 the state machines of spectators, mirror, observer, names and fleet (only their readers), threads racing each other.
 The link has no integrity check of its own beyond UDP's and WireGuard's: a damaged mode byte is another command.
 
+**F-112 - The phone's version answer counts only while the link connects (2026-11-25, a code read).** The phone sends
+VersionMismatch in answer to a Config it can't take. The PC took it at any time, also with the link READY, and then
+sent no stick frames and stopped asking until DISCONNECT. Now it counts only while this session's Config is not taken
+yet; with the link up it changes nothing (one log line at most every 5 s). VERSION MISMATCH is no longer for good:
+the handshake goes on every 5 s (the Config while the link is up, a Connect while it is down); an old phone app
+answers each Config again, so VERSION MISMATCH and its words stay; a phone that takes the Config ends it and the link
+comes up READY (`ControlLink`). Tests: `ControlLinkTest.aVersionAnswerWhileTheLinkIsUpChangesNothing`,
+`...aPhoneThatCantServeThisVersionIsAskedAgainEveryFiveSeconds`,
+`...oneVersionAnswerWhileConnectingThenTheConfigTakenBringsTheLinkUp` (the first and third fail on the code before).
+
 ## Fixed (2026-11-19, on `beta`)
 
 **F-003 - Switching STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s.** The switch waited on the window's
