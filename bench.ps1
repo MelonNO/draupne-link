@@ -247,6 +247,8 @@ $noBenchBuild = 'no bench build of the phone app yet (the emulator flies it sinc
 # none does). -Avd puts another Android device there for this run - the phone app on Android 8, 11, 13, 15 - and a run
 # without it gets draupne-bench back: one left there by a run with -Avd is ended first, so a night never flies the
 # phone app on another Android by mistake. Only the bench's own devices run on that port; nothing else is ended.
+# One that has run longer than BENCH_EMULATOR_MAX_HOURS (6 when not set; 0: never) is started anew by PhoneRig at a
+# scenario's start, the same device: after 34 h its network had grown slow (2026-11-25).
 $emulatorSerial = 'emulator-5584'
 function Set-BenchEmulator {
     $want = $(if ($Avd) { $Avd } else { 'draupne-bench' })

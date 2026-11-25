@@ -24,18 +24,30 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * bench build's, whose link takes every address in the emulator alone. Its APK comes from build/flight-bench and is
  * installed with -t (it is test-only); before it, the other package (the released app's) is stopped, as both want the
  * link port. The update test flies the released app's package there ({@link PhoneRig.Target#flying}).
+ * <p>
+ * 2026-11-25: one command more when a rig finds the emulator running - its uptime ({@code cat /proc/uptime}), once a
+ * rig; one that has run too long is ended and started anew as a cold start starts it.
  */
 class PhoneRigEmulatorTest {
     /** The package flown on the emulator since Q-006: the bench build's. */
     private static final String APP = "de.droiddrone.flight.pc.bench";
     private static final String RELEASED = "de.droiddrone.flight.pc";
+    /** The emulator's arguments when the rig starts it, as ever. */
+    private static final String COLD = "-avd draupne-bench -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back emulated -camera-front emulated -no-snapshot -port 5584";
+    private static final String BOOTED = "shell getprop sys.boot_completed", UPTIME = "shell cat /proc/uptime";
     private final RecordingAdb adb = new RecordingAdb();
     private final List<Long> pauses = new ArrayList<>();
     private final long[] now = {1_000_000};
-    private final PhoneRig rig = new PhoneRig(null, PhoneRig.Target.emulator(), adb, ms -> {
-        pauses.add(ms);
-        now[0] += ms;
-    }, () -> now[0], null);
+    /** The rig the scenarios get, with the default limit whatever this PC's environment says. */
+    private final PhoneRig rig = rig(PhoneRig.EMULATOR_MAX_HOURS, null);
+
+    /** A rig on the emulator that may have run that many hours, its lines into that film (null: none). */
+    private PhoneRig rig(double maxHours, Film film) {
+        return new PhoneRig(film, PhoneRig.Target.emulator(), adb, ms -> {
+            pauses.add(ms);
+            now[0] += ms;
+        }, () -> now[0], null, maxHours);
+    }
 
     /** What was sent since the last call. */
     private int seen;
@@ -235,7 +247,8 @@ class PhoneRigEmulatorTest {
     /** What the scenarios did in their own lines before - adb root, the crash guard's file, kill -9, am crash, ss, install -d - is sent as they sent it. */
     @Test
     void whatTheScenariosSentThemselvesIsSentTheSameThroughTheRig(@TempDir Path build) throws Exception {
-        adb.says("shell getprop sys.boot_completed", "1").says("install", "Success").says("shell ss", "State Recv-Q Send-Q");
+        adb.says("shell getprop sys.boot_completed", "1").says("install", "Success").says("shell ss", "State Recv-Q Send-Q")
+                .says(UPTIME, "3600.12 14000.50\n"); // up an hour: used as it is
         Path apk = Files.createDirectories(build.resolve("flight-bench")).resolve("DRAUPNE-Flight-2.3.0-pc.58-beta-bench.apk");
         Files.write(apk, new byte[]{1});
         String before = System.getProperty("bench.build");
@@ -253,15 +266,17 @@ class PhoneRigEmulatorTest {
             InetSocketAddress link = rig.linkAddress();
             List<String> opening = sent();
             assertEquals("shell getprop sys.boot_completed", opening.get(0));
-            assertEquals("root", opening.get(1));
-            assertEquals("shell am force-stop " + RELEASED, opening.get(2), "the other package gives up the link port (Q-006)");
-            assertEquals("install -r -t " + apk, opening.get(3));
-            assertEquals("shell pm grant " + APP + " android.permission.CAMERA", opening.get(4));
-            assertEquals("shell locksettings set-disabled false", opening.get(11)); // the grants: one more since Android 8's storage (2026-11-22)
+            assertEquals(UPTIME, opening.get(1), "its uptime, once (2026-11-25)");
+            assertEquals("root", opening.get(2));
+            assertEquals("shell am force-stop " + RELEASED, opening.get(3), "the other package gives up the link port (Q-006)");
+            assertEquals("install -r -t " + apk, opening.get(4));
+            assertEquals("shell pm grant " + APP + " android.permission.CAMERA", opening.get(5));
+            assertEquals("shell locksettings set-disabled false", opening.get(12)); // the grants: one more since Android 8's storage (2026-11-22)
             assertEquals(List.of("shell am force-stop " + APP, "shell rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml",
                     "shell input keyevent KEYCODE_WAKEUP", "shell wm dismiss-keyguard", "shell am start -n " + APP + "/de.droiddrone.flight.MainActivity",
                     "emu redir add udp:" + link.getPort() + ":" + PhoneRig.linkOnThePhone(),
-                    "root", "shell ip netns list", "shell ip -4 -o addr show"), opening.subList(12, opening.size())); // no router of its own (Android 11 on): the card's address looked for, nothing more
+                    "root", "shell ip netns list", "shell ip -4 -o addr show"), opening.subList(13, opening.size())); // no router of its own (Android 11 on): the card's address looked for, nothing more
+            assertEquals(List.of(), adb.emulatorStarts, "up an hour: used as it is");
             assertTrue(link.getAddress().isLoopbackAddress());
             assertTrue(rig.target().reach().isEmpty(), "the fence needs no way through for the emulator: its plan's reach is none, as ever");
         } finally {
@@ -357,12 +372,159 @@ class PhoneRigEmulatorTest {
             if (before == null) System.clearProperty("bench.root");
             else System.setProperty("bench.root", before);
         }
-        assertEquals(List.of("-avd draupne-bench -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back emulated -camera-front emulated -no-snapshot -port 5584"),
-                adb.emulatorStarts);
+        assertEquals(List.of(COLD), adb.emulatorStarts);
         assertEquals(List.of("shell getprop sys.boot_completed", "shell getprop sys.boot_completed", "shell getprop sys.boot_completed"), sent());
         assertEquals(List.of(3000L, 4000L), pauses, "asked every 3 s, then Android's own first 4 s");
         rig.ensureRunning(); // running: nothing started again
         assertEquals(1, adb.emulatorStarts.size());
+        assertEquals(List.of(BOOTED), sent(), "started by this rig: its uptime not asked");
+    }
+
+    // ------------------------------------------------------------------ an emulator that has run too long (2026-11-25)
+
+    private interface Step {
+        void run() throws Exception;
+    }
+
+    /** As a bench task's JVM: the run's folder set, where the emulator's own output goes. */
+    private static void inARun(Path run, Step step) throws Exception {
+        String before = System.getProperty("bench.root");
+        System.setProperty("bench.root", run.toString());
+        try {
+            step.run();
+        } finally {
+            if (before == null) System.clearProperty("bench.root");
+            else System.setProperty("bench.root", before);
+        }
+    }
+
+    private static String remarks(Film film) throws Exception {
+        Path file = film.dir().resolve("remarks.txt");
+        return Files.exists(file) ? Files.readString(file) : "";
+    }
+
+    /** (1) Up 34.2 hours, over 6: ended as bench.ps1 ends one, until adb no longer has it, then started as a cold start starts it - once a rig. */
+    @Test
+    void anEmulatorThatHasRunTooLongIsEndedAndStartedAnewAsEver(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "aged");
+        adb.says(BOOTED, "1", "", "1").says(UPTIME, "123120.55 480000.10\n").says("emu avd name", "draupne-bench\nOK\n")
+                .says("emu kill", "OK: killing emulator, bye bye\n").says("get-state", "device", "device", "error: device 'emulator-5584' not found");
+        PhoneRig aged = rig(6, film);
+        inARun(run, aged::ensureRunning);
+        assertEquals(List.of(BOOTED, UPTIME, "emu avd name", "emu kill", "get-state", "get-state", "get-state", BOOTED, BOOTED), sent());
+        assertEquals(List.of(COLD), adb.emulatorStarts, "the same arguments as a cold start");
+        assertEquals(List.of(2000L, 2000L, 3000L, 3000L, 4000L), pauses, "gone after 4 s, 3 s for its ports, then started as ever");
+        assertEquals("The emulator had run 34.2 h: started anew (over 6 h).\n", remarks(film));
+
+        inARun(run, aged::ensureRunning); // once a rig
+        assertEquals(List.of(BOOTED), sent());
+        assertEquals(1, adb.emulatorStarts.size());
+    }
+
+    /** One that does not end after emu kill stops the scenario with the reason: nothing is started over it. */
+    @Test
+    void anEmulatorThatDoesNotEndIsNotStartedOver(@TempDir Path run) throws Exception {
+        adb.says(BOOTED, "1").says(UPTIME, "123120.55 480000.10").says("emu avd name", "draupne-bench\nOK").says("get-state", "device");
+        PhoneRig aged = rig(6, new Film(run.resolve("film"), "stuck"));
+        String said = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class, () -> inARun(run, aged::ensureRunning)).getMessage();
+        assertTrue(said.contains("did not end within 90 s"), said);
+        assertEquals(List.of(), adb.emulatorStarts);
+    }
+
+    /** Another Android device on the port (a run with -Avd) is started anew as that device, not as draupne-bench. */
+    @Test
+    void anotherAndroidDeviceIsStartedAnewAsItself(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "a26");
+        adb.says(BOOTED, "1", "1").says(UPTIME, "25200.00 90000.00").says("emu avd name", "draupne-a26\r\nOK");
+        inARun(run, rig(6, film)::ensureRunning);
+        assertEquals(List.of(COLD.replace("draupne-bench", "draupne-a26")), adb.emulatorStarts);
+        assertEquals("The emulator (draupne-a26) had run 7.0 h: started anew (over 6 h).\n", remarks(film));
+    }
+
+    /** (2) Up under the limit: used as it is - nothing ended, nothing started, nothing said. */
+    @Test
+    void anEmulatorUnderTheLimitIsUsedAsItIs(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "young");
+        adb.says(BOOTED, "1").says(UPTIME, "21540.00 80000.00\n"); // 5.98 h
+        PhoneRig young = rig(6, film);
+        young.ensureRunning();
+        young.ensureRunning();
+        assertEquals(List.of(BOOTED, UPTIME, BOOTED), sent(), "its uptime asked once");
+        assertEquals(List.of(), adb.emulatorStarts);
+        assertEquals(List.of(), pauses);
+        assertEquals("", remarks(film));
+    }
+
+    /** (3) A limit of 0: never started anew, its uptime not even asked. The run's word read as a number of 0 or more, else the default. */
+    @Test
+    void aLimitOfNoneNeverStartsItAnew(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "never");
+        adb.says(BOOTED, "1").says(UPTIME, "360000.00 1400000.00\n"); // 100 h
+        rig(0, film).ensureRunning();
+        assertEquals(List.of(BOOTED), sent());
+        assertEquals(List.of(), adb.emulatorStarts);
+        assertEquals("", remarks(film));
+
+        assertEquals(0, PhoneRig.emulatorMaxHours("0"));
+        assertEquals(12, PhoneRig.emulatorMaxHours(" 12 "));
+        assertEquals(0.5, PhoneRig.emulatorMaxHours("0.5"));
+        for (String word : java.util.Arrays.asList(null, "", " ", "x", "-1", "NaN", "Infinity")) {
+            assertEquals(6, PhoneRig.emulatorMaxHours(word), "\"" + word + "\"");
+        }
+        assertEquals(6, PhoneRig.EMULATOR_MAX_HOURS);
+    }
+
+    /** (4) A real phone - or the emulator held to a real phone's rules (BENCH_PHONE_ADB=emulator-5584) - is never asked its uptime, never ended or started. */
+    @Test
+    void aRealPhoneIsNeverStartedAnewWhateverItsUptime(@TempDir Path run) throws Exception {
+        PhoneRig.Target cable = PhoneRigGuardTest.phone(PhoneRigGuardTest.CABLE, APP, false);
+        PhoneRig.Target rehearsal = new PhoneRig.Target(PhoneRig.SERIAL, PhoneRig.Kind.DEVICE, APP, null, EnumSet.of(PhoneRig.Capability.UDP_REDIR), false, null, null, null);
+        for (PhoneRig.Target phone : List.of(cable, rehearsal)) {
+            RecordingAdb real = RecordingAdb.aPhone().says(UPTIME, "360000.00 1400000.00\n"); // 100 h
+            PhoneRig r = new PhoneRig(null, phone, real, ms -> now[0] += ms, () -> now[0], run.resolve(phone.serial()), 6);
+            try {
+                inARun(run, r::ensureRunning);
+            } finally {
+                r.close();
+            }
+            assertTrue(real.sent.stream().noneMatch(c -> c.contains("uptime") || c.startsWith("emu")), phone.serial() + ": " + real.sent);
+            assertEquals(List.of(), real.emulatorStarts, phone.serial());
+            assertTrue(real.sent.contains("get-state"), "found as a real phone is found");
+        }
+    }
+
+    /** (5) An uptime that cannot be read - adb's error, or adb not answering - leaves the emulator as it is, said in one line. */
+    @Test
+    void anUptimeThatCannotBeReadLeavesTheEmulatorAsItIs(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "unread");
+        adb.says(BOOTED, "1").says(UPTIME, "error: closed\n");
+        rig(6, film).ensureRunning();
+        assertEquals(List.of(BOOTED, UPTIME), sent());
+        assertEquals(List.of(), adb.emulatorStarts);
+        assertEquals(List.of(), pauses);
+        assertEquals("The emulator's uptime could not be read (adb said: error: closed): used as it is.\n", remarks(film));
+
+        Film gone = new Film(run.resolve("gone"), "gone");
+        RecordingAdb silent = new RecordingAdb().says(BOOTED, "1").fails(UPTIME);
+        new PhoneRig(gone, PhoneRig.Target.emulator(), silent, pauses::add, () -> now[0], null, 6).ensureRunning();
+        assertEquals(List.of(BOOTED, UPTIME), silent.sent);
+        assertEquals(List.of(), silent.emulatorStarts);
+        String said = remarks(gone);
+        assertEquals(1, said.lines().count(), said);
+        assertTrue(said.startsWith("The emulator's uptime could not be read (adb said: adb shell cat /proc/uptime did not end within 60 s): used as it is."), said);
+    }
+
+    /** What /proc/uptime and the console say, as the rig reads them. */
+    @Test
+    void theUptimeAndTheDevicesNameAreReadAsAndroidAndTheConsoleWriteThem() {
+        assertEquals(34.2, PhoneRig.uptimeHours("123120.55 480000.10"), 0.001);
+        assertEquals(1.0, PhoneRig.uptimeHours("* daemon started successfully\n3600 7000\n"), 0.001, "adb's own first lines passed over");
+        for (String odd : java.util.Arrays.asList(null, "", "error: device offline", "12.5", "uptime: 12 34")) assertNull(PhoneRig.uptimeHours(odd), odd);
+        assertEquals("draupne-bench", PhoneRig.avdName("draupne-bench\nOK"));
+        assertEquals("draupne-a35", PhoneRig.avdName("draupne-a35\r\nOK\r\n"));
+        for (String odd : java.util.Arrays.asList(null, "", "OK", "KO: unknown command", "error: device 'emulator-5584' not found", "Android Console: Authentication required")) {
+            assertNull(PhoneRig.avdName(odd), odd);
+        }
     }
 
     /** No guard, no battery watch, no putting back that was not there before - however long a scenario takes. */

@@ -469,6 +469,10 @@ public final class PhoneRig implements AutoCloseable {
     private LogTap tap;
     private long batteryCheckedMs;
     private String stopped;
+    /** The emulator is started anew when it has run longer than this ({@link #startAnewWhenOld}); 0: never. */
+    private final double emulatorMaxHours;
+    /** The emulator's uptime looked at: once a rig, when it first finds the emulator running. */
+    private boolean ageLooked;
 
     /** The bench's emulator. */
     public PhoneRig(Film film) {
@@ -486,13 +490,40 @@ public final class PhoneRig implements AutoCloseable {
      * @param folder where the log tap writes; null: the film's folder, or the run's
      */
     PhoneRig(Film film, Target target, PhoneAdb adb, LongConsumer pause, LongSupplier clock, Path folder) {
+        this(film, target, adb, pause, clock, folder, emulatorMaxHours());
+    }
+
+    /** @param emulatorMaxHours the emulator started anew when it has run longer, as the run says ({@link #emulatorMaxHours()}); 0: never */
+    PhoneRig(Film film, Target target, PhoneAdb adb, LongConsumer pause, LongSupplier clock, Path folder, double emulatorMaxHours) {
         this.film = film;
         this.target = target;
         this.adb = adb;
         this.pause = pause;
         this.clock = clock;
         this.folder = folder;
+        this.emulatorMaxHours = emulatorMaxHours;
         batteryCheckedMs = clock.getAsLong();
+    }
+
+    /** Started anew when it has run longer, unless the run says otherwise: after about 34 hours one's network had grown slow (2026-11-25). */
+    public static final double EMULATOR_MAX_HOURS = 6;
+
+    /**
+     * The hours the emulator may have run when a rig comes to it: {@code bench.emulator.maxHours} (BENCH_EMULATOR_MAX_HOURS,
+     * build.gradle), else the environment's BENCH_EMULATOR_MAX_HOURS, else {@link #EMULATOR_MAX_HOURS}. 0: never started anew.
+     */
+    static double emulatorMaxHours() {
+        return emulatorMaxHours(Target.first(System.getProperty("bench.emulator.maxHours"), System.getenv("BENCH_EMULATOR_MAX_HOURS")));
+    }
+
+    /** The run's word for those hours: 0 or more; none, or one that is no such number, is the default. */
+    static double emulatorMaxHours(String said) {
+        try {
+            double h = said == null ? -1 : Double.parseDouble(said.trim());
+            return Double.isFinite(h) && h >= 0 ? h : EMULATOR_MAX_HOURS;
+        } catch (NumberFormatException e) {
+            return EMULATOR_MAX_HOURS;
+        }
     }
 
     /** The emulator and its Android device are set up on this PC. */
@@ -607,8 +638,9 @@ public final class PhoneRig implements AutoCloseable {
     }
 
     /**
-     * The phone there and started through. The emulator is started (no window) when it is not running. A real phone
-     * must be on adb already - then its log is tapped from here on and its battery looked at.
+     * The phone there and started through. The emulator is started (no window) when it is not running, and started
+     * anew when it has run too long ({@link #startAnewWhenOld}). A real phone must be on adb already - then its log is
+     * tapped from here on and its battery looked at.
      */
     public void ensureRunning() throws IOException {
         if (device()) {
@@ -635,9 +667,20 @@ public final class PhoneRig implements AutoCloseable {
             if (found.lock() == Lock.UNLOCKED) keepAwake();
             return;
         }
-        if (running()) return;
-        Path log = Sandbox.runRoot().resolve("emulator.log");
-        adb.startEmulator(List.of("-avd", AVD, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "swiftshader_indirect", "-camera-back", "emulated",
+        if (running()) {
+            if (!ageLooked) {
+                ageLooked = true;
+                startAnewWhenOld();
+            }
+            return;
+        }
+        ageLooked = true; // started here: new
+        startTheEmulator(AVD, Sandbox.runRoot().resolve("emulator.log"));
+    }
+
+    /** The emulator with that Android device started as ever (no window, cold: no snapshot), and waited for until Android has started through. */
+    private void startTheEmulator(String avd, Path log) throws IOException {
+        adb.startEmulator(List.of("-avd", avd, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "swiftshader_indirect", "-camera-back", "emulated",
                 "-camera-front", "emulated", "-no-snapshot", "-port", "5584"), log);
         long end = clock.getAsLong() + 240_000;
         while (!running()) {
@@ -645,6 +688,78 @@ public final class PhoneRig implements AutoCloseable {
             pause.accept(3000);
         }
         pause.accept(4000); // Android's own first seconds
+    }
+
+    /**
+     * An emulator found running is used as it is - unless it has run longer than the run allows
+     * ({@link #emulatorMaxHours()}, by Android's own {@code /proc/uptime}): then it is ended as bench.ps1 ends one
+     * ({@code emu kill}, then until adb no longer has it) and started anew as above, the same Android device (a run with
+     * -Avd keeps its Android). Seen 2026-11-25: after about 34 hours the emulator's network had grown slow - the sticks reached the
+     * phone app 16 ms late at the median instead of 3, its sending stood still for 5 s under the flood check and the PC
+     * lost the link once; started anew, the same check passed. Looked at once a rig, when its scenario comes to the
+     * phone, before anything is installed or forwarded: so between scenarios, never in the middle of one, and a long run
+     * is looked at again at each scenario's start. An uptime that cannot be read leaves it as it is, said. Never a real
+     * phone's, nor an emulator held to a real phone's rules ({@link #device()}).
+     */
+    private void startAnewWhenOld() throws IOException {
+        if (device() || emulatorMaxHours <= 0) return;
+        String said = asked("shell", "cat /proc/uptime");
+        Double hours = uptimeHours(said);
+        if (hours == null) {
+            tell("The emulator's uptime could not be read (" + shortly(said) + "): used as it is.");
+            return;
+        }
+        if (hours <= emulatorMaxHours) return;
+        String ran = String.format(Locale.ROOT, "%.1f", hours), limit = java.math.BigDecimal.valueOf(emulatorMaxHours).stripTrailingZeros().toPlainString();
+        String name = asked("emu", "avd", "name"), avd = avdName(name);
+        if (avd == null) {
+            tell("The emulator had run " + ran + " h, over " + limit + " h, but did not name its Android device (" + shortly(name) + "): used as it is.");
+            return;
+        }
+        Path log = Sandbox.runRoot().resolve("emulator.log");
+        tell("The emulator" + (AVD.equals(avd) ? "" : " (" + avd + ")") + " had run " + ran + " h: started anew (over " + limit + " h).");
+        asked("emu", "kill");
+        long end = clock.getAsLong() + 90_000;
+        while ("device".equals(asked("get-state"))) {
+            if (clock.getAsLong() > end) throw new IllegalStateException("The emulator did not end within 90 s of emu kill (it had run " + ran + " h)");
+            pause.accept(2000);
+        }
+        pause.accept(3000); // its ports let go, as bench.ps1 waits
+        startTheEmulator(avd, log);
+    }
+
+    /** The first number of {@code /proc/uptime} (seconds since Android started), in hours; null when that is not what was said. */
+    static Double uptimeHours(String procUptime) {
+        Matcher m = Pattern.compile("(?m)^\\s*(\\d+(?:\\.\\d+)?)\\s+\\d+(?:\\.\\d+)?\\s*$").matcher(procUptime == null ? "" : procUptime);
+        return m.find() ? Double.parseDouble(m.group(1)) / 3600 : null;
+    }
+
+    /** The Android device {@code emu avd name} names (its first line, before the console's OK); null when it names none. */
+    static String avdName(String said) {
+        String first = said == null ? "" : said.strip().lines().findFirst().orElse("").strip();
+        return first.matches("[A-Za-z0-9._-]+") && !first.equals("OK") && !first.equals("KO") ? first : null;
+    }
+
+    /** The rig's own question to adb: what it said, or why it said nothing. */
+    private String asked(String... args) {
+        try {
+            return own(args);
+        } catch (RuntimeException e) {
+            return String.valueOf(e.getMessage());
+        }
+    }
+
+    /** What adb said, as one short line for the film. */
+    private static String shortly(String said) {
+        String first = said == null ? "" : said.strip().lines().findFirst().orElse("").strip();
+        if (first.isEmpty()) return "adb said nothing";
+        return "adb said: " + (first.length() > 80 ? first.substring(0, 80) + "..." : first);
+    }
+
+    /** A line for the film's remarks and the run's log (the test's own output) alike. */
+    private void tell(String text) {
+        say(text);
+        System.out.println(text);
     }
 
     /** {@code adb root} where the phone has it (the emulator, as before: asked, then 3 s for adb to come back). A real phone has none: said, nothing sent. */

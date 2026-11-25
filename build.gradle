@@ -176,6 +176,7 @@ def benchTask = { String taskName, String tagExpression, String what ->
         systemProperty 'bench.quick', System.getenv('BENCH_QUICK') ?: 'false'
         systemProperty 'bench.sleep', System.getenv('BENCH_SLEEP') ?: 'deep'          // the phone's night: deep | overwatch | both
         systemProperty 'bench.flood.min', System.getenv('BENCH_FLOOD_MIN') ?: ''      // the phone's hardening: the flood's minutes (none: a 3-minute try)
+        systemProperty 'bench.emulator.maxHours', System.getenv('BENCH_EMULATOR_MAX_HOURS') ?: '' // a running emulator older than this started anew (none: 6 h; 0: never)
         if (System.getenv('BENCH_SEED')) systemProperty 'bench.seed', System.getenv('BENCH_SEED')
         systemProperty 'java.security.manager', 'allow'                           // bench/Fence
         systemProperty 'bench.silentSound', 'true'                                // bench/SilentSound

@@ -88,6 +88,13 @@ phone app opens its link socket anew when that happens; `emulator -Tests *PhoneS
 measures how long the PC is without its link. `BENCH_KEEP_APP=1` in the environment leaves the app on the phone as
 it is instead of installing the newest build.
 
+An emulator that is already running is used as it is - unless it has run longer than 6 hours (Android's own
+`/proc/uptime`): then `PhoneRig` ends it (`emu kill`) and starts it anew, cold as ever, the same Android device, and
+the film says so ("The emulator had run 34.2 h: started anew (over 6 h)."). It looks once a scenario, when the scenario
+comes to the phone: never in the middle of one. `BENCH_EMULATOR_MAX_HOURS` in the environment sets the hours (0:
+never). Why: on 2026-11-25 an emulator up for 34 hours had a slow network - the sticks reached the phone 16 ms late
+instead of 3, and the flood check went red falsely; started anew, it passed. A real phone's uptime is never looked at.
+
 Since 2026-11-20 the emulator's phone is set up as a drone's phone is (`PhoneRig.grantPermissions`): the app may
 lock the screen (the status card's "Allow screen lock for deep sleep"; `dpm set-active-admin`) and the phone has a
 lock screen to swipe away (`locksettings set-disabled false`). Until then a deep sleep left its screen lit, and
