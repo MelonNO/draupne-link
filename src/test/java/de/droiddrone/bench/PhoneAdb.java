@@ -23,8 +23,11 @@ public interface PhoneAdb {
     /** A command that goes on until it is closed (the log tap): what it prints is added to the end of that file. */
     Running follow(List<String> args, Path into) throws IOException;
 
-    /** The emulator started with these arguments, its own output into that file (the SDK's other program; a real phone has none). */
-    void startEmulator(List<String> args, Path log) throws IOException;
+    /**
+     * The emulator started with these arguments, its own output added to the end of that file (the SDK's other program;
+     * a real phone has none). Closing what comes back ends that emulator and its own program under it.
+     */
+    Running startEmulator(List<String> args, Path log) throws IOException;
 
     /** A command that is still going. */
     interface Running extends AutoCloseable {
@@ -127,13 +130,29 @@ public interface PhoneAdb {
         }
 
         @Override
-        public void startEmulator(List<String> args, Path log) throws IOException {
+        public Running startEmulator(List<String> args, Path log) throws IOException {
             List<String> cmd = new ArrayList<>(List.of(sdk.resolve("emulator").resolve("emulator.exe").toString()));
             cmd.addAll(args);
             ProcessBuilder b = new ProcessBuilder(cmd);
             realEnvironment(b);
-            b.redirectErrorStream(true).redirectOutput(log.toFile());
-            b.start();
+            // added to, not written over: an emulator bench.ps1 started (-Avd) writes there too (2026-11-26)
+            Files.writeString(log, "---- " + java.time.LocalDateTime.now().withNano(0) + "  emulator " + String.join(" ", args) + System.lineSeparator(),
+                    StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            b.redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile()));
+            Process p = b.start();
+            return new Running() {
+                @Override
+                public boolean alive() {
+                    return p.isAlive();
+                }
+
+                @Override
+                public void close() {
+                    // its own program (qemu) runs under it: ended with it - Windows ends no child with its parent
+                    p.descendants().forEach(ProcessHandle::destroyForcibly);
+                    p.destroyForcibly();
+                }
+            };
         }
 
         /** The programs the bench starts live outside the test JVM's sealed folders: they get this user's real ones. */

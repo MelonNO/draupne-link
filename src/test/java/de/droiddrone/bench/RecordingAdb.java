@@ -24,6 +24,10 @@ final class RecordingAdb implements PhoneAdb {
     final List<Boolean> followClosed = new ArrayList<>();
     /** The emulator's arguments, each time it was started. */
     final List<String> emulatorStarts = new ArrayList<>();
+    /** Whether each emulator started here was ended again ({@link Running#close}). */
+    final List<Boolean> emulatorEnded = new ArrayList<>();
+    /** An emulator started while this is set ends at once by itself, as one that cannot have its Android device does. */
+    volatile boolean emulatorEndsAtStart;
     /** A followed command that ends by itself at once (the cable pulled) while this is set. */
     volatile boolean followDies;
     private final Map<String, Deque<String>> answers = new LinkedHashMap<>();
@@ -144,8 +148,26 @@ final class RecordingAdb implements PhoneAdb {
     }
 
     @Override
-    public synchronized void startEmulator(List<String> args, Path log) {
+    public synchronized Running startEmulator(List<String> args, Path log) {
         emulatorStarts.add(String.join(" ", args));
+        int n = emulatorEnded.size();
+        emulatorEnded.add(false);
+        boolean ends = emulatorEndsAtStart;
+        return new Running() {
+            @Override
+            public boolean alive() {
+                synchronized (RecordingAdb.this) {
+                    return !ends && !emulatorEnded.get(n);
+                }
+            }
+
+            @Override
+            public void close() {
+                synchronized (RecordingAdb.this) {
+                    emulatorEnded.set(n, true);
+                }
+            }
+        };
     }
 
     /** The commands sent since that many. */

@@ -251,7 +251,7 @@ class PhoneRigNetworkTest {
         }
 
         @Override
-        public void startEmulator(List<String> args, Path log) {
+        public PhoneAdb.Running startEmulator(List<String> args, Path log) {
             throw new IllegalStateException("a real phone has no emulator");
         }
 

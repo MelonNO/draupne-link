@@ -11,7 +11,9 @@ import java.util.EnumSet;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -27,6 +29,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>
  * 2026-11-25: one command more when a rig finds the emulator running - its uptime ({@code cat /proc/uptime}), once a
  * rig; one that has run too long is ended and started anew as a cold start starts it.
+ * <p>
+ * 2026-11-26: two commands more around a start, none in a scenario: before it, whether a device is on the port at all
+ * ({@code get-state}: one that is there is waited for, never started over), and after it, which Android device answers
+ * ({@code emu avd name}: the one started here, or it is ended again).
  */
 class PhoneRigEmulatorTest {
     /** The package flown on the emulator since Q-006: the bench build's. */
@@ -373,11 +379,87 @@ class PhoneRigEmulatorTest {
             else System.setProperty("bench.root", before);
         }
         assertEquals(List.of(COLD), adb.emulatorStarts);
-        assertEquals(List.of("shell getprop sys.boot_completed", "shell getprop sys.boot_completed", "shell getprop sys.boot_completed"), sent());
+        assertEquals(List.of(BOOTED, "get-state", BOOTED, BOOTED, "emu avd name"), sent(), "none on the port: started; then which one answers");
         assertEquals(List.of(3000L, 4000L), pauses, "asked every 3 s, then Android's own first 4 s");
+        assertEquals(List.of(false), adb.emulatorEnded, "the one started is the one used");
         rig.ensureRunning(); // running: nothing started again
         assertEquals(1, adb.emulatorStarts.size());
         assertEquals(List.of(BOOTED), sent(), "started by this rig: its uptime not asked");
+    }
+
+    // ------------------------------------------------------------------ never a second emulator left running unseen (2026-11-26)
+
+    /** One on the port that has not started through - adb has it, offline - is waited for: nothing is started beside it. */
+    @Test
+    void oneOnThePortThatHasNotStartedThroughIsWaitedForNotStartedOver(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "booting");
+        adb.says(BOOTED, "", "", "1").says("get-state", "offline");
+        inARun(run, rig(6, film)::ensureRunning);
+        assertEquals(List.of(), adb.emulatorStarts);
+        assertEquals(List.of(BOOTED, "get-state", BOOTED, BOOTED), sent());
+        assertEquals(List.of(3000L, 4000L), pauses);
+        assertEquals("The emulator on emulator-5584 had not started through (adb said: offline): waited for, none started beside it.\n", remarks(film));
+
+        // one that never does: the scenario stops with the reason, and still nothing is started beside it
+        RecordingAdb stuck = new RecordingAdb().says(BOOTED, "").says("get-state", "* daemon not running; starting now at tcp:5037\n* daemon started successfully\ndevice");
+        PhoneRig r = new PhoneRig(null, PhoneRig.Target.emulator(), stuck, ms -> now[0] += ms, () -> now[0], null, 6);
+        String said = assertThrows(IllegalStateException.class, () -> inARun(run, r::ensureRunning)).getMessage();
+        assertTrue(said.contains("did not start through within 4 minutes") && said.contains("none was started beside it"), said);
+        assertEquals(List.of(), stuck.emulatorStarts);
+    }
+
+    /**
+     * 13:33: started while the one on the port did not answer for a moment - then that one answers, another Android
+     * device (Android 8 of a run with -Avd): the one started here is ended again and that one is used.
+     */
+    @Test
+    void oneStartedBesideAnotherThatAnswersIsEndedAgain(@TempDir Path run) throws Exception {
+        Film film = new Film(run.resolve("film"), "beside");
+        adb.says(BOOTED, "", "1").says("emu avd name", "draupne-a26\r\nOK"); // get-state: adb said nothing
+        inARun(run, rig(6, film)::ensureRunning);
+        assertEquals(List.of(COLD), adb.emulatorStarts);
+        assertEquals(List.of(true), adb.emulatorEnded, "ended again: nothing left running unseen");
+        assertEquals(List.of(BOOTED, "get-state", BOOTED, "emu avd name"), sent());
+        assertEquals("Another emulator (draupne-a26) answered on emulator-5584: the draupne-bench started here was ended again, that one is used.\n", remarks(film));
+    }
+
+    /** 16:59-17:45: one that ends at its start - another of the same Android device still running unseen - says why at once, not after 4 minutes. */
+    @Test
+    void oneThatEndsAtItsStartSaysWhyAtOnce(@TempDir Path run) throws Exception {
+        Files.writeString(run.resolve("emulator.log"), "INFO         |      Ok: Disk space requirements to run avd: `draupne-bench` are met\n"
+                + "FATAL        | Running multiple emulators with the same AVD is an experimental feature.Please use -read-only flag to enable this feature.\n");
+        adb.says(BOOTED, "");
+        adb.emulatorEndsAtStart = true;
+        String said = assertThrows(IllegalStateException.class, () -> inARun(run, rig::ensureRunning)).getMessage();
+        assertTrue(said.startsWith("The emulator draupne-bench ended at its start: FATAL | Running multiple emulators with the same AVD"), said);
+        assertTrue(said.contains("another emulator of draupne-bench is still running without adb"), said);
+        assertEquals(List.of(), pauses, "at once");
+        assertEquals(1, adb.emulatorStarts.size());
+    }
+
+    /** One that has not started through in 4 minutes is ended again before the scenario stops. */
+    @Test
+    void oneThatNeverComesUpIsEndedAgain(@TempDir Path run) throws Exception {
+        adb.says(BOOTED, "");
+        String said = assertThrows(IllegalStateException.class, () -> inARun(run, rig::ensureRunning)).getMessage();
+        assertTrue(said.startsWith("The emulator did not start within 4 minutes (ended again)"), said);
+        assertEquals(List.of(true), adb.emulatorEnded);
+    }
+
+    @Test
+    void adbsWordForADeviceOnThePortAndTheEmulatorsFatalLineAreReadAsWritten(@TempDir Path dir) throws Exception {
+        for (String there : List.of("device", "offline\n", "unauthorized", "* daemon not running; starting now at tcp:5037\n* daemon started successfully\ndevice")) {
+            assertTrue(PhoneRig.onThePort(there), there);
+        }
+        for (String none : java.util.Arrays.asList(null, "", "error: device 'emulator-5584' not found", "adb get-state did not end within 60 s", "unknown")) {
+            assertFalse(PhoneRig.onThePort(none), none);
+        }
+        Path log = dir.resolve("emulator.log");
+        assertNull(PhoneRig.fatalLine(log), "no log");
+        Files.writeString(log, "INFO | started\n");
+        assertNull(PhoneRig.fatalLine(log));
+        Files.writeString(log, "ERROR | first\nINFO | x\nFATAL        | the last  one\n");
+        assertEquals("FATAL | the last one", PhoneRig.fatalLine(log));
     }
 
     // ------------------------------------------------------------------ an emulator that has run too long (2026-11-25)
@@ -411,7 +493,7 @@ class PhoneRigEmulatorTest {
                 .says("emu kill", "OK: killing emulator, bye bye\n").says("get-state", "device", "device", "error: device 'emulator-5584' not found");
         PhoneRig aged = rig(6, film);
         inARun(run, aged::ensureRunning);
-        assertEquals(List.of(BOOTED, UPTIME, "emu avd name", "emu kill", "get-state", "get-state", "get-state", BOOTED, BOOTED), sent());
+        assertEquals(List.of(BOOTED, UPTIME, "emu avd name", "emu kill", "get-state", "get-state", "get-state", BOOTED, BOOTED, "emu avd name"), sent());
         assertEquals(List.of(COLD), adb.emulatorStarts, "the same arguments as a cold start");
         assertEquals(List.of(2000L, 2000L, 3000L, 3000L, 4000L), pauses, "gone after 4 s, 3 s for its ports, then started as ever");
         assertEquals("The emulator had run 34.2 h: started anew (over 6 h).\n", remarks(film));

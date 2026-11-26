@@ -87,7 +87,7 @@ class FcKeeperBoardSideTest {
         }
 
         @Override
-        public void startEmulator(List<String> args, Path log) {
+        public Running startEmulator(List<String> args, Path log) {
             throw new AssertionError("the keeper starts no emulator");
         }
     }

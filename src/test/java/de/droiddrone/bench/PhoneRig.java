@@ -675,19 +675,77 @@ public final class PhoneRig implements AutoCloseable {
             return;
         }
         ageLooked = true; // started here: new
+        // One on the port that has not started through (still starting, offline, or adb not answering for a moment) is
+        // waited for, never started over: a second emulator there never reaches adb and keeps its Android device locked
+        // (2026-11-26: one started so at 13:33 beside Android 8 ran 4 h unseen, and the next run's emulator could not start).
+        String there = asked("get-state");
+        if (onThePort(there)) {
+            tell("The emulator on " + target.serial() + " had not started through (" + shortly(there) + "): waited for, none started beside it.");
+            long end = clock.getAsLong() + 240_000;
+            while (!running()) {
+                if (clock.getAsLong() > end) {
+                    throw new IllegalStateException("The emulator on " + target.serial() + " did not start through within 4 minutes (" + shortly(there)
+                            + "); none was started beside it");
+                }
+                pause.accept(3000);
+            }
+            pause.accept(4000); // Android's own first seconds
+            return;
+        }
         startTheEmulator(AVD, Sandbox.runRoot().resolve("emulator.log"));
     }
 
-    /** The emulator with that Android device started as ever (no window, cold: no snapshot), and waited for until Android has started through. */
+    /** adb's word for a device on the serial, in any state; not its "not found" (its own first lines, a daemon started, passed over). */
+    static boolean onThePort(String getState) {
+        String said = getState == null ? "" : getState.strip();
+        String last = said.isEmpty() ? "" : said.lines().reduce((a, b) -> b).orElse("").strip();
+        return last.matches("device|offline|unauthorized|authorizing|connecting|recovery|rescue|bootloader|sideload");
+    }
+
+    /**
+     * The emulator with that Android device started as ever (no window, cold: no snapshot), and waited for until Android
+     * has started through. One that ends at its start says why at once (its FATAL line); one that has not started
+     * through in 4 minutes is ended again; and when the device that answers is another one - already on the port - the
+     * one started here is ended again and that one is used: nothing started here is left running unseen.
+     */
     private void startTheEmulator(String avd, Path log) throws IOException {
-        adb.startEmulator(List.of("-avd", avd, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "swiftshader_indirect", "-camera-back", "emulated",
-                "-camera-front", "emulated", "-no-snapshot", "-port", "5584"), log);
+        PhoneAdb.Running started = adb.startEmulator(List.of("-avd", avd, "-no-window", "-no-audio", "-no-boot-anim", "-gpu", "swiftshader_indirect",
+                "-camera-back", "emulated", "-camera-front", "emulated", "-no-snapshot", "-port", "5584"), log);
         long end = clock.getAsLong() + 240_000;
         while (!running()) {
-            if (clock.getAsLong() > end) throw new IllegalStateException("The emulator did not start within 4 minutes: see " + log);
+            if (!started.alive()) {
+                String fatal = fatalLine(log);
+                throw new IllegalStateException("The emulator " + avd + " ended at its start" + (fatal == null ? "" : ": " + fatal)
+                        + (fatal != null && fatal.contains("same AVD") ? " - another emulator of " + avd + " is still running without adb (qemu-system-x86_64"
+                        + "-headless.exe in Task Manager); end it, and the next scenario starts one" : "") + ". See " + log);
+            }
+            if (clock.getAsLong() > end) {
+                started.close();
+                throw new IllegalStateException("The emulator did not start within 4 minutes (ended again): see " + log);
+            }
             pause.accept(3000);
         }
+        String name = avdName(asked("emu", "avd", "name"));
+        if (!started.alive() || name != null && !name.equals(avd)) {
+            started.close();
+            tell("Another emulator" + (name == null ? "" : " (" + name + ")") + " answered on " + target.serial() + ": the " + avd
+                    + " started here was ended again, that one is used.");
+        }
         pause.accept(4000); // Android's own first seconds
+    }
+
+    /** The emulator's own last FATAL or ERROR line in its log; null when it has none or the log cannot be read. */
+    static String fatalLine(Path log) {
+        try {
+            String found = null;
+            for (String l : Files.readAllLines(log, StandardCharsets.UTF_8)) {
+                String s = l.strip();
+                if (s.startsWith("FATAL") || s.startsWith("ERROR")) found = s.replaceAll("\\s+", " ");
+            }
+            return found == null || found.length() <= 200 ? found : found.substring(0, 200) + "...";
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
     }
 
     /**
