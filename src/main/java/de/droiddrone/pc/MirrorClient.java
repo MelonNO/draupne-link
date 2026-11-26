@@ -48,13 +48,14 @@ public final class MirrorClient implements AutoCloseable {
     private byte[][] parts;
     private int partsHave;
 
+    /** @throws LinkPlace.NotTailscale for a pilot PC at an address neither loopback nor Tailscale (S-LINK-2) */
     public MirrorClient(InetAddress pilotIp, int pilotPort, String key, Listener listener) throws IOException {
         this.pilotIp = pilotIp;
         this.pilotPort = pilotPort;
         this.key = key;
         this.listener = listener;
-        socket = new DatagramSocket(0);
-        socket.setReceiveBufferSize(1 << 20);
+        // S-LINK-2: on this PC's address on the pilot PC's side (its Tailscale address; parked while there is none)
+        socket = PeerSocket.forPeer(pilotIp, 0, OwnTailscale.pc(), s -> s.setReceiveBufferSize(1 << 20));
         receiver = new Thread(this::receiveLoop, "mirrorClient");
         receiver.setDaemon(true);
         receiver.setUncaughtExceptionHandler((t, e) -> log("Mirror client died: " + e));

@@ -21,6 +21,10 @@ import java.util.function.Supplier;
  * not seen), and when this PC is the master - the pilot PC with the highest letter online - it names each phone
  * that answers without a name (NAME_ASSIGN, the first free Mobile letter). It also answers other PCs' queries from
  * the link port while no link is open; the open link answers them itself ({@link ControlLink#setNameReply}).
+ * <p>
+ * S-LINK-2: the link port is listened on at two addresses of this PC, never on every one: its own Tailscale address
+ * (phones and PCs) and loopback (the virtual fleet). The link takes the one its peer is on ({@link #pause}); this keeps
+ * answering on the other. Queries go out from a socket on the side of each device asked ({@link SideSockets}).
  */
 public final class NameService {
     static final long SCAN_MS = 5000;
@@ -36,10 +40,13 @@ public final class NameService {
     private final Consumer<java.util.Map<String, String>> saver;
     private final String device;
     private volatile boolean running;
-    private volatile boolean paused;
     private volatile long scanNow;
     private Thread thread;
-    private DatagramSocket answerSocket;
+    /** The link port's listeners, by side (LinkPlace.Side): loopback, this PC's Tailscale address. */
+    private final PeerSocket[] answerSockets = new PeerSocket[LinkPlace.Side.values().length];
+    /** The sides the link holds now (by side): not listened on here meanwhile. */
+    private final boolean[] pausedSides = new boolean[LinkPlace.Side.values().length];
+    private final OwnTailscale own;
     private final List<Runnable> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean master;
 
@@ -51,6 +58,13 @@ public final class NameService {
      */
     public NameService(PcConfig config, Names names, Supplier<Tailscale.Status> status, int port, boolean answerOnLinkPort,
                        Consumer<java.util.Map<String, String>> saver, Consumer<String> log) {
+        this(config, names, status, port, answerOnLinkPort, saver, log, OwnTailscale.pc());
+    }
+
+    /** @param own where this PC's Tailscale address is read (S-LINK-2: this PC's adapters; a fake in tests) */
+    NameService(PcConfig config, Names names, Supplier<Tailscale.Status> status, int port, boolean answerOnLinkPort,
+                Consumer<java.util.Map<String, String>> saver, Consumer<String> log, OwnTailscale own) {
+        this.own = own;
         this.config = config;
         this.names = names;
         this.status = status;
@@ -87,18 +101,21 @@ public final class NameService {
         thread.setDaemon(true);
         thread.start();
         // 1.0.47: the link port's answers on a thread of their own - the scan waits 1.5 s for replies, and an
-        // overwatch phone's preview or clip arriving meanwhile overflowed the socket's buffer
-        answerThread = new Thread(this::answerRun, "linkPortAnswers");
-        answerThread.setDaemon(true);
-        answerThread.start();
+        // overwatch phone's preview or clip arriving meanwhile overflowed the socket's buffer. S-LINK-2: one per side
+        for (LinkPlace.Side side : LinkPlace.Side.values()) {
+            Thread t = new Thread(() -> answerRun(side), "linkPortAnswers-" + side.name().toLowerCase(java.util.Locale.ROOT));
+            t.setDaemon(true);
+            answerThreads.add(t);
+            t.start();
+        }
     }
 
-    private Thread answerThread;
+    private final List<Thread> answerThreads = new java.util.concurrent.CopyOnWriteArrayList<>();
 
-    private void answerRun() {
+    private void answerRun(LinkPlace.Side side) {
         while (running) {
             try {
-                if (!answerOnLinkPort || paused || !answerQueries()) Thread.sleep(200); // no port (the link has it): again shortly
+                if (!answerOnLinkPort || paused(side) || !answerQueries(side)) Thread.sleep(200); // no port (the link has it): again shortly
             } catch (InterruptedException e) {
                 if (!running) return;
             } catch (RuntimeException e) {
@@ -109,9 +126,10 @@ public final class NameService {
 
     public synchronized void stop() {
         running = false;
-        if (answerThread != null) answerThread.interrupt();
+        for (Thread t : answerThreads) t.interrupt();
+        answerThreads.clear();
         if (thread != null) thread.interrupt();
-        closeAnswerSocket();
+        for (LinkPlace.Side side : LinkPlace.Side.values()) closeAnswerSocket(side);
     }
 
     /** A scan now (the pilot opened the list). */
@@ -134,11 +152,16 @@ public final class NameService {
 
     private void sendAssign(String ip, String name) {
         byte[] assign = Names.assign(config.getKey(), name);
-        try (DatagramSocket socket = new DatagramSocket()) {
-            socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), VirtualFleet.portOf(ip, port)));
-            log.accept("Names: phone at " + ip + " renamed to " + name + ".");
+        // S-LINK-2: from this PC's address on the phone's side (loopback, Tailscale), never another
+        try (PeerSocket socket = PeerSocket.forPeer(InetAddress.getByName(ip), 0, own, null)) {
+            if (socket.waitsForTailscale()) {
+                log.accept("Names: renaming the phone at " + ip + " waits: " + LinkPlace.NO_TAILSCALE + " on this PC.");
+            } else {
+                socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), VirtualFleet.portOf(ip, port)));
+                log.accept("Names: phone at " + ip + " renamed to " + name + ".");
+            }
         } catch (IOException e) {
-            log.accept("Names: rename failed for phone at " + ip + ": " + e);
+            log.accept("Names: rename failed for phone at " + ip + ": " + (e instanceof LinkPlace.NotTailscale ? e.getMessage() : e));
         }
         scanSoon();
     }
@@ -420,20 +443,37 @@ public final class NameService {
         mirrorHost = m;
     }
 
-    /** The link is about to open on the link port: the answering socket lets go of it. */
-    public void pause() {
-        paused = true;
-        closeAnswerSocket();
+    /**
+     * The link is about to open on the link port for a peer at this address: the answering socket on the peer's side
+     * (S-LINK-2: loopback, or this PC's Tailscale address) lets go of it; the other side is still answered here. A peer
+     * on neither side takes nothing (the link refuses it).
+     */
+    public void pause(String peerIp) {
+        LinkPlace.Side side = null;
+        try {
+            side = peerIp == null || peerIp.isEmpty() ? null : LinkPlace.sideOf(InetAddress.getByName(peerIp));
+        } catch (IOException ignored) {
+            // no address: no link
+        }
+        if (side == null) return;
+        synchronized (this) {
+            pausedSides[side.ordinal()] = true;
+        }
+        closeAnswerSocket(side);
     }
 
-    /** The link is closed: the link port is free to answer queries from again. */
-    public void resume() {
-        paused = false;
+    /** The link is closed: the link port is free to answer queries from again, on both sides. */
+    public synchronized void resume() {
+        java.util.Arrays.fill(pausedSides, false);
     }
 
-    private synchronized void closeAnswerSocket() {
-        DatagramSocket s = answerSocket;
-        answerSocket = null;
+    private synchronized boolean paused(LinkPlace.Side side) {
+        return pausedSides[side.ordinal()];
+    }
+
+    private synchronized void closeAnswerSocket(LinkPlace.Side side) {
+        PeerSocket s = answerSockets[side.ordinal()];
+        answerSockets[side.ordinal()] = null;
         if (s != null) s.close();
     }
 
@@ -526,8 +566,9 @@ public final class NameService {
         List<String> unnamedPhones = new ArrayList<>();
         java.util.Map<String, List<String>> claims = new java.util.LinkedHashMap<>(); // name (lower case) -> the addresses answering with it
         String key = config.getKey();
-        try (DatagramSocket socket = new DatagramSocket()) {
-            socket.setSoTimeout(100);
+        // S-LINK-2: each device asked from this PC's address on its side - loopback for the virtual fleet, the Tailscale
+        // address for the rest - and its answer heard there only
+        try (SideSockets socket = new SideSockets(own, null)) {
             byte[] query = Names.query(key);
             long now = MonoClock.ms();
             Set<String> asked = new HashSet<>(), allOnline = new HashSet<>();
@@ -559,7 +600,8 @@ public final class NameService {
             DatagramPacket packet = new DatagramPacket(buf, buf.length);
             while (MonoClock.ms() < end) {
                 try {
-                    socket.receive(packet);
+                    packet.setLength(buf.length);
+                    socket.receive(packet, 100);
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
@@ -710,27 +752,31 @@ public final class NameService {
      * Other PCs' queries, sleeping phones' check-ins and (1.0.47) overwatch packets on the link port while no link
      * holds it: read until 200 ms pass without one. False when the port can't be had.
      */
-    private boolean answerQueries() {
-        DatagramSocket s;
+    private boolean answerQueries(LinkPlace.Side side) {
+        PeerSocket s;
         synchronized (this) {
-            if (answerSocket == null) {
+            s = answerSockets[side.ordinal()];
+            if (s == null) {
                 try {
-                    answerSocket = new DatagramSocket(port);
-                    answerSocket.setSoTimeout(200);
-                    answerSocket.setReceiveBufferSize(1024 * 1024);
+                    // S-LINK-2: on this side's address of this PC only (parked while there is no Tailscale address,
+                    // opened there when it comes)
+                    s = PeerSocket.onSide(side, port, own, a -> {
+                        a.setSoTimeout(200);
+                        a.setReceiveBufferSize(1024 * 1024);
+                    });
                 } catch (IOException e) {
                     return false; // the link has the port (or something else does): again shortly
                 }
-                if (paused) { // the link asked for the port while this one was being opened
-                    closeAnswerSocket();
+                if (paused(side)) { // the link asked for the port while this one was being opened
+                    s.close();
                     return false;
                 }
+                answerSockets[side.ordinal()] = s;
             }
-            s = answerSocket;
         }
         byte[] buf = new byte[1200];
         DatagramPacket packet = new DatagramPacket(buf, buf.length);
-        while (running && !paused) {
+        while (running && !paused(side)) {
             try {
                 packet.setLength(buf.length);
                 s.receive(packet);

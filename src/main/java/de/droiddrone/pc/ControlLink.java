@@ -485,7 +485,7 @@ public class ControlLink {
 
     /**
      * 1.0.56: the address the link's sockets bind to (call before start): the virtual fleet's pilot PC, on a loopback
-     * address of its own, answers from it. Null (the default): every address, as a real PC.
+     * address of its own, answers from it. Null (the default): chosen by the peer (S-LINK-2, {@link LinkPlace}).
      */
     public void setLocalAddress(InetAddress address) {
         localAddress = address;
@@ -493,19 +493,31 @@ public class ControlLink {
 
     private InetAddress localAddress;
 
+    /** S-LINK-2: where this PC's Tailscale address is read (call before start); this PC's own adapters by default. */
+    public void setOwnTailscale(OwnTailscale own) {
+        ownTailscale = own;
+    }
+
+    private OwnTailscale ownTailscale = OwnTailscale.pc();
+
+    /** The link socket's options, on every socket it opens (a reopen's on a new address too). */
+    private static void setUp(DatagramSocket s) throws IOException {
+        s.setReceiveBufferSize(UdpCommon.packetLength * 300);
+        // room for a burst (config, requests, pings and a stick frame in the same moment): with one packet's
+        // worth, the second packet in a tick is dropped by the socket, not delayed
+        s.setSendBufferSize(64 * 1024);
+        s.setTrafficClass(0x10);
+    }
+
     public void start() throws IOException {
-        socket = localAddress == null ? new DatagramSocket(localPort) : new DatagramSocket(localPort, localAddress);
+        // S-LINK-2: bound by the peer, never on every address - a phone or PC on Tailscale on this PC's own Tailscale
+        // address (parked, nothing sent, while there is none: "No Tailscale", opened there when it comes), this PC's
+        // own (the virtual fleet, the test bench) on loopback; any other address is refused (LinkPlace.NotTailscale)
+        PeerSocket s = localAddress != null ? PeerSocket.at(localAddress, localPort, ControlLink::setUp)
+                : PeerSocket.forPeer(remoteIp, localPort, ownTailscale, ControlLink::setUp);
+        socket = s;
+        s.onMoved(this::onSocketMoved);
         if (localPort == lastClosedPort) lastClosedPort = -1; // this port is a live session of this PC again
-        try {
-            socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
-            // room for a burst (config, requests, pings and a stick frame in the same moment): with one packet's
-            // worth, the second packet in a tick is dropped by the socket, not delayed
-            socket.setSendBufferSize(64 * 1024);
-            socket.setTrafficClass(0x10);
-        } catch (IOException | RuntimeException e) {
-            socket.close(); // or the port stays taken and the next CONNECT fails
-            throw e;
-        }
         udpSender = new UdpSender(socket);
         udpSender.connect(remoteIp, remotePort);
         receiverBuffer = new ReceiverBuffer(udpSender, false, key, key);
@@ -517,7 +529,7 @@ public class ControlLink {
         } else if (spectatorsEnabled) {
             try {
                 host = new SpectatorHost(key, spectatorsAllowed, socket, () -> getState() == State.READY, this::getPing,
-                        msg -> events.accept(msg), this::spectatorJoined, localAddress); // a new spectator starts at a key frame
+                        msg -> events.accept(msg), this::spectatorJoined); // a new spectator starts at a key frame
             } catch (IOException e) {
                 log("Spectators can't watch: " + e); // flying works as before
             }
@@ -527,6 +539,19 @@ public class ControlLink {
         startThread(this::bufferRun, "bufferThread", Thread.NORM_PRIORITY);
         startThread(this::pingRun, "pingThread", Thread.NORM_PRIORITY);
         startThread(this::sessionRun, "sessionThread", Thread.NORM_PRIORITY);
+    }
+
+    /**
+     * S-LINK-2: this PC has no Tailscale address and the link's peer is on Tailscale - its socket is parked, nothing goes
+     * out, and it opens on the address when it comes.
+     */
+    public boolean waitsForTailscale() {
+        return socket instanceof PeerSocket p && !p.isClosed() && p.waitsForTailscale();
+    }
+
+    /** S-LINK-2: the link's socket was opened anew where it belongs (the address watch's thread): said in the log. */
+    private void onSocketMoved(LinkPlace at) {
+        events.accept(at.parked() ? LinkPlace.NO_TAILSCALE + " on this PC: the link waits for it." : "Tailscale is up: the link goes on.");
     }
 
     private void startThread(Runnable run, String name, int priority) {
@@ -709,9 +734,9 @@ public class ControlLink {
 
     /**
      * 1.0.71 (a reader of the link code, 2026-11-20): this link flew the phone and lost it moments ago - the pilot the
-     * phone names may be this very PC at its old address. Without Tailscale this PC's address can change under a
-     * session (another network, a router's new mapping), and the phone then names the old one, which this PC can't
-     * know as its own: it turned spectator of itself for good, the drone without sticks. For RECENT_SESSION_MS after
+     * phone names may be this very PC at its old address. This PC's Tailscale address can change under a session (the
+     * link follows it, S-LINK-2), and the phone then names the old one, which this PC no longer has as its own: before,
+     * it turned spectator of itself for good, the drone without sticks. For RECENT_SESSION_MS after
      * the loss it keeps asking; the phone lets it in by its session ids once the old address is silent (pc.55,
      * SessionGate.pilotMoved). Another PC that really flies is watched once that time is up.
      */

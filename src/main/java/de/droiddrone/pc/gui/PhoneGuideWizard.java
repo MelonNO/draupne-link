@@ -683,7 +683,7 @@ final class PhoneGuideWizard {
             ControlLink[] linkRef = new ControlLink[1];
             de.droiddrone.pc.video.VideoPipeline video = new de.droiddrone.pc.video.VideoPipeline(preview,
                     () -> linkRef[0] == null ? -1 : linkRef[0].getPing());
-            main.nameService().pause(); // the link takes the port
+            main.nameService().pause(config.getIp()); // the link takes the port on its peer's side
             try {
                 connection = Connection.open(config, video);
                 ControlLink l = connection.getLink();

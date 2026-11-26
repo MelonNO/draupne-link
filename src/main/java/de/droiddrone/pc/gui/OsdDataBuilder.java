@@ -120,6 +120,8 @@ final class OsdDataBuilder {
     /** I-004: PILOT UAV unanswered this long: the usual reasons under CONNECTING. */
     static final long UNANSWERED_MS = 8000;
     static final String UNANSWERED = "DRAUPNE FLIGHT OPEN? TAILSCALE? KEY?";
+    /** S-LINK-2: this PC has no Tailscale address - the link sends nothing until it has one. */
+    static final String NO_TAILSCALE = "NO TAILSCALE ON THIS PC";
 
     /**
      * I-004: the line under CONNECTING while PILOT UAV has waited more than UNANSWERED_MS for a phone that has not

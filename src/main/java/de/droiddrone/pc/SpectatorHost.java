@@ -100,15 +100,11 @@ final class SpectatorHost implements AutoCloseable {
         this(key, allowed, linkSocket, flying, ping, events, () -> {});
     }
 
-    /** @param joined a spectator joined: it needs a key frame to start its picture (asked of the phone) */
+    /**
+     * @param joined a spectator joined: it needs a key frame to start its picture (asked of the phone)
+     */
     SpectatorHost(String key, boolean allowed, DatagramSocket linkSocket, BooleanSupplier flying, IntSupplier ping,
                   Consumer<String> events, Runnable joined) throws IOException {
-        this(key, allowed, linkSocket, flying, ping, events, joined, null);
-    }
-
-    /** @param bind the stream socket's address (the link's, 1.0.56: the virtual pilot PC's loopback one), null: any */
-    SpectatorHost(String key, boolean allowed, DatagramSocket linkSocket, BooleanSupplier flying, IntSupplier ping,
-                  Consumer<String> events, Runnable joined, InetAddress bind) throws IOException {
         this.joined = joined;
         this.key = key;
         this.allowed = allowed;
@@ -116,8 +112,8 @@ final class SpectatorHost implements AutoCloseable {
         this.flying = flying;
         this.ping = ping;
         this.events = events;
-        socket = bind == null ? new DatagramSocket(0) : new DatagramSocket(0, bind);
-        socket.setSendBufferSize(1 << 18);
+        // S-LINK-2: the stream's socket beside the link's - on its address (the link's peer's side), following it
+        socket = PeerSocket.beside(linkSocket, 0, s -> s.setSendBufferSize(1 << 18));
         start(this::sendLoop, "spectatorSend");
         start(this::receiveLoop, "spectatorReceive");
     }

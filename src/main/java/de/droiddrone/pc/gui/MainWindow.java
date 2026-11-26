@@ -1907,7 +1907,7 @@ public class MainWindow extends JFrame {
         }
         if (!watch) dropQueuedFor(target.name()); // 1.0.64: PILOT UAV wins over a mode still queued in FLEET
         int port = config.getPort();
-        nameService.pause(); // the link takes the port, and answers name queries itself meanwhile
+        nameService.pause(target.ip()); // the link takes the port on its peer's side, and answers name queries there meanwhile
         boolean wantVideo = !"false".equalsIgnoreCase(config.getString(VIDEO_KEY));
         ControlLink[] linkRef = new ControlLink[1];
         // 1.0.64: the last connection's pipeline ends on its own thread - never two of them on the one view
@@ -4096,6 +4096,8 @@ public class MainWindow extends JFrame {
      * the sticks still go out.
      */
     private String osdLinkHint(RcSession session) {
+        Connection c = connection;
+        if (c != null && c.getLink().waitsForTailscale()) return OsdDataBuilder.NO_TAILSCALE; // S-LINK-2: nothing goes out
         return OsdDataBuilder.linkHint(shownPhoneState(), pilotWait(connection), session != null && session.isRcEnabled());
     }
 
@@ -5993,6 +5995,8 @@ public class MainWindow extends JFrame {
         }
         if (video == null) {
             videoView.setIdleText("Video off (video=false in settings)");
+        } else if (state != ControlLink.State.READY && link.waitsForTailscale()) {
+            videoView.setIdleText(stateText); // S-LINK-2: "No Tailscale on this PC: the link waits for it."
         } else if (state == ControlLink.State.SPECTATOR_WAITING) {
             videoView.setIdleText("Spectator: waiting for the pilot PC...");
         } else if (state == ControlLink.State.SPECTATING && !video.hasStream()) {
@@ -6021,7 +6025,9 @@ public class MainWindow extends JFrame {
                 setPill(text, text.startsWith("LINK READY") ? Theme.OK : Theme.BAD, Theme.BG);
             }
             case SPECTATING, SPECTATOR_WAITING -> {
-                if (link.isWatchOnly()) {
+                if (link.waitsForTailscale()) {
+                    setPill(NO_TAILSCALE, Theme.WARN, Theme.BG); // S-LINK-2: nothing goes out until it comes
+                } else if (link.isWatchOnly()) {
                     setPill(state == ControlLink.State.SPECTATING ? "SPECTATING" : "SPECTATOR", state == ControlLink.State.SPECTATING
                             ? Theme.ACCENT : Theme.WARN, Theme.BG);
                 } else {
@@ -6035,8 +6041,8 @@ public class MainWindow extends JFrame {
                 FcTelemetry.PhonePower said = link.getTelemetry().getPhonePower();
                 boolean lost = !link.isSpectator() && !link.isWatchOnly() && link.wasEverReady()
                         && !sleepsAsMeant(state, power.awaitingWake, power.wanted, said == null ? -1 : said.mode());
-                String text = waitingPill(state, !link.isSpectator() && power.awaitingWake, lost);
-                setPill(text, text.equals(LINK_LOST) ? Theme.BAD : Theme.WARN, Theme.BG);
+                String text = waitingPill(state, !link.isSpectator() && power.awaitingWake, lost, link.waitsForTailscale());
+                setPill(text, text.equals(LINK_LOST) || lost && text.equals(NO_TAILSCALE) ? Theme.BAD : Theme.WARN, Theme.BG);
             }
         }
         refreshLostDrone(link, state);
@@ -6063,12 +6069,19 @@ public class MainWindow extends JFrame {
      * through the countdown to its check-in).
      */
     static String waitingPill(ControlLink.State state, boolean awaitingWake, boolean lost) {
+        return waitingPill(state, awaitingWake, lost, false);
+    }
+
+    /** S-LINK-2: NO TAILSCALE first - while this PC has no Tailscale address nothing goes out (red once the link was up). */
+    static String waitingPill(ControlLink.State state, boolean awaitingWake, boolean lost, boolean noTailscale) {
+        if (noTailscale) return NO_TAILSCALE;
         if (awaitingWake) return "WAKING";
         if (lost) return LINK_LOST; // F-074 (F-019's rule): CONNECTING until the first link, LINK LOST after one was up
         return state == ControlLink.State.CONNECTING ? "CONNECTING" : "WAITING FOR PHONE";
     }
 
     static final String LINK_LOST = "LINK LOST";
+    static final String NO_TAILSCALE = "NO TAILSCALE";
 
     /**
      * F-074: the controller card's FC line with no fresh status - NO STATUS YET until this connection's first link and

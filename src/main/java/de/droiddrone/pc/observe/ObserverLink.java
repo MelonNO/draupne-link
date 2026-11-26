@@ -116,9 +116,11 @@ public final class ObserverLink implements AutoCloseable {
         onPacket(d, len);
     }
 
+    /** @throws de.droiddrone.pc.LinkPlace.NotTailscale for a phone at an address neither loopback nor Tailscale (S-LINK-2) */
     public void start() throws IOException {
-        socket = new DatagramSocket();
-        socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
+        // S-LINK-2: on this PC's address on the phone's side (its Tailscale address; parked while there is none)
+        socket = de.droiddrone.pc.PeerSocket.forPeer(ip, 0, de.droiddrone.pc.OwnTailscale.pc(),
+                s -> s.setReceiveBufferSize(UdpCommon.packetLength * 300));
         running = true;
         Thread r = new Thread(this::receiveLoop, "observe-" + phone);
         r.setDaemon(true);

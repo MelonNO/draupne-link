@@ -23,6 +23,9 @@ import static de.droiddrone.common.Log.log;
  * {@link SpectatorHost}: the threads that hand it something (an observed phone's receive thread) only copy into a
  * queue, and only while someone watches; sending runs on a thread of its own below normal priority, from a socket of
  * its own.
+ * <p>
+ * S-LINK-2: a socket per side - this PC's Tailscale address for spectators on Tailscale, loopback for this PC's own -
+ * each spectator served from the one on its side.
  */
 public final class MirrorHost implements AutoCloseable {
     public static final int MAX_VIEWERS = 4;
@@ -37,18 +40,22 @@ public final class MirrorHost implements AutoCloseable {
     private static final class Viewer {
         final InetAddress ip;
         final int port;
+        /** The socket on its side (S-LINK-2). */
+        final DatagramSocket via;
         volatile long lastHeard = MonoClock.ms();
 
-        Viewer(InetAddress ip, int port) {
+        Viewer(InetAddress ip, int port, DatagramSocket via) {
             this.ip = ip;
             this.port = port;
+            this.via = via;
         }
     }
 
     private final String key;
     private final BooleanSupplier allowed;
     private final Consumer<String> events;
-    private final DatagramSocket socket;
+    /** S-LINK-2: one socket per side (loopback, this PC's Tailscale address); a fixed address: that one alone. */
+    private final PeerSocket[] sockets;
     private final ArrayBlockingQueue<byte[]> outgoing = new ArrayBlockingQueue<>(2048);
     private volatile Viewer[] viewers = new Viewer[0];
     private volatile boolean running = true;
@@ -70,15 +77,29 @@ public final class MirrorHost implements AutoCloseable {
         this(key, allowed, events, null);
     }
 
-    /** @param bind the socket's address (the virtual fleet's pilot PC: its loopback one), null: any */
+    /** @param bind the socket's address (the virtual fleet's pilot PC: its loopback one), null: one per side */
     public MirrorHost(String key, BooleanSupplier allowed, Consumer<String> events, InetAddress bind) throws IOException {
+        this(key, allowed, events, bind, OwnTailscale.pc());
+    }
+
+    MirrorHost(String key, BooleanSupplier allowed, Consumer<String> events, InetAddress bind, OwnTailscale own) throws IOException {
         this.key = key;
         this.allowed = allowed;
         this.events = events;
-        socket = bind == null ? new DatagramSocket(0) : new DatagramSocket(0, bind);
-        socket.setSendBufferSize(1 << 18);
+        PeerSocket.Setup setup = s -> s.setSendBufferSize(1 << 18);
+        if (bind != null) {
+            sockets = new PeerSocket[]{PeerSocket.at(bind, 0, setup)};
+        } else {
+            PeerSocket loopback = PeerSocket.onSide(LinkPlace.Side.LOOPBACK, 0, own, setup);
+            try {
+                sockets = new PeerSocket[]{loopback, PeerSocket.onSide(LinkPlace.Side.TAILSCALE, 0, own, setup)};
+            } catch (IOException | RuntimeException e) {
+                loopback.close();
+                throw e;
+            }
+        }
         start(this::sendLoop, "mirrorSend");
-        start(this::receiveLoop, "mirrorReceive");
+        for (PeerSocket s : sockets) start(() -> receiveLoop(s), "mirrorReceive");
     }
 
     private void start(Runnable run, String name) {
@@ -89,8 +110,13 @@ public final class MirrorHost implements AutoCloseable {
         t.start();
     }
 
-    public int port() {
-        return socket.getLocalPort();
+    /** S-LINK-2: the socket for a spectator at this address - on its side; null when none is (it gets no answer). */
+    private PeerSocket socketFor(InetAddress ip) {
+        for (PeerSocket s : sockets) {
+            LinkPlace at = s.bound();
+            if (at != null && at.side == LinkPlace.sideOf(ip)) return s;
+        }
+        return null;
     }
 
     public int count() {
@@ -145,6 +171,8 @@ public final class MirrorHost implements AutoCloseable {
         if (k == null || !k.equals(key)) return;
         InetAddress ip = packet.getAddress();
         int port = packet.getPort();
+        PeerSocket socket = socketFor(ip);
+        if (socket == null) return;
         byte[] answer;
         if (!allowed.getAsBoolean()) {
             answer = Mirror.welcome(0, Mirror.REFUSED_OFF);
@@ -154,7 +182,7 @@ public final class MirrorHost implements AutoCloseable {
                 synchronized (this) {
                     v = find(ip, port);
                     if (v == null && viewers.length < MAX_VIEWERS) {
-                        v = new Viewer(ip, port);
+                        v = new Viewer(ip, port, socket);
                         List<Viewer> list = new ArrayList<>(List.of(viewers));
                         list.add(v);
                         viewers = list.toArray(new Viewer[0]);
@@ -166,7 +194,7 @@ public final class MirrorHost implements AutoCloseable {
             }
             if (v == null) return; // full: it keeps asking
             v.lastHeard = MonoClock.ms();
-            answer = Mirror.welcome(port(), 0);
+            answer = Mirror.welcome(socket.getLocalPort(), 0);
         }
         try {
             if (via != null) via.send(new DatagramPacket(answer, answer.length, ip, port));
@@ -237,7 +265,7 @@ public final class MirrorHost implements AutoCloseable {
         }
     }
 
-    private void receiveLoop() {
+    private void receiveLoop(DatagramSocket socket) {
         byte[] buf = new byte[64];
         DatagramPacket packet = new DatagramPacket(buf, buf.length);
         while (running) {
@@ -273,7 +301,7 @@ public final class MirrorHost implements AutoCloseable {
 
     private void send(byte[] p, Viewer v) {
         try {
-            socket.send(new DatagramPacket(p, p.length, v.ip, v.port));
+            v.via.send(new DatagramPacket(p, p.length, v.ip, v.port));
         } catch (IOException e) {
             // gone off the network: it times out
         }
@@ -296,6 +324,6 @@ public final class MirrorHost implements AutoCloseable {
         running = false;
         for (Viewer v : viewers) send(new byte[]{Mirror.BYE}, v);
         viewers = new Viewer[0];
-        socket.close();
+        for (PeerSocket s : sockets) s.close();
     }
 }

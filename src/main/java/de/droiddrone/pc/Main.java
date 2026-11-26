@@ -255,7 +255,7 @@ public class Main {
         Connection connection;
         try {
             connection = Connection.open(config);
-        } catch (IllegalArgumentException | IllegalStateException e) {
+        } catch (IllegalArgumentException | IllegalStateException | LinkPlace.NotTailscale e) {
             System.err.println(e.getMessage());
             System.exit(1);
             return;

@@ -94,6 +94,10 @@ public class Connection {
 
     /** The log's line for the link's state. */
     public static String describe(ControlLink link, ControlLink.State state) {
+        // S-LINK-2: no Tailscale address on this PC - nothing goes out until it comes
+        if (state != ControlLink.State.READY && state != ControlLink.State.CLOSED && link.waitsForTailscale()) {
+            return LinkPlace.NO_TAILSCALE + " on this PC: the link waits for it.";
+        }
         return switch (state) {
             case CONNECTING -> link.isWatchOnly() ? "Waiting for the pilot PC... (connected? Allow spectators on?)"
                     // F-074: the questions until this connection's first link; a link that was up is lost

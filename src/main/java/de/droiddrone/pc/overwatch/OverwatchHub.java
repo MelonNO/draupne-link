@@ -13,7 +13,6 @@ import java.awt.image.DataBufferInt;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.DatagramPacket;
-import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -140,7 +139,8 @@ public final class OverwatchHub implements AutoCloseable {
     private volatile boolean running;
     private volatile Listener listener;
     private Thread thread;
-    private DatagramSocket socket;
+    /** S-LINK-2: the answers' sockets, one per side (this PC's Tailscale address, loopback for the virtual fleet). */
+    private de.droiddrone.pc.SideSockets socket;
     private final Consumer<byte[]> sendHook; // tests: what would be sent, instead of the socket
     private long dropped;
 
@@ -166,7 +166,7 @@ public final class OverwatchHub implements AutoCloseable {
 
     public synchronized void start() throws IOException {
         if (running) return;
-        if (sendHook == null) socket = new DatagramSocket();
+        if (sendHook == null) socket = new de.droiddrone.pc.SideSockets(de.droiddrone.pc.OwnTailscale.pc(), null);
         running = true;
         thread = new Thread(this::run, "overwatch");
         thread.setDaemon(true);
@@ -1065,7 +1065,7 @@ public final class OverwatchHub implements AutoCloseable {
             sendHook.accept(p);
             return;
         }
-        DatagramSocket sock = socket;
+        de.droiddrone.pc.SideSockets sock = socket;
         if (sock == null || s.from == null) return;
         try {
             sock.send(new DatagramPacket(p, p.length, s.from, s.port));
