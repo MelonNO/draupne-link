@@ -728,6 +728,22 @@ on (before, such first packets were dropped too). Tests:
 `...aPacketTakenBeforeAStartOverIsStillKnownAfterANumber256ApartIsTaken` (the first and third fail on the code
 before). Runs: the link fuzz 30 min, then 4 h on the newest code (`20261125-073100-protocol-seed7`, 108 million
 inputs, no rule broken); the phone app pc.62-beta: the emulator set 12 of 12 and the fourth bench night, all passed.
+**S-LINK-2 - The PC listens on its Tailscale address only (2026-11-25 - 26, a code read; built on the maintainer's
+answer 2026-11-26).** Since pc.58-beta the phone app talks to Tailscale addresses only (Q-006); the PC still opened
+its sockets for phones and other PCs on every address it had. Now each is opened by its peer (`LinkPlace`): a phone
+or PC on Tailscale on this PC's own Tailscale address, found by the adapter that says Tailscale (`OwnTailscale`, a
+look every 500 ms, 2 - 4 ms each), the PC's own peers (made-up drones, DEMO, the bench, an emulator's forwarded
+port) on loopback, any other address refused ("Not a Tailscale address"). With no Tailscale address a socket is
+parked on loopback, takes and sends nothing, and the header says NO TAILSCALE; when the address comes, changes or
+goes, the socket is opened anew where it belongs and a waiting receive goes on on the new one (`PeerSocket`, on
+`LinkSocket`). Kept to one address by Windows' strong host model (not with Internet Connection Sharing, Hyper-V's
+forwarding, or the PC as a Tailscale subnet router or exit node). Left on every address: the phone app's download
+page (TCP, the public APK) and the STANAG output. Tests: `LinkPlaceTest` (a socket bound to 127.0.0.1 takes nothing
+sent to 127.0.0.2; parked, comes, changes, goes; ports kept), `OwnTailscaleTest`, `TailscaleLinkTest` (the link
+waits, starts and follows; a LAN peer gets the words and holds no port), `PcSocketsSourcesTest` (no socket in the
+app's code opened outside `LinkPlace` but the fleet's, the encoder's and the download page's),
+`NoTailscaleWordsTest`. Fast tests 2,629 of 2,629; the link fuzz 30 min (`20261126-142144-protocol-seed11`,
+9,347,632 inputs) passed.
 
 ## Fixed (2026-11-19, on `beta`)
 
