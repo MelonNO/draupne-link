@@ -322,6 +322,10 @@ class PhoneHardeningScenario {
             PhoneStore.Backup b = PhoneStore.backup(phone.shell("dumpsys backup"), installed);
             say("Android's backup on this phone: " + (b.enabled() == null ? "its state not said" : b.enabled() ? "ON" : "off")
                     + (Boolean.FALSE.equals(b.enabled()) ? " - so nothing would go now anyway; the flags above are what holds when it is on" : "") + ".");
+            if (!b.atInstall().isEmpty()) {
+                say("Android's backup log names DRAUPNE Flight " + b.atInstall().size() + " time(s) only where it looked for something to put back at its install"
+                        + " (nothing held or sent): " + String.join(" | ", b.atInstall().subList(0, Math.min(4, b.atInstall().size()))) + ".");
+            }
             check(b.lines().isEmpty(), "Android's backup holds and queues nothing of DRAUPNE Flight" + (b.lines().isEmpty() ? " (dumpsys backup names it nowhere)"
                     : ": " + String.join(" | ", b.lines().subList(0, Math.min(5, b.lines().size())))));
             // ---- the gallery's index

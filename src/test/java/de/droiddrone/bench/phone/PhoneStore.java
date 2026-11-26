@@ -57,13 +57,18 @@ final class PhoneStore {
     /**
      * What {@code dumpsys backup} says of these apps.
      *
-     * @param enabled whether Android's backup is on for the phone's user; null when it does not say
-     * @param lines   every line that names one of the apps (a participant, one backed up, one queued)
+     * @param enabled   whether Android's backup is on for the phone's user; null when it does not say
+     * @param lines     every line that names one of the apps (a participant, one backed up, one queued, any event of
+     *                  Android's backup log but the two below), an event's line with its time and words
+     * @param atInstall the backup log's "Invoked restore at install" and "Skip restore at install" of the apps: Android
+     *                  looking for something to put back when the app was installed - nothing held or sent; said, not a
+     *                  problem (Android 15 lists them, 2026-11-26)
      */
-    record Backup(Boolean enabled, List<String> lines) {
+    record Backup(Boolean enabled, List<String> lines, List<String> atInstall) {
     }
 
     private static final Pattern ENABLED = Pattern.compile("Backup Manager is (enabled|disabled)");
+    private static final Pattern RESTORE_AT_INSTALL = Pattern.compile("- (Invoked|Skip) restore at install\\s*$");
 
     /** Only the lines that name the apps are kept: the rest of what Android says there (other apps, accounts) is not the bench's. */
     static Backup backup(String dumpsysBackup, Collection<String> apps) {
@@ -73,16 +78,30 @@ final class PhoneStore {
         List<Pattern> names = new ArrayList<>();
         // a whole name: de.droiddrone.flight.pc is not found inside de.droiddrone.flight.pc.bench, nor the other way round
         for (String app : apps) names.add(Pattern.compile("(?<![\\w.])" + Pattern.quote(app) + "(?![\\w.])"));
-        List<String> lines = new ArrayList<>();
+        List<String> lines = new ArrayList<>(), atInstall = new ArrayList<>();
+        boolean inLog = false;
+        String event = null; // the backup log's event a "Package:" line under it belongs to
         for (String line : text.split("\\R")) {
+            String l = line.trim();
+            if (l.startsWith("START OF BACKUP MANAGER MONITOR EVENTS")) { inLog = true; event = null; continue; }
+            if (l.startsWith("END OF BACKUP MANAGER MONITOR EVENTS")) { inLog = false; event = null; continue; }
+            if (inLog && l.startsWith("[")) event = l;
+            boolean named = false;
             for (Pattern n : names) {
                 if (n.matcher(line).find()) {
-                    lines.add(line.trim());
+                    named = true;
                     break;
                 }
             }
+            if (!named) continue;
+            if (inLog && event != null && !l.startsWith("[")) {
+                String said = event + " " + l;
+                if (RESTORE_AT_INSTALL.matcher(event).find()) atInstall.add(said); else lines.add(said);
+            } else {
+                lines.add(l);
+            }
         }
-        return new Backup(enabled, lines);
+        return new Backup(enabled, lines, atInstall);
     }
 
     /** The number {@code grep -c} printed; -1 when it printed none. */

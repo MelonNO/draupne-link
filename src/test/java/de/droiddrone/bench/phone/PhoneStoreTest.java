@@ -95,6 +95,38 @@ class PhoneStoreTest {
     }
 
     @Test
+    void androidsLookForSomethingToPutBackAtInstallIsSaidNotAProblem() {
+        // Android 15's dumpsys backup (the bench's draupne-a35, 2026-11-26): its log of events, after the queues
+        String log = """
+                Backup Manager is disabled / setup complete / not pending init
+                Ever backed up: 0
+                Pending key/value backup: 32
+                Full backup queue:162
+                START OF BACKUP MANAGER MONITOR EVENTS
+                [2026-11-22 19:14:17.570] - Invoked restore at install
+                	Package: de.droiddrone.flight.pc.bench
+                [2026-11-22 19:14:17.571] - Skip restore at install
+                	Package: de.droiddrone.flight.pc.bench
+                [2026-11-22 19:23:53.572] - Invoked restore at install
+                	Package: de.droiddrone.flight.pc
+                [2026-11-22 19:23:53.573] - Skip restore at install
+                	Package: de.droiddrone.flight.pc
+                END OF BACKUP MANAGER MONITOR EVENTS
+                """;
+        PhoneStore.Backup b = PhoneStore.backup(log, List.of(RELEASED, BENCH));
+        assertEquals(Boolean.FALSE, b.enabled());
+        assertEquals(List.of(), b.lines(), "a look at install that put nothing back holds nothing of the app");
+        assertEquals(4, b.atInstall().size());
+        assertTrue(b.atInstall().get(1).startsWith("[2026-11-22 19:14:17.571] - Skip restore at install"), b.atInstall().get(1));
+        // any other event that names the app is a problem, said with its time and words
+        String other = log.replace("[2026-11-22 19:23:53.573] - Skip restore at install", "[2026-11-26 10:00:00.000] - Full backup started");
+        assertEquals(List.of("[2026-11-26 10:00:00.000] - Full backup started Package: " + RELEASED), PhoneStore.backup(other, List.of(RELEASED, BENCH)).lines());
+        // the app in a queue after the log is still found
+        String queuedAfter = log + "Full backup queue:1\n    1732400000000 : " + RELEASED + "\n";
+        assertEquals(List.of("1732400000000 : " + RELEASED), PhoneStore.backup(queuedAfter, List.of(RELEASED, BENCH)).lines());
+    }
+
+    @Test
     void theGallerysAnswerIsCountedAndOnlyDraupnesEntriesKept() {
         assertEquals(42, PhoneStore.count("42\n"));
         assertEquals(0, PhoneStore.count("0"));
