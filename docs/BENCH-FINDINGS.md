@@ -695,7 +695,7 @@ frame taken that is not newer or past its lag limit, whole frames as sent, value
 Runs: `20261124-172200-protocol-seed1` (3 min, 862,171 inputs), `20261124-172813-protocol-seed2` (30 min, 9,876,556
 inputs, 5,485 a second). Found: **F-109** a numbered packet of 1 - 2 bytes, or a Connect cut inside its key, threw on
 the receive thread (both apps); **F-110** the PC counted a Connect answer before its check, so a damaged one could
-leave it at "reconnecting" until a restart; **F-111** (proposed, not in) after a short fade the PC's resends of
+leave it at "reconnecting" until a restart; **F-111** (below) after a short fade the PC's resends of
 commands the phone already took push the phone's buffer to start over and hand them on again - StartVideo or config
 again (the picture black about 2 s), ChangeCamera again (the other camera), RECORD again; the PC's buffer the same for
 the phone's VideoInitialFrame. Since then an answer that says it took the session by the Connect's id counts only
@@ -712,6 +712,22 @@ answers each Config again, so VERSION MISMATCH and its words stay; a phone that 
 comes up READY (`ControlLink`). Tests: `ControlLinkTest.aVersionAnswerWhileTheLinkIsUpChangesNothing`,
 `...aPhoneThatCantServeThisVersionIsAskedAgainEveryFiveSeconds`,
 `...oneVersionAnswerWhileConnectingThenTheConfigTakenBringsTheLinkUp` (the first and third fail on the code before).
+**F-111 - A packet sent again is acted on once (2026-11-24 - 26, the link fuzz; approved 2026-11-26).** On a link that
+loses the small receipts, the sender sends a packet again up to 8 times, about 125 ms apart. The receiving buffer
+(Common's `ReceiverBuffer`, both apps) counted each copy as a sign the two sides' numbers had drifted, started its
+numbering over at the ninth and handed the packet on a second time. Now it remembers the last 256 packets it handed
+on, in the order taken (length and CRC32 in fixed arrays, nothing made per packet): a copy is acknowledged again,
+never handed on again, and does not count toward starting over; only a different packet under an old number does,
+mended at the ninth as before. A new session forgets the list. The first version kept each packet in the slot of
+its number's low byte; the 4-hour fuzz found a start-over 256 numbers away taking that slot (only with damaged
+packets), so the list is in the order taken. Cost: if a phone really starts its numbering over and the PC does not
+see it as a new session, a packet byte for byte the same as one of the last 256 taken is acknowledged but not acted
+on (before, such first packets were dropped too). Tests:
+`TransportRobustnessTest.theFarSidesResendsOfPacketsTakenAreAcknowledgedAndNotHandedOnAgain`,
+`...aRealRestartOfTheFarSidesNumberingIsStillMendedAtTheNinthPacket`,
+`...aPacketTakenBeforeAStartOverIsStillKnownAfterANumber256ApartIsTaken` (the first and third fail on the code
+before). Runs: the link fuzz 30 min, then 4 h on the newest code (`20261125-073100-protocol-seed7`, 108 million
+inputs, no rule broken); the phone app pc.62-beta: the emulator set 12 of 12 and the fourth bench night, all passed.
 
 ## Fixed (2026-11-19, on `beta`)
 
