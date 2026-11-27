@@ -67,15 +67,21 @@ public final class WakeIntent {
             shown = false;
         }
 
-        /** The screen came up (onResume). */
-        public void resumed() {
+        /**
+         * The screen is in front and has the input (onWindowFocusChanged with focus): the showing is on the phone's
+         * screen now. A resume is not that: Android can resume the screen while the display is still dark and then stop
+         * it once for the sleep - counted as shown, that stop cleared the flags and the lock screen stayed in front of
+         * the app (the bench's night of 2026-11-27, Android's own log of the wake; F-113).
+         */
+        public void focused() {
             if (on) shown = true;
         }
 
         /**
          * The screen went (onStop).
          * @return true when the over-the-lock-screen flags are to be cleared now: the showing it was woken for is over.
-         *         Not before it was shown - a stop on the way (the screen still dark) keeps them for the showing.
+         *         Not before it was shown - a stop on the way (the screen still dark, no focus yet) keeps them for the
+         *         showing.
          */
         public boolean stopped() {
             if (!on || !shown) return false;

@@ -703,6 +703,23 @@ for an id among this PC's last eight tries, and the fuzz checks that too. Not co
 the state machines of spectators, mirror, observer, names and fleet (only their readers), threads racing each other.
 The link has no integrity check of its own beyond UDP's and WireGuard's: a damaged mode byte is another command.
 
+**F-113 - After a wake the phone app stays in front of the lock screen (2026-11-27, the bench's fifth night).** When
+the PC wakes the phone (PILOT UAV), or the app opens itself again, its screen comes over the lock screen with the
+display lit, for that one showing; once that screen is left, the lock screen is in front again (since 2026-11-22). In
+round 12 of the night's 19 with the phone app in the emulator, the phone showed its lock screen instead of the app;
+the link, the picture and the wake were as in every other round. Android's own log of that wake (the emulator's
+events buffer): the screen resumed while the display was still dark, the display lit 16 ms later, and Android
+stopped the screen once for the sleep 45 ms after the resume. The app took the resume for the showing, so that stop
+ended it: show-when-locked was cleared, and the lock screen came back in front until the next sleep. In the bench's
+phone logs since 2026-11-22, 35 of 254 wakes ended their showing within half a second (Android 8 to 15, and the real
+phone). In the night's 18 good wakes the screen got the input ("Focus entering ... MainActivity"); in round 12's it
+never did. Now the showing counts only once the screen's window has the input (`onWindowFocusChanged`), not at its
+resume; a stop before that keeps the flags (`WakeIntent.OverLock`, `MainActivity`; phone app pc.63-beta). Cost: a
+screen that never gets the input (something of the system's over it) stays over the lock screen until a showing that
+does is left, as every showing did before 2026-11-22. Tests:
+`WakeIntentTest.aStopForTheSleepBeforeTheScreenHadTheInputKeepsTheShowing`, and its wiring test (fails on the code
+before).
+
 **F-112 - The phone's version answer counts only while the link connects (2026-11-25, a code read).** The phone sends
 VersionMismatch in answer to a Config it can't take. The PC took it at any time, also with the link READY, and then
 sent no stick frames and stopped asking until DISCONNECT. Now it counts only while this session's Config is not taken

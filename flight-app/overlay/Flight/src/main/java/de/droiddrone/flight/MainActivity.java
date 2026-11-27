@@ -1195,7 +1195,6 @@ public class MainActivity extends Activity {
         powerLookLow = false; // the line above undid it; updateUi dims again if the mode wants
         updateUi();
         updateArmedTouch(); // Q-004: armed as the screen comes up (the app opened itself again in flight): locked
-        overLock.resumed(); // a WAKE's showing is on the screen now (WakeIntent.OverLock)
         uiTimer = new Timer();
         TimerTask tt = new TimerTask() {
             private int ticks;
@@ -1357,6 +1356,17 @@ public class MainActivity extends Activity {
     @Override
     protected void onStart(){
         super.onStart();
+    }
+
+    /**
+     * The window has the input: a WAKE's showing is on the phone's screen now (WakeIntent.OverLock). Not onResume:
+     * Android can resume this screen while the display is still dark and stop it once for the sleep right after; taken
+     * as shown, that stop put the lock screen back in front of the app (F-113).
+     */
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) overLock.focused();
     }
 
     /**
