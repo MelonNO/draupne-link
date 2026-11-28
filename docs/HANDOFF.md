@@ -4,42 +4,43 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-23: the test week under way on `beta`; latest release 1.0.71 + phone pc.55, not flown)
+## Where things stand (2026-11-28: the test week merged with 1.0.72 and taken to `main`; latest release 1.0.72, PC only; not flown)
 
-- **Now: the test week** (from 2026-11-21 evening, a week on `beta`): readers of the code, the test bench,
-  Betaflight as a program, and a rig for real hardware. On `beta` as **1.0.72 (unreleased, on beta)** in
-  [CHANGELOG](CHANGELOG.md): fixes F-059 - F-083 ([BENCH-FINDINGS.md](BENCH-FINDINGS.md)), the maintainer's answers
-  Q-001 - Q-004, Q-006 and Q-009 built, improvements I-002 - I-011, the hardware rig. `build.gradle` still says
-  1.0.71. **Nothing of the week is released, and `main` is untouched** (1.0.71).
-- **Approved by the maintainer:** F-059 - F-064, F-066 - F-079, F-082, F-083 (F-065 is notes; F-081 was measured,
-  nothing to change) and I-002 - I-012 (I-012's phone part became Q-009, the PC-only way). **F-080: "find a proper
-  fix"** - its cause is being looked for; the red ESC row built meanwhile stays. **Still waiting for the
-  maintainer's look:** Q-001 - Q-004, Q-006 and Q-009 as built. The verdicts are kept on the week's own page, not in
-  the repo. To `main` only when every item has its answer and the maintainer says so.
-- **Phone app 2.3.0-pc.59-beta** (versionCode 2030059; pc.56-beta: F-066 - F-070d and Q-004; pc.57-beta: F-076;
-  pc.58-beta: Tailscale only, Q-006; pc.59-beta: F-083): sideloaded only, never published. `ApkShare` stays pinned
-  to the released **pc.55**: the PC offers pc.55, and UPDATE PHONE APP installs pc.55. pc.55 on the drones' phones
-  comes back after a crash in flight only behind a screen lock (F-083); the maintainer says each has one.
-- **What has met hardware** ([BENCH-RUNS.md](BENCH-RUNS.md)): the real phone (Android 15, the bench build) - every
-  phone scenario, the crash scenario on pc.59-beta with no screen lock and with a PIN, 8 hours over mobile data
-  (63 rounds, all whole but one while the phone was in the maintainer's hands). The real flight controller -
-  F-080 found there (battery in, props off), the stick rate measured (F-081: 12 ms, no queue), and with the battery
-  out the keeper's first run (no arm window) and `boardCap` (motor_output_limit 15 in all four PID profiles, saved).
-  The emulator on pc.58-beta: Android 8, 11, 13, 14 and 15, each 7 of 7. The window suite ran on the first night's
-  fixes (28 of 28), not yet on the afternoon's (F-077 - F-080, F-082, Q-009). **Not flown.**
+- **1.0.72** (2026-11-23, released from `main`, PC only; the phone app stays pc.55): Drone setup keeps a drone on USB
+  quiet - resting sticks over USB while it is open (`setup/RestingSticks`), so CONFIRM's lost-link beacon no longer
+  sets the motors beeping on the bench. Tried on made-up boards only. It was not on `beta`: on 2026-11-28 it was
+  merged into the test week's code, where its feeder also stops after the week's CLI arming block (F-078) and before
+  the ESC passthrough, and the closing step keeps the week's undo of that block (`BetaflightUsb`, `MotorTest`).
+- **The test week** (2026-11-21 evening - 2026-11-28, on `beta`): readers of the code, the test bench, Betaflight as
+  a program, and a rig for real hardware. As **1.0.73 (unreleased)** in [CHANGELOG](CHANGELOG.md): fixes F-059 -
+  F-113, S-LINK-1, S-LINK-2, S-PC and S-PHONE ([BENCH-FINDINGS.md](BENCH-FINDINGS.md)), the maintainer's answers
+  built, improvements I-002 - I-017, the hardware rig. Every finding has the maintainer's answer (kept on the week's
+  own page, not in the repo). **F-080 is still open** ("find a proper fix"): until it is fixed, no Read ESCs after
+  CONFIRM or a restart with the battery in - or unplug and replug it after, before flying; its red ESC row stays.
+  `build.gradle` says 1.0.72: **nothing of the week is released.**
+- **Phone app 2.3.0-pc.63-beta** (versionCode 2030063; its steps in [CHANGELOG](CHANGELOG.md)): sideloaded only,
+  never published. `ApkShare` stays pinned to the released **pc.55**: the PC offers pc.55, and UPDATE PHONE APP
+  installs pc.55. pc.55 on the drones' phones comes back after a crash in flight only behind a screen lock (F-083);
+  the maintainer says each has one.
+- **What it was tested with** ([BENCH-RUNS.md](BENCH-RUNS.md)): on the final code every bench suite (2026-11-26), the
+  timing set, 4 hours of the link fuzz and a fifth night; all fast tests; the phone app pc.63-beta in the emulator on
+  Android 8, 11, 13, 14 and 15 (12 of 12 each) and for 3 hours. Earlier in the week the real phone (Android 15, the
+  bench build) ran every phone scenario and 8 hours over mobile data. The real flight controller: reads, the ESC row,
+  short motor spins with the props off, runs with arming blocked, and `boardCap` (motor_output_limit 15 in all four
+  PID profiles, saved - **put back before that drone flies**). **Not flown.**
 - **Still to try on hardware:** the keeper's first arm window (battery in, cap 15 %); F-080's tries (each costs a
   battery unplug); F-077 - F-079 against an armed Betaflight as a program; F-066's sequence (armed, the link cut, the
   failsafe's disarm, ARM left on, the phone app ended and opened again, the link back: it must not arm), F-068
   (STANDBY with the USB permission taken back), F-069 (the beeper's read-back, with the keeper dropping its beeper
   requests), F-070b (Android's prompt after the take-back), the motor test and Drone setup's tools with two boards.
-  Q-001 needs a drone with a compass.
+  Q-001 needs a drone with a compass. 1.0.72's resting sticks on the drone that beeped.
 - **The hardware rig** ([TESTING.md](TESTING.md), "Real hardware"): the board tools read the real board (`diff all`
   changed between two starts there, so the restore works on `dump all`); snapshot and restore are proven on
   Betaflight as a program. The phone rig runs behind a PIN lock. The keeper has run on the real board with arming
   locked; nothing has been armed there yet. **Betaflight as a program** (SITL in WSL, `.\bench.ps1 sitl`, 4.4.1
   3 of 3; TESTING.md, "Betaflight as a program"): the keeper's lock and windows, the drone's own failsafe timed; on
   4.5 and later SITL has no MSP arming block, so the keeper's windows are tried on 4.4 only.
-- **The latest release:** DRAUPNE Link **1.0.71** with phone app **2.3.0-pc.55** (released 2026-11-21, on the
+- **Before 1.0.72:** DRAUPNE Link **1.0.71** with phone app **2.3.0-pc.55** (released 2026-11-21, on the
   maintainer's word "complete a release and merge to main"). Tested on the test bench only - the real Windows app
   with made-up drones, the real phone app in an Android emulator, nights of flying, sleeping and bad links: **not
   flown, not on a real phone.** Last flown: 1.0.69 with pc.52 (2026-11-17 and 18). Before UPDATE PHONE APP each

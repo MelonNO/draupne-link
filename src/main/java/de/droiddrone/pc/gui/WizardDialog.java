@@ -80,6 +80,10 @@ class WizardDialog extends JDialog {
         void onHide() {
         }
 
+        /** The guide closes (any way): let go of what the page holds. */
+        void closed() {
+        }
+
         /** Called twice a second while the page is visible. */
         void refresh() {
         }
@@ -285,6 +289,13 @@ class WizardDialog extends JDialog {
         }
         timer.stop();
         countTimer.stop();
+        for (Page page : pages) {
+            try {
+                page.closed();
+            } catch (RuntimeException e) {
+                log(getTitle() + ": " + e); // the window closes all the same
+            }
+        }
         super.dispose();
     }
 

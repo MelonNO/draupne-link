@@ -2,7 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## 1.0.72 (unreleased, on beta)
+## 1.0.73 (unreleased, on beta)
 
 The test week (from 2026-11-21 evening), with the phone app **DRAUPNE Flight 2.3.0-pc.63-beta** (versionCode 2030063). Its steps: pc.56-beta (the first night's fixes), pc.57-beta (F-076, after the bench's first Android 8 run), pc.58-beta (Tailscale only, Q-006), pc.59-beta (F-083), pc.60-beta (F-094), pc.61-beta (F-109), pc.62-beta (F-111), pc.63-beta (F-113). What readers of the code, a reader of the bench's pictures, test runs and the bench's real drone found, fixed; the maintainer's answers, built; small improvements; a test rig for real hardware. The phone app is a sideloaded test build: the PC still offers the released pc.55 (`ApkShare`). Tested with the fast tests, made-up boards and drones, Betaflight as a program, the phone app in the emulator on Android 8 to 15 and on one real phone; **not flown**; on the real flight controller only reads, the ESC row, short motor spins with the props off and runs with arming blocked. Each finding's paragraph and tests: [BENCH-FINDINGS.md](BENCH-FINDINGS.md).
 
@@ -144,6 +144,23 @@ For the test week: the bench ([TESTING.md](TESTING.md), "Real hardware") against
 - **The board restore on a board with a built-in config** (`gradlew boardRestore`): its `defaults nosave` re-runs the board's built-in config, whose unknown lines Betaflight reports as errors - inside the restore's batch they would have made Betaflight refuse the save. Now the reset comes first and the batch is closed before the save; proven on the bench's real drone (read back with no difference).
 - **The phone app on Android 8, 11, 13, 14 and 15** in the emulator (`.\bench.ps1 emulator -Avd ...`), and the phone rig taught each image's quirks. On the real phone the film says the kind of screen lock.
 - **Two probes for a real board** (battery in, props off): `gradlew mspRateProbe` times the board's answers while the PC sends what the phone sends (F-081); `gradlew escProbe` has new options for F-080's tries (`-Porder`, `-PfirstWaitMs`, `-Ptries`, `-PpauseMs`, `-Ppasses`, `-Pesc=spinonly`, `-Pesc=recover`). Drone setup's own ESC read is unchanged.
+
+## 1.0.72 (2026-11-23, PC only)
+
+Phone app stays 2.3.0-pc.55. Released from `main` with this fix alone; the work waiting on `beta` goes on there.
+
+- **A drone in Drone setup no longer beeps without end from CONFIRM on** (the pilot, 2026-11-23). Since 1.0.71
+  CONFIRM switches on Betaflight's motor beacon for a lost link (to find a drone that is down). A DRAUPNE drone's
+  receiver is its phone, and on the bench the phone is not plugged in: Betaflight took its receiver as lost and the
+  motors beeped from its next start. While Drone setup is open, DRAUPNE Link now sends the board resting sticks over
+  USB - centred, throttle and every AUX low, in the board's channel order - as the phone does on the drone, so the
+  receiver is never lost. Nothing is written to the board's settings, so nothing of it can be saved: a lost link in
+  the field beeps as before. Only to a board whose receiver is MSP, that reads disarmed (checked every second) and
+  whose own ARM range can't take the frame; between Drone setup's steps a connection of its own keeps the port and
+  lets go of it for every step (`setup/RestingSticks`), and the motor test feeds it on its own connection. Never in
+  the CLI or while the ESCs have the port, so a CONFIRM or a GPS search may still beep for the seconds it takes.
+  Closing Drone setup lets go of the port: Betaflight beeps again until the phone is plugged in. While Drone setup is
+  open, Betaflight Configurator can't open the board's port. Tests: RestingSticksTest (11).
 
 ## 1.0.71 + phone pc.55 (2026-11-21)
 
