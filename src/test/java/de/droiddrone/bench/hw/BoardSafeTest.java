@@ -95,20 +95,26 @@ class BoardSafeTest {
         // a tool died in the CLI with a motor on and a change not saved; a battery keeps the board running
         board.cutTakesPower = false;
         BetaflightUsb fc = BetaflightUsb.open(board.port());
-        leaveOn(fc, 1090);
-        fc.enterCli();
-        fc.command("set small_angle = 99");
-        board.cutWire();
-        assertTrue(board.inCli());
-        assertEquals(1090, board.motors()[0]);
-        BoardSafe.Result r = makeSafe();
-        assertTrue(r.safe(), r.text());
-        assertFalse(board.inCli());
-        assertEquals(1, board.restarts, "exit restarts Betaflight");
-        assertEquals(0, board.saves);
-        assertFalse(board.inMemory().contains("small_angle = 99"), "what was not saved is dropped");
-        assertArrayEquals(AT_REST, board.motors());
-        assertTrue(log.stream().anyMatch(l -> l.contains("was in the CLI")), log.toString());
+        try {
+            leaveOn(fc, 1090);
+            fc.enterCli();
+            fc.command("set small_angle = 99");
+            board.cutWire();
+            assertTrue(board.inCli());
+            assertEquals(1090, board.motors()[0]);
+            BoardSafe.Result r = makeSafe();
+            assertTrue(r.safe(), r.text());
+            assertFalse(board.inCli());
+            assertEquals(1, board.restarts, "exit restarts Betaflight");
+            assertEquals(0, board.saves);
+            assertFalse(board.inMemory().contains("small_angle = 99"), "what was not saved is dropped");
+            assertArrayEquals(AT_REST, board.motors());
+            assertTrue(log.stream().anyMatch(l -> l.contains("was in the CLI")), log.toString());
+        } finally {
+            // the dead tool's connection let go of at the end: every open counts with Drone setup's resting sticks
+            // (RestingSticks.opening), and one left open in this test JVM would keep them off for the tests after it
+            fc.close();
+        }
     }
 
     @Test
