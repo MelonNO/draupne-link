@@ -620,6 +620,9 @@ public final class AppRig implements AutoCloseable {
         film.close(problems.isEmpty(), problems);
         Outside.use(SHUT); // not null (the real world): threads of this app that are still fetching must reach nothing
         Joystick.use(null);
+        // 1.0.72: Drone setup's resting-sticks holder lives in this JVM, and a Drone setup closed with the app's window
+        // (not on its own) never told it to let go - the next scenario would find it on a port of the same name
+        de.droiddrone.pc.setup.RestingSticks.stop();
         BetaflightUsb.use(null);
         if (smallScreen != null) java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(smallScreen);
         BenchAccess.pretendScreen(0, 0);

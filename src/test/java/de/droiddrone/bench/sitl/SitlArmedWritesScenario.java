@@ -65,6 +65,8 @@ class SitlArmedWritesScenario {
     /** Betaflight 4.4's arming block MSP among MSP_STATUS' arming-disable flags. */
     private static final int MSP_BLOCK = 1 << Msp.ARMING_DISABLED_MSP_BIT;
     private static final int MSP_ATTITUDE = 108;
+    /** 1.0.72's resting sticks on UART1 (RestingSticks), as a receiver's on UART2. */
+    private static final int MSP_SET_RAW_RC = 200;
     /** UART2 or UART4 not back this long while SITL runs: it could not open it again (see Receiver.restartThroughAnother). */
     private static final long NOT_BACK_MS = 10_000;
     /** The MSP requests that change a board: none may reach an armed one. */
@@ -235,8 +237,10 @@ class SitlArmedWritesScenario {
         ui.click("Set up a new drone");
         ui.until("Drone setup's first step", 15_000, () -> ui.window("New drone") != null);
         ui.until("the first step to read Betaflight and offer CONFIRM", 150_000, () -> confirmOffered(ui));
-        boolean rests = within(150_000, () -> tap.quietFor(8000) && !Ui.edt(() -> ui.buttons().contains("[NEXT]")));
+        long readAt = System.currentTimeMillis();
+        boolean rests = within(150_000, () -> tap.quietButRestingSticks(8000) && !Ui.edt(() -> ui.buttons().contains("[NEXT]")));
         rig.check(rests, "disarmed: the first step has read Betaflight (" + tap.opens() + " visits to UART1) and rests, CONFIRM offered");
+        rig.check(tap.fedSince(readAt), "disarmed, at rest: Drone setup feeds Betaflight resting sticks on UART1 (1.0.72, RestingSticks)");
         ui.shot("Drone setup's first step: Betaflight read, CONFIRM offered");
 
         // ---- the second step: the motor test opened disarmed, then the board armed (F-077)
@@ -359,7 +363,7 @@ class SitlArmedWritesScenario {
                     + (after == null ? "none" : Msp.armingBlocks(after.flags())) + ")");
         }
         rig.check(within(30_000, () -> rig.logged("Its settings before:")), "disarmed: the app's log says what CONFIRM wrote and where the backup is");
-        boolean settled = within(150_000, () -> tap.quietFor(8000));
+        boolean settled = within(150_000, () -> tap.quietButRestingSticks(8000));
         film.remark("After CONFIRM the page says: " + lines(ui, "SITL", "Nothing written", "Done", "armed"));
         rig.check(settled && !ui.sees("Nothing written"), "disarmed: CONFIRM's write went through and the page rests (no \"Nothing written\")");
         // every visit of the app to Betaflight's CLI: the block on while it was open
@@ -581,6 +585,25 @@ class SitlArmedWritesScenario {
 
         boolean quietFor(long ms) {
             return System.currentTimeMillis() - lastAt >= ms;
+        }
+
+        /**
+         * Nothing on UART1 for ms but 1.0.72's resting sticks: Drone setup at rest keeps a connection of its own feeding
+         * them (MSP_SET_RAW_RC every 50 ms, a status a second; RestingSticks) on purpose, so a connection that fed them
+         * is the holder's and not counted. Every other connection - the page's rounds, its tools - must be quiet.
+         */
+        boolean quietButRestingSticks(long ms) {
+            java.util.Set<Integer> holder = new java.util.HashSet<>();
+            for (Event e : events) if (e.kind().equals("msp") && e.code() == MSP_SET_RAW_RC) holder.add(e.conn());
+            long last = 0;
+            for (Event e : events) if (!holder.contains(e.conn())) last = Math.max(last, e.atMs());
+            return System.currentTimeMillis() - last >= ms;
+        }
+
+        /** Resting sticks reached Betaflight on UART1 since then. */
+        boolean fedSince(long since) {
+            for (Event e : events) if (e.atMs() >= since && e.kind().equals("msp") && e.code() == MSP_SET_RAW_RC) return true;
+            return false;
         }
 
         boolean asked(long since, int code) {
